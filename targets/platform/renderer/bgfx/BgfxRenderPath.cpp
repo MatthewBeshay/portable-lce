@@ -169,7 +169,12 @@ BgfxRenderPath::BgfxRenderPath(SDL_Window* window) : window_(window) {
     }
     init.resolution.width = width_;
     init.resolution.height = height_;
-    init.resolution.reset = BGFX_RESET_VSYNC;
+#ifdef ENABLE_VSYNC 
+init.resolution.reset = BGFX_RESET_VSYNC;
+#else 
+  init.resolution.reset = BGFX_RESET_NONE;
+#endif // 
+    
     init.limits.maxTransientVbSize = 32 * 1024 * 1024;
     bgfx::init(init);
 
@@ -804,8 +809,12 @@ void BgfxRenderPath::render_frame(const FrameDesc& frame) {
 void BgfxRenderPath::resize(uint32_t w, uint32_t h) {
     width_ = w;
     height_ = h;
-    bgfx::reset(w, h, BGFX_RESET_VSYNC);
-}
+#ifdef ENABLE_VSYNC 
+    bgfx::reset(w, h, BGFX_RESET_VSYNC)
+#else 
+       bgfx::reset(w, h, BGFX_RESET_NONE);
+#endif // 
+   }
 
 const FrameFramebuffer& BgfxRenderPath::framebuffer() const { return fb_; }
 void BgfxRenderPath::read_framebuffer(const TextureReadback&) {}
