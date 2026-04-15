@@ -5,7 +5,9 @@
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -155,11 +157,16 @@ BgfxRenderPath::BgfxRenderPath(SDL_Window* window) : window_(window) {
     init.platformData.nwh = wmi.info.cocoa.window;
 #endif
 
+    init.type = bgfx::RendererType::OpenGL;
 #if defined(_WIN32)
     init.type = bgfx::RendererType::Direct3D12;
-#else
-    init.type = bgfx::RendererType::OpenGL;
 #endif
+    if (const char* env = std::getenv("BGFX_RENDERER")) {
+        if      (std::strcmp(env, "gl")    == 0) init.type = bgfx::RendererType::OpenGL;
+        else if (std::strcmp(env, "d3d11") == 0) init.type = bgfx::RendererType::Direct3D11;
+        else if (std::strcmp(env, "d3d12") == 0) init.type = bgfx::RendererType::Direct3D12;
+        else if (std::strcmp(env, "vulkan")== 0) init.type = bgfx::RendererType::Vulkan;
+    }
     init.resolution.width = width_;
     init.resolution.height = height_;
     init.resolution.reset = BGFX_RESET_VSYNC;
@@ -768,6 +775,29 @@ void BgfxRenderPath::render_frame(const FrameDesc& frame) {
 
     s_frameCount++;
     bgfx::frame();
+
+    if (window_ && (s_frameCount % 30) == 0) {
+        static auto lastTime = std::chrono::steady_clock::now();
+        static int lastFrame = 0;
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - lastTime).count();
+        if (elapsed > 0.01) {
+            double fps = (s_frameCount - lastFrame) / elapsed;
+            char title[128];
+            const char* name = "?";
+            switch (bgfx::getRendererType()) {
+                case bgfx::RendererType::Direct3D11: name = "D3D11"; break;
+                case bgfx::RendererType::Direct3D12: name = "D3D12"; break;
+                case bgfx::RendererType::OpenGL: name = "OpenGL"; break;
+                case bgfx::RendererType::Vulkan: name = "Vulkan"; break;
+                default: break;
+            }
+            std::snprintf(title, sizeof(title), "Minecraft LCE - %.1f fps (%s)", fps, name);
+            SDL_SetWindowTitle(window_, title);
+        }
+        lastTime = now;
+        lastFrame = s_frameCount;
+    }
 }
 
 void BgfxRenderPath::resize(uint32_t w, uint32_t h) {
