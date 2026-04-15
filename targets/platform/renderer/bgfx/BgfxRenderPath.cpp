@@ -16,7 +16,9 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "shaders/fs_4jcraft.bin.h"
+#include "shaders/fs_4jcraft_dx.bin.h"
 #include "shaders/vs_4jcraft.bin.h"
+#include "shaders/vs_4jcraft_dx.bin.h"
 #include "stb_image.h"
 
 #ifdef __APPLE__
@@ -153,7 +155,11 @@ BgfxRenderPath::BgfxRenderPath(SDL_Window* window) : window_(window) {
     init.platformData.nwh = wmi.info.cocoa.window;
 #endif
 
+#if defined(_WIN32)
+    init.type = bgfx::RendererType::Direct3D12;
+#else
     init.type = bgfx::RendererType::OpenGL;
+#endif
     init.resolution.width = width_;
     init.resolution.height = height_;
     init.resolution.reset = BGFX_RESET_VSYNC;
@@ -195,6 +201,13 @@ BgfxRenderPath::BgfxRenderPath(SDL_Window* window) : window_(window) {
     uint32_t fs_size = 0;
 
     switch (bgfx::getRendererType()) {
+        case bgfx::RendererType::Direct3D11:
+        case bgfx::RendererType::Direct3D12:
+            vs_data = vs_4jcraft_dx;
+            vs_size = sizeof(vs_4jcraft_dx);
+            fs_data = fs_4jcraft_dx;
+            fs_size = sizeof(fs_4jcraft_dx);
+            break;
         case bgfx::RendererType::Vulkan:
             vs_data = vs_4jcraft_spv;
             vs_size = sizeof(vs_4jcraft_spv);
