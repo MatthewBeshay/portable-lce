@@ -4,23 +4,25 @@ layout(location = 0) in vec2  v_uv;
 layout(location = 1) in vec4  v_color;
 layout(location = 2) in float v_color_was_zero;
 layout(location = 3) in float v_eye_dist;
+layout(location = 4) in vec2  v_lm_uv;
 
 layout(set = 0, binding = 1) uniform sampler2D u_atlas;
+layout(set = 0, binding = 2) uniform sampler2D u_lightmap;
 
 layout(push_constant) uniform PC {
     layout(offset = 64) vec4 fog_params;   // mode, start, end, density
     layout(offset = 80) vec4 fog_colour;
+    layout(offset = 96) vec4 tint;         // StateSetColour modulation
 } pc;
 
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    // Chunks always sample the terrain atlas; sentinel-zero verts collapse
-    // to opaque white so unlit faces stay visible.
     vec4 c = (v_color_was_zero > 0.5) ? vec4(1.0) : v_color;
     vec4 tex = texture(u_atlas, v_uv);
-    if (tex.a < 0.1) discard;  // alpha cutout for grass / leaves / fences
-    out_color = tex * c;
+    if (tex.a < 0.1) discard;
+    vec4 lm = texture(u_lightmap, v_lm_uv);
+    out_color = tex * c * vec4(lm.rgb, 1.0) * pc.tint;
 
     int mode = int(pc.fog_params.x);
     if (mode != 0) {

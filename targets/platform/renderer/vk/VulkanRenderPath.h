@@ -125,10 +125,11 @@ public:
     [[nodiscard]] int TextureCreate() override;
     void TextureFree(int idx) override;
     void TextureBind(int idx) override;
-    // Lightmap binding is a separate texture slot in the legacy renderer.
-    // We don't model that yet, so ignore it - otherwise we'd overwrite the
-    // main bound texture (terrain atlas) with the lightmap.
-    void TextureBindVertex(int, bool) override {}
+    // Lightmap binding for chunks (TerrainRenderer's set 0 binding 2).
+    // Doesn't affect the main bound_texture_ used by basic-pipeline draws.
+    void TextureBindVertex(int idx, bool) override {
+        lightmap_texture_ = idx;
+    }
     void TextureSetTextureLevels(int) override {}
     void TextureData(int width, int height, void* data, int level,
                      int format) override;
@@ -252,6 +253,7 @@ public:
         bool depth_write   = true;
         bool blend_enable  = false;
         bool cull_back     = false;
+        bool lines         = false;  // line-class topology (LINE_LIST/STRIP)
         // VK_COMPARE_OP_LESS_OR_EQUAL = 3. Matches the bgfx renderer's
         // default and the legacy GL state the game targets.
         uint8_t depth_func = 3;
@@ -267,6 +269,7 @@ public:
                        | (uint64_t(k.depth_write)  << 1)
                        | (uint64_t(k.blend_enable) << 2)
                        | (uint64_t(k.cull_back)    << 3)
+                       | (uint64_t(k.lines)        << 4)
                        | (uint64_t(k.depth_func)   << 8)
                        | (uint64_t(k.blend_src)    << 16)
                        | (uint64_t(k.blend_dst)    << 24);
@@ -342,9 +345,10 @@ private:
 
     // Texture system. One descriptor set per texture (combined image
     // sampler), one shared linear-filtering sampler.
-    VkDescriptorSetLayout tex_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      tex_pool_       = VK_NULL_HANDLE;
-    VkSampler             tex_sampler_    = VK_NULL_HANDLE;
+    VkDescriptorSetLayout tex_set_layout_     = VK_NULL_HANDLE;
+    VkDescriptorPool      tex_pool_           = VK_NULL_HANDLE;
+    VkSampler             tex_sampler_        = VK_NULL_HANDLE;  // nearest+repeat (atlas)
+    VkSampler             tex_sampler_lm_     = VK_NULL_HANDLE;  // linear+clamp  (lightmap)
     struct TextureSlot {
         VkImage         image    = VK_NULL_HANDLE;
         VmaAllocation   alloc    = nullptr;
@@ -377,6 +381,7 @@ private:
 
     int next_handle_ = 0;
     int next_cbuff_  = 1;
+    int lightmap_texture_ = 0;
 
     std::unique_ptr<plce::vk_render::TerrainRenderer> terrain_;
 

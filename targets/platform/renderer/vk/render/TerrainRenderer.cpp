@@ -83,10 +83,9 @@ void TerrainRenderer::create_descriptor_layouts() {
                                              &cull_set_layout_),
                  "vkCreateDescriptorSetLayout(cull)");
     }
-    // Terrain set: metadata SSBO read in vertex stage (chunk world pos),
-    // sampler in fragment.
+    // Terrain set: metadata SSBO (vertex), atlas + lightmap (fragment).
     {
-        VkDescriptorSetLayoutBinding b[2]{};
+        VkDescriptorSetLayoutBinding b[3]{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[0].descriptorCount = 1;
@@ -95,9 +94,13 @@ void TerrainRenderer::create_descriptor_layouts() {
         b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[1].descriptorCount = 1;
         b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        b[2].binding = 2;
+        b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[2].descriptorCount = 1;
+        b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo ci{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 2;
+        ci.bindingCount = 3;
         ci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &ci, nullptr,
                                              &terrain_set_layout_),
@@ -140,15 +143,16 @@ void TerrainRenderer::create_pipelines() {
     }
     {
         // Terrain pipeline layout: 1 set + push constants
-        //   vertex   [0  .. 63]:  mat4 mvp
-        //   fragment [64 .. 95]:  vec4 fog_params + vec4 fog_colour
+        //   vertex   [0   .. 63]:  mat4 mvp
+        //   fragment [64  .. 111]: vec4 fog_params + vec4 fog_colour
+        //                          + vec4 tint
         VkPushConstantRange pc[2]{};
         pc[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         pc[0].offset = 0;
         pc[0].size = 64;
         pc[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         pc[1].offset = 64;
-        pc[1].size = 32;
+        pc[1].size = 48;
         VkPipelineLayoutCreateInfo lci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         lci.setLayoutCount = 1;
@@ -203,11 +207,12 @@ void TerrainRenderer::create_pipelines() {
         binding.stride = 32;
         binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        std::array<VkVertexInputAttributeDescription, 4> attrs{};
+        std::array<VkVertexInputAttributeDescription, 5> attrs{};
         attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
         attrs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT,    12};
         attrs[2] = {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20};
         attrs[3] = {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24};  // normal
+        attrs[4] = {4, 0, VK_FORMAT_R16G16_SINT,      28};  // lightmap UV
 
         VkPipelineVertexInputStateCreateInfo vi{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -309,7 +314,7 @@ void TerrainRenderer::create_descriptor_pool_and_sets() {
     sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     sizes[0].descriptorCount = 4;  // 3 in cull set + 1 in terrain set
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    sizes[1].descriptorCount = 1;  // atlas in terrain set
+    sizes[1].descriptorCount = 2;  // atlas + lightmap in terrain set
 
     VkDescriptorPoolCreateInfo pci{
         VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -387,16 +392,45 @@ void TerrainRenderer::destroy_descriptor_pool() {
 
 void TerrainRenderer::set_atlas(VkImageView view, VkSampler sampler) {
     if (!view || !sampler) return;
+    VkDescriptorImageInfo dii[2]{
+        {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    };
+    // Bind atlas at 1; if we haven't been told a lightmap yet, point
+    // binding 2 at the atlas too so the descriptor is always valid.
+    VkWriteDescriptorSet w[2]{};
+    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[0].dstSet = terrain_set_;
+    w[0].dstBinding = 1;
+    w[0].descriptorCount = 1;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[0].pImageInfo = &dii[0];
+    uint32_t count = 1;
+    if (!lightmap_set_) {
+        w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[1].dstSet = terrain_set_;
+        w[1].dstBinding = 2;
+        w[1].descriptorCount = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[1].pImageInfo = &dii[1];
+        count = 2;
+    }
+    vkUpdateDescriptorSets(device_, count, w, 0, nullptr);
+    atlas_set_ = true;
+}
+
+void TerrainRenderer::set_lightmap(VkImageView view, VkSampler sampler) {
+    if (!view || !sampler) return;
     VkDescriptorImageInfo dii{sampler, view,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = terrain_set_;
-    w.dstBinding = 1;
+    w.dstBinding = 2;
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.pImageInfo = &dii;
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
-    atlas_set_ = true;
+    lightmap_set_ = true;
 }
 
 void TerrainRenderer::upload_chunk(const ChunkKey& key,
@@ -484,7 +518,8 @@ void TerrainRenderer::destroy_chunk(const ChunkKey& key) {
 
 void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
                              const std::array<glm::vec4, 6>& frustum,
-                             const FogParams& fog) {
+                             const FogParams& fog,
+                             const glm::vec4& tint) {
     if (!atlas_set_) return;  // can't sample without an atlas bound
 
     stat_renders_.fetch_add(1, std::memory_order_relaxed);
@@ -607,7 +642,8 @@ void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
     struct FragPC {
         glm::vec4 fog_params;
         glm::vec4 fog_colour;
-    } fpc{fog.params, fog.colour};
+        glm::vec4 tint;
+    } fpc{fog.params, fog.colour, tint};
     vkCmdPushConstants(cmd, terrain_pipeline_layout_,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(fpc), &fpc);
     vkCmdDrawIndirectCount(cmd, indirect_->draws_buffer(), 0,

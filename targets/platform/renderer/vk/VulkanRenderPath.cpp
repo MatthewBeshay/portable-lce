@@ -471,7 +471,8 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
 
     VkPipelineInputAssemblyStateCreateInfo ia{
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    ia.topology = key.lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+                            : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
     VkPipelineViewportStateCreateInfo vp{
         VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -481,7 +482,9 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
     VkPipelineRasterizationStateCreateInfo rs{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = key.cull_back ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    // No back-face culling for lines - they have no winding.
+    rs.cullMode = (key.lines || !key.cull_back) ? VK_CULL_MODE_NONE
+                                                : VK_CULL_MODE_BACK_BIT;
     // We Y-flip in the shader so vertex winding stays GL-style.
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -513,7 +516,8 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
     cb.pAttachments = &att;
 
     VkDynamicState dyn_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                   VK_DYNAMIC_STATE_SCISSOR};
+                                   VK_DYNAMIC_STATE_SCISSOR,
+                                   VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY};
     VkPipelineDynamicStateCreateInfo dyn{
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dyn.dynamicStateCount = uint32_t(std::size(dyn_states));
@@ -632,16 +636,34 @@ void VulkanRenderPath::destroy_quad_index_buffer() {
 // ---------------------------------------------------------------------------
 
 void VulkanRenderPath::create_texture_resources() {
+    // Atlas sampler: NEAREST mag (preserve pixel art crispness),
+    // LINEAR mipmap (smooth distance transitions to kill shimmer at
+    // long range), full LOD range so the mip chain we generate in
+    // upload_texture is actually used.
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     si.magFilter = VK_FILTER_NEAREST;
     si.minFilter = VK_FILTER_NEAREST;
-    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     si.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    si.maxLod = 1.0f;
+    si.maxLod = VK_LOD_CLAMP_NONE;
     vk_check(vkCreateSampler(device_, &si, nullptr, &tex_sampler_),
-             "vkCreateSampler");
+             "vkCreateSampler(atlas)");
+
+    // Lightmap sampler: LINEAR + CLAMP. Lightmap is a 16x16 LUT and we
+    // want smooth interpolation between texels without wrapping at the
+    // edges (REPEAT would bleed bright<->dark).
+    VkSamplerCreateInfo lm{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    lm.magFilter = VK_FILTER_LINEAR;
+    lm.minFilter = VK_FILTER_LINEAR;
+    lm.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    lm.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    lm.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    lm.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    lm.maxLod = 1.0f;
+    vk_check(vkCreateSampler(device_, &lm, nullptr, &tex_sampler_lm_),
+             "vkCreateSampler(lightmap)");
 
     VkDescriptorSetLayoutBinding b{};
     b.binding = 0;
@@ -681,9 +703,11 @@ void VulkanRenderPath::destroy_texture_resources() {
     if (tex_set_layout_) vkDestroyDescriptorSetLayout(device_, tex_set_layout_,
                                                       nullptr);
     if (tex_sampler_)    vkDestroySampler(device_, tex_sampler_, nullptr);
+    if (tex_sampler_lm_) vkDestroySampler(device_, tex_sampler_lm_, nullptr);
     tex_pool_ = VK_NULL_HANDLE;
     tex_set_layout_ = VK_NULL_HANDLE;
     tex_sampler_ = VK_NULL_HANDLE;
+    tex_sampler_lm_ = VK_NULL_HANDLE;
 }
 
 int VulkanRenderPath::ensure_default_texture() {
@@ -713,15 +737,24 @@ void VulkanRenderPath::upload_texture(int idx, int width, int height,
     t.width = uint32_t(width);
     t.height = uint32_t(height);
 
+    // Mip count = floor(log2(max(w,h))) + 1, clamped at 1.
+    auto mip_count = [&]() -> uint32_t {
+        uint32_t m = 1;
+        uint32_t d = uint32_t(std::max(width, height));
+        while (d > 1) { d >>= 1; ++m; }
+        return m;
+    }();
+
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = VK_FORMAT_B8G8R8A8_UNORM;
     ici.extent = {t.width, t.height, 1};
-    ici.mipLevels = 1;
+    ici.mipLevels = mip_count;
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |  // for vkCmdBlitImage mip gen
                 VK_IMAGE_USAGE_SAMPLED_BIT;
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -737,7 +770,7 @@ void VulkanRenderPath::upload_texture(int idx, int width, int height,
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = VK_FORMAT_B8G8R8A8_UNORM;
     vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    vci.subresourceRange.levelCount = 1;
+    vci.subresourceRange.levelCount = mip_count;
     vci.subresourceRange.layerCount = 1;
     vk_check(vkCreateImageView(device_, &vci, nullptr, &t.view),
              "vkCreateImageView");
@@ -800,36 +833,117 @@ void VulkanRenderPath::upload_texture(int idx, int width, int height,
     bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bbi);
 
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-    b.srcAccessMask = 0;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-    b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.image = t.image;
-    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    b.subresourceRange.levelCount = 1;
-    b.subresourceRange.layerCount = 1;
-    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    // 1. UNDEFINED -> TRANSFER_DST on the entire mip chain.
+    {
+        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        b.srcAccessMask = 0;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.image = t.image;
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.levelCount = mip_count;
+        b.subresourceRange.layerCount = 1;
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &b;
+        vkCmdPipelineBarrier2(cmd, &dep);
+    }
 
+    // 2. Copy pixels into mip 0.
     VkBufferImageCopy region{};
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
     region.imageSubresource.layerCount = 1;
     region.imageExtent = {t.width, t.height, 1};
     vkCmdCopyBufferToImage(cmd, staging, t.image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-    b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    // 3. Generate mip chain via blit. After each iteration src mip is
+    //    in TRANSFER_SRC and dst mip is in TRANSFER_DST.
+    int32_t mw = int32_t(t.width);
+    int32_t mh = int32_t(t.height);
+    for (uint32_t i = 1; i < mip_count; ++i) {
+        // Transition mip i-1 to TRANSFER_SRC so we can read from it.
+        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT;
+        b.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        b.image = t.image;
+        b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.baseMipLevel = i - 1;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &b;
+        vkCmdPipelineBarrier2(cmd, &dep);
+
+        int32_t nw = std::max(mw / 2, 1);
+        int32_t nh = std::max(mh / 2, 1);
+        VkImageBlit blit{};
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.srcSubresource.layerCount = 1;
+        blit.srcOffsets[0] = {0, 0, 0};
+        blit.srcOffsets[1] = {mw, mh, 1};
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.mipLevel = i;
+        blit.dstSubresource.layerCount = 1;
+        blit.dstOffsets[0] = {0, 0, 0};
+        blit.dstOffsets[1] = {nw, nh, 1};
+        vkCmdBlitImage(cmd, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blit, VK_FILTER_LINEAR);
+        mw = nw;
+        mh = nh;
+    }
+
+    // 4. Transition all mips to SHADER_READ_ONLY. Mips 0..n-2 are in
+    //    TRANSFER_SRC, last mip is in TRANSFER_DST. Two barriers.
+    VkImageMemoryBarrier2 ends[2]{};
+    uint32_t end_count = 0;
+    if (mip_count > 1) {
+        ends[end_count].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        ends[end_count].srcStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT;
+        ends[end_count].srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        ends[end_count].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        ends[end_count].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        ends[end_count].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        ends[end_count].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ends[end_count].image = t.image;
+        ends[end_count].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ends[end_count].subresourceRange.baseMipLevel = 0;
+        ends[end_count].subresourceRange.levelCount = mip_count - 1;
+        ends[end_count].subresourceRange.layerCount = 1;
+        ++end_count;
+    }
+    ends[end_count].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    ends[end_count].srcStageMask = (mip_count > 1)
+                                       ? VK_PIPELINE_STAGE_2_BLIT_BIT
+                                       : VK_PIPELINE_STAGE_2_COPY_BIT;
+    ends[end_count].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    ends[end_count].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    ends[end_count].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    ends[end_count].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    ends[end_count].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ends[end_count].image = t.image;
+    ends[end_count].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ends[end_count].subresourceRange.baseMipLevel = mip_count - 1;
+    ends[end_count].subresourceRange.levelCount = 1;
+    ends[end_count].subresourceRange.layerCount = 1;
+    ++end_count;
+    {
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = end_count;
+        dep.pImageMemoryBarriers = ends;
+        vkCmdPipelineBarrier2(cmd, &dep);
+    }
 
     vkEndCommandBuffer(cmd);
 
@@ -1338,14 +1452,38 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
     PerFrame& f_pass = frames_[frame_index_];
     ensure_render_pass(f_pass);
 
-    // The pipeline is fixed at TRIANGLE_LIST. Convert legacy primitives:
-    //   GL_TRIANGLES (0x0004) - already triangle list, draw as-is
-    //   GL_QUADS     (0x0007) - 4 verts per quad, expand via index buffer
-    //   anything else - skip for now (point/line/strip/fan need more work)
-    const bool is_quads     = (primType == 0x0007);
-    const bool is_triangles = (primType == 0x0004);
-    if (!is_quads && !is_triangles) return;
+    // Convert legacy primitives. Triangle-class and line-class topos
+    // need different pipeline class (PsoKey::lines), but topology
+    // within a class is set dynamically via vkCmdSetPrimitiveTopology.
+    //   GL_LINES          (0x0001) -> LINE_LIST    (line pipeline)
+    //   GL_LINE_STRIP     (0x0003) -> LINE_STRIP   (line pipeline)
+    //   GL_TRIANGLES      (0x0004) -> TRIANGLE_LIST
+    //   GL_TRIANGLE_STRIP (0x0005) -> TRIANGLE_STRIP
+    //   GL_TRIANGLE_FAN   (0x0006) -> TRIANGLE_FAN
+    //   GL_QUADS          (0x0007) -> TRIANGLE_LIST via the static quad
+    //                                 index buffer (4 verts -> 6 indices)
+    VkPrimitiveTopology topo;
+    bool is_quads = false;
+    bool is_lines = false;
+    switch (primType) {
+        case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+                     is_lines = true; break;
+        case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+                     is_lines = true; break;
+        case 0x0004: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
+        case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+        case 0x0006: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
+        case 0x0007:
+            topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            is_quads = true;
+            break;
+        default: return;  // points: not supported
+    }
     if (is_quads && (count % 4) != 0) return;
+    if (current_pso_key_.lines != is_lines) {
+        current_pso_key_.lines = is_lines;
+        pso_key_dirty_ = true;
+    }
 
     PerFrame& f = frames_[frame_index_];
 
@@ -1364,6 +1502,7 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
         last_bound_pso_key_ = current_pso_key_;
         pso_key_dirty_ = false;
     }
+    vkCmdSetPrimitiveTopology(f.cmd, topo);
 
     // Snapshot the active texture's descriptor under the textures lock so
     // worker-thread Bind/Data can't move the vector underneath us.
@@ -1744,9 +1883,10 @@ void VulkanRenderPath::render_terrain(const float* mvp_4x4,
                                       const float* frustum_24) {
     if (!terrain_ || !frame_active_ || !mvp_4x4 || !frustum_24) return;
 
-    // Auto-bind the currently-bound texture as the atlas. The game does
-    // a TextureBind(terrain_atlas) right before chunk rendering, so this
-    // saves us a separate set_terrain_atlas() call from the game code.
+    // Auto-bind the currently-bound texture as the atlas, and the
+    // lightmap (last TextureBindVertex target) as the second sampler.
+    // The game does TextureBind(terrain_atlas) + TextureBindVertex(lightmap)
+    // right before chunk rendering, so this saves a separate setter call.
     {
         std::lock_guard lk(textures_mutex_);
         int tex = bound_texture_;
@@ -1755,6 +1895,10 @@ void VulkanRenderPath::render_terrain(const float* mvp_4x4,
         } else if (default_texture_ > 0 &&
                    size_t(default_texture_) < textures_.size()) {
             terrain_->set_atlas(textures_[default_texture_].view, tex_sampler_);
+        }
+        int lm = lightmap_texture_;
+        if (lm > 0 && size_t(lm) < textures_.size() && textures_[lm].ready) {
+            terrain_->set_lightmap(textures_[lm].view, tex_sampler_lm_);
         }
     }
 
@@ -1786,7 +1930,9 @@ void VulkanRenderPath::render_terrain(const float* mvp_4x4,
     fog_params.params.w = fog_density_;
     fog_params.colour = glm::vec4(fog_colour_[0], fog_colour_[1],
                                   fog_colour_[2], fog_colour_[3]);
-    terrain_->render(f.cmd, mvp, frustum, fog_params);
+    glm::vec4 tint(state_colour_[0], state_colour_[1],
+                   state_colour_[2], state_colour_[3]);
+    terrain_->render(f.cmd, mvp, frustum, fog_params, tint);
 
     // The terrain pipeline trashes the bound state; force a rebind on the
     // next legacy DrawVertices.

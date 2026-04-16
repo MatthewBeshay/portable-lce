@@ -88,6 +88,10 @@ public:
     // descriptor set's image binding.
     void set_atlas(VkImageView view, VkSampler sampler);
 
+    // Bind / rebind the lightmap. Optional - if never called, the
+    // shader falls back to a constant (full-bright) sample.
+    void set_lightmap(VkImageView view, VkSampler sampler);
+
     // Records: (1) staging->arena copies queued since the last frame,
     // (2) metadata flush, (3) compute cull dispatch, (4) indirect draw.
     // Caller is responsible for issuing vkCmdBeginRendering / End around
@@ -105,7 +109,8 @@ public:
     void render(VkCommandBuffer cmd,
                 const glm::mat4& mvp,
                 const std::array<glm::vec4, 6>& frustum_planes,
-                const FogParams& fog = {});
+                const FogParams& fog = {},
+                const glm::vec4& tint = glm::vec4(1.0f));
 
     // Called by VulkanRenderPath::Present once the frame fence signals
     // that the GPU has consumed up to `checkpoint`. Releases the staging
@@ -147,6 +152,7 @@ private:
     VkDescriptorSet       cull_set_      = VK_NULL_HANDLE;
     VkDescriptorSet       terrain_set_   = VK_NULL_HANDLE;
     bool                  atlas_set_     = false;
+    bool                  lightmap_set_  = false;
 
     // Pending staging->arena copies queued between frames.
     struct PendingCopy {
