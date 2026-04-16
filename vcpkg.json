@@ -25,7 +25,7 @@
         "vulkan-loader",
         "volk",
         "vulkan-memory-allocator",
-        "glslang",
+        { "name": "glslang", "features": [ "tools" ] },
         "spirv-reflect",
         { "name": "sdl2", "features": [ "vulkan" ] }
       ]

@@ -1,4 +1,6 @@
 if(PLCE_RENDERER STREQUAL "vulkan")
+    find_path(VMA_INCLUDE_DIR "vma/vk_mem_alloc.h" REQUIRED)
+
     plce_add_library(plce_platform_renderer_vk SOURCES
         vk/VulkanRenderPath.cpp
         RenderPathGlobals.cpp
@@ -8,6 +10,7 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     target_include_directories(plce_platform_renderer_vk
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..
                 ${Stb_INCLUDE_DIR}
+                ${VMA_INCLUDE_DIR}
     )
 
     target_link_libraries(plce_platform_renderer_vk
@@ -17,6 +20,11 @@ if(PLCE_RENDERER STREQUAL "vulkan")
                 SDL2::SDL2
                 glm::glm
     )
+
+    plce_compile_shader(plce_platform_renderer_vk
+        vk/shaders/basic.vert kBasicVertSpv)
+    plce_compile_shader(plce_platform_renderer_vk
+        vk/shaders/basic.frag kBasicFragSpv)
 
     add_library(plce_platform_renderer ALIAS plce_platform_renderer_vk)
     return()
