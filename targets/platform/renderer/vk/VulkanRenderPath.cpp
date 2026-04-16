@@ -391,16 +391,18 @@ static VkShaderModule make_shader_module(VkDevice device, const uint32_t* code,
 }
 
 void VulkanRenderPath::create_pipeline_layout() {
-    // Push constants:
-    //   vertex   [0  .. 79]: mat4 mvp + vec3 chunk_offset + 4 pad
-    //   fragment [80 .. 111]: u32 textured + 12 pad + vec4 state_colour
+    // Push constants (max 128B portable):
+    //   vertex   [0  .. 79]:  mat4 mvp + vec3 chunk_offset + 4 pad
+    //   fragment [80 .. 127]: u32 textured + 12 pad + vec4 state_colour
+    //                         + vec4 fog_params (mode, start, end, density)
+    //                         + vec4 fog_colour
     VkPushConstantRange pcs[2]{};
     pcs[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pcs[0].offset = 0;
     pcs[0].size = 80;
     pcs[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcs[1].offset = 80;
-    pcs[1].size = 32;
+    pcs[1].size = 64;  // textured(16) + state_colour(16) + fog_params(16) + fog_colour(16)
 
     VkPipelineLayoutCreateInfo lci{
         VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -450,12 +452,15 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
     binding.stride = 32;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 3> attrs{};
+    std::array<VkVertexInputAttributeDescription, 4> attrs{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
     attrs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT,    12};
     // Tesselator packs colour as `(r<<24)|(g<<16)|(b<<8)|a`; the shader
     // re-shuffles the bytes back into RGBA order.
     attrs[2] = {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20};
+    // Normal: signed bytes / 127, encoded by Tesselator::normal().
+    // Layout is [x, y, z, pad]; we read all four and discard .w.
+    attrs[3] = {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24};
 
     VkPipelineVertexInputStateCreateInfo vi{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -1294,10 +1299,13 @@ void VulkanRenderPath::MatrixMult(float* m) {
 }
 
 const float* VulkanRenderPath::MatrixGet(rp::MatrixStack stack) {
+    // Return a direct pointer to the top of the stack - bgfx does the same.
+    // Don't route through a single cached_matrix_get_ slot: callers like
+    // LevelRenderer fetch modelview AND projection back-to-back and the
+    // shared slot would alias them to the second value.
     auto* s = current_stack(stack, modelview_stack_, projection_stack_,
                             texture_stack_);
-    cached_matrix_get_ = s->back();
-    return &cached_matrix_get_[0][0];
+    return &s->back()[0][0];
 }
 
 // ---------------------------------------------------------------------------
@@ -1380,25 +1388,46 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
     struct VertPC {
         glm::mat4 mvp;
         float     chunk_offset[3];
-        float     pad;
+        uint32_t  lit;             // packed into the vec3 tail pad
     } vpc{};
     vpc.mvp = projection_stack_.back() * modelview_stack_.back();
     vpc.chunk_offset[0] = chunk_offset_[0];
     vpc.chunk_offset[1] = chunk_offset_[1];
     vpc.chunk_offset[2] = chunk_offset_[2];
+    vpc.lit = lighting_enabled_ ? 1u : 0u;
     vkCmdPushConstants(f.cmd, pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0,
                        sizeof(vpc), &vpc);
 
     struct FragPC {
-        uint32_t textured;
-        uint32_t pad[3];
+        uint32_t flags;            // bit 0 = textured, bit 1 = alpha_test
+        float    alpha_ref;        // discard threshold
+        uint32_t pad[2];
         float    state_colour[4];
+        float    fog_params[4];   // mode (0=off,1=linear,2=exp,3=exp2), start, end, density
+        float    fog_colour[4];
     } pc{};
-    pc.textured = textured_active ? 1u : 0u;
+    pc.flags = (textured_active ? 1u : 0u) |
+               (alpha_test_enabled_ ? 2u : 0u);
+    pc.alpha_ref = alpha_ref_;
     pc.state_colour[0] = state_colour_[0];
     pc.state_colour[1] = state_colour_[1];
     pc.state_colour[2] = state_colour_[2];
     pc.state_colour[3] = state_colour_[3];
+    if (fog_enabled_) {
+        switch (fog_mode_) {
+            case rp::FogMode::linear:         pc.fog_params[0] = 1.0f; break;
+            case rp::FogMode::exponential:    pc.fog_params[0] = 2.0f; break;
+            case rp::FogMode::exponential_sq: pc.fog_params[0] = 3.0f; break;
+            default:                          pc.fog_params[0] = 0.0f; break;
+        }
+    }
+    pc.fog_params[1] = fog_start_;
+    pc.fog_params[2] = fog_end_;
+    pc.fog_params[3] = fog_density_;
+    pc.fog_colour[0] = fog_colour_[0];
+    pc.fog_colour[1] = fog_colour_[1];
+    pc.fog_colour[2] = fog_colour_[2];
+    pc.fog_colour[3] = fog_colour_[3];
     vkCmdPushConstants(f.cmd, pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT,
                        80, sizeof(pc), &pc);
 
@@ -1666,15 +1695,31 @@ void VulkanRenderPath::chunk_upload_from_cbuff(int cbuff_id,
         if (size_t(cbuff_id) >= cbuffs_.size()) return;
         auto& cb = cbuffs_[cbuff_id];
         if (!cb.valid) return;
+        // Each GL_QUADS draw of N vertices expands into (N/4) quads,
+        // each quad becomes 2 triangles = 6 vertices, so the worst-case
+        // output is bytes_in * 6 / 4.
         size_t total_bytes = 0;
-        for (auto& d : cb.draws) total_bytes += d.verts.size();
+        for (auto& d : cb.draws) total_bytes += d.verts.size() * 6 / 4;
         combined.reserve(total_bytes);
         for (auto& d : cb.draws) {
-            // Only quad batches in the standard 32-byte format are valid
-            // chunk geometry for Phase 4 v1.
             if (d.primType != 0x0007) continue;
-            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
-            total_verts += uint32_t(d.verts.size() / kStride);
+            uint32_t verts = uint32_t(d.verts.size() / kStride);
+            if (verts == 0 || (verts % 4) != 0) continue;
+            uint32_t quads = verts / 4;
+            // TerrainRenderer's pipeline is TRIANGLE_LIST with no index
+            // buffer, so we have to triangulate quads here: 4 verts ->
+            // (v0,v1,v2, v0,v2,v3) per quad.
+            for (uint32_t q = 0; q < quads; ++q) {
+                const std::byte* base = d.verts.data() + q * 4 * kStride;
+                auto push_v = [&](uint32_t i) {
+                    combined.insert(combined.end(),
+                                    base + i * kStride,
+                                    base + (i + 1) * kStride);
+                };
+                push_v(0); push_v(1); push_v(2);
+                push_v(0); push_v(2); push_v(3);
+            }
+            total_verts += quads * 6;
         }
     }
     if (total_verts == 0) return;
@@ -1726,7 +1771,23 @@ void VulkanRenderPath::render_terrain(const float* mvp_4x4,
     // Indirect draw must be inside the render pass. Copies + cull happen
     // before begin; ensure_render_pass() begins it just in time.
     ensure_render_pass(f);
-    terrain_->render(f.cmd, mvp, frustum);
+
+    plce::vk_render::TerrainRenderer::FogParams fog_params{};
+    if (fog_enabled_) {
+        switch (fog_mode_) {
+            case rp::FogMode::linear:         fog_params.params.x = 1.0f; break;
+            case rp::FogMode::exponential:    fog_params.params.x = 2.0f; break;
+            case rp::FogMode::exponential_sq: fog_params.params.x = 3.0f; break;
+            default:                          fog_params.params.x = 0.0f; break;
+        }
+    }
+    fog_params.params.y = fog_start_;
+    fog_params.params.z = fog_end_;
+    fog_params.params.w = fog_density_;
+    fog_params.colour = glm::vec4(fog_colour_[0], fog_colour_[1],
+                                  fog_colour_[2], fog_colour_[3]);
+    terrain_->render(f.cmd, mvp, frustum, fog_params);
+
     // The terrain pipeline trashes the bound state; force a rebind on the
     // next legacy DrawVertices.
     pipeline_bound_ = false;

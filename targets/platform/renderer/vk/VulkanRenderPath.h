@@ -141,21 +141,26 @@ public:
     void StateSetBlendEnable(bool e) override;
     void StateSetBlendFunc(rp::BlendFactor s, rp::BlendFactor d) override;
     void StateSetBlendFactor(unsigned int) override {}
-    void StateSetAlphaFunc(rp::AlphaTest, float) override {}
+    void StateSetAlphaFunc(rp::AlphaTest f, float ref) override {
+        alpha_test_func_ = f;
+        alpha_ref_ = ref;
+    }
     void StateSetDepthFunc(rp::DepthTest f) override;
     void StateSetFaceCull(bool e) override;
     void StateSetLineWidth(float) override {}
     void StateSetWriteEnable(bool, bool, bool, bool) override {}
     void StateSetDepthTestEnable(bool e) override;
-    void StateSetAlphaTestEnable(bool) override {}
+    void StateSetAlphaTestEnable(bool e) override { alpha_test_enabled_ = e; }
     void StateSetDepthSlopeAndBias(float, float) override {}
-    void StateSetFogEnable(bool) override {}
-    void StateSetFogMode(rp::FogMode) override {}
-    void StateSetFogNearDistance(float) override {}
-    void StateSetFogFarDistance(float) override {}
-    void StateSetFogDensity(float) override {}
-    void StateSetFogColour(float, float, float) override {}
-    void StateSetLightingEnable(bool) override {}
+    void StateSetFogEnable(bool e) override { fog_enabled_ = e; }
+    void StateSetFogMode(rp::FogMode m) override { fog_mode_ = m; }
+    void StateSetFogNearDistance(float d) override { fog_start_ = d; }
+    void StateSetFogFarDistance(float d) override  { fog_end_   = d; }
+    void StateSetFogDensity(float d) override      { fog_density_ = d; }
+    void StateSetFogColour(float r, float g, float b) override {
+        fog_colour_ = {r, g, b, 1.0f};
+    }
+    void StateSetLightingEnable(bool e) override { lighting_enabled_ = e; }
     void StateSetLightColour(int, float, float, float) override {}
     void StateSetLightAmbientColour(float, float, float) override {}
     void StateSetLightDirection(int, float, float, float) override {}
@@ -310,6 +315,24 @@ private:
     // Per-chunk world-space offset. Chunks submit their vertices in
     // chunk-local space and rely on the shader to add this offset.
     std::array<float, 3> chunk_offset_{0.0f, 0.0f, 0.0f};
+
+    // Lighting toggle (set via StateSetLightingEnable). Hard-coded sun
+    // direction in the vertex shader for now; lights are not yet wired
+    // through StateSetLightDirection / StateSetLightColour.
+    bool                 lighting_enabled_ = false;
+
+    // Alpha-test (cutout) state for grass / leaves / fences.
+    bool                 alpha_test_enabled_ = false;
+    rp::AlphaTest        alpha_test_func_    = rp::AlphaTest::greater;
+    float                alpha_ref_          = 0.1f;
+
+    // Fog state (legacy GL-style). Pushed via fragment push constant.
+    bool                 fog_enabled_ = false;
+    rp::FogMode          fog_mode_    = rp::FogMode::linear;
+    float                fog_start_   = 0.0f;
+    float                fog_end_     = 1.0f;
+    float                fog_density_ = 1.0f;
+    std::array<float, 4> fog_colour_{0.5f, 0.7f, 1.0f, 1.0f};
 
     // Static index buffer that expands GL_QUADS (4 verts) into two triangles
     // per quad (6 indices). Sized for the maximum quad batch we expect.

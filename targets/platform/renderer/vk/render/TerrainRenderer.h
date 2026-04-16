@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
@@ -28,10 +29,14 @@ namespace plce::vk_render {
 class TerrainRenderer {
 public:
     struct Config {
-        VkDeviceSize arena_bytes      = 512ull * 1024 * 1024;  // 512 MB
-        VkDeviceSize slot_bytes       = 256ull * 1024;          // 256 KB / chunk
-        VkDeviceSize staging_bytes    = 64ull * 1024 * 1024;    // 64 MB ring
-        uint32_t     max_visible      = 16384;                  // indirect draws
+        // 1 GB / 1 MB = 1024 slots. Each slot holds up to ~32k verts of
+        // triangulated chunk geometry. Dense edge chunks easily exceed
+        // the older 8k-vert ceiling; silently dropping them showed up as
+        // visible gaps in the canopy.
+        VkDeviceSize arena_bytes      = 1024ull * 1024 * 1024;  // 1 GB
+        VkDeviceSize slot_bytes       = 1024ull * 1024;          // 1 MB / chunk
+        VkDeviceSize staging_bytes    = 128ull * 1024 * 1024;    // 128 MB ring
+        uint32_t     max_visible      = 16384;                   // indirect draws
         VkFormat     color_format     = VK_FORMAT_B8G8R8A8_UNORM;
         VkFormat     depth_format     = VK_FORMAT_D32_SFLOAT;
     };
@@ -91,9 +96,16 @@ public:
     // begin_pass = true means we're already inside a render pass; if the
     // caller hasn't started one yet, set false and we'll record copies +
     // cull only (those happen outside the render pass).
+    struct FogParams {
+        // x = mode (0=off, 1=linear, 2=exp, 3=exp2)
+        glm::vec4 params{0.0f, 0.0f, 1.0f, 1.0f};
+        glm::vec4 colour{0.5f, 0.7f, 1.0f, 1.0f};
+    };
+
     void render(VkCommandBuffer cmd,
                 const glm::mat4& mvp,
-                const std::array<glm::vec4, 6>& frustum_planes);
+                const std::array<glm::vec4, 6>& frustum_planes,
+                const FogParams& fog = {});
 
     // Called by VulkanRenderPath::Present once the frame fence signals
     // that the GPU has consumed up to `checkpoint`. Releases the staging
@@ -149,6 +161,15 @@ private:
     // ChunkKey -> arena slot mapping for destroy_chunk.
     std::unordered_map<ChunkKey, ChunkArena::Slot, ChunkKeyHash> live_slots_;
     std::mutex                                                   live_slots_mutex_;
+
+    // Per-second stats logged to stderr.
+    std::atomic<uint32_t> stat_uploads_{0};
+    std::atomic<uint32_t> stat_drops_oversize_{0};
+    std::atomic<uint32_t> stat_drops_arena_full_{0};
+    std::atomic<uint32_t> stat_drops_staging_full_{0};
+    std::atomic<uint32_t> stat_renders_{0};
+    std::atomic<uint32_t> stat_active_slots_{0};
+    double                stat_window_start_ = 0.0;
 };
 
 }  // namespace plce::vk_render

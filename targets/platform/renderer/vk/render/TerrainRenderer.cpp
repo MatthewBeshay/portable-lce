@@ -1,6 +1,9 @@
 #include "TerrainRenderer.h"
 
+#include <SDL2/SDL_timer.h>
+
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -136,17 +139,22 @@ void TerrainRenderer::create_pipelines() {
                  "vkCreatePipelineLayout(cull)");
     }
     {
-        // Terrain pipeline layout: 1 set + push constant (mat4 mvp = 64B)
-        VkPushConstantRange pc{};
-        pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        pc.offset = 0;
-        pc.size = 64;
+        // Terrain pipeline layout: 1 set + push constants
+        //   vertex   [0  .. 63]:  mat4 mvp
+        //   fragment [64 .. 95]:  vec4 fog_params + vec4 fog_colour
+        VkPushConstantRange pc[2]{};
+        pc[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pc[0].offset = 0;
+        pc[0].size = 64;
+        pc[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pc[1].offset = 64;
+        pc[1].size = 32;
         VkPipelineLayoutCreateInfo lci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         lci.setLayoutCount = 1;
         lci.pSetLayouts = &terrain_set_layout_;
-        lci.pushConstantRangeCount = 1;
-        lci.pPushConstantRanges = &pc;
+        lci.pushConstantRangeCount = 2;
+        lci.pPushConstantRanges = pc;
         vk_check(vkCreatePipelineLayout(device_, &lci, nullptr,
                                         &terrain_pipeline_layout_),
                  "vkCreatePipelineLayout(terrain)");
@@ -195,10 +203,11 @@ void TerrainRenderer::create_pipelines() {
         binding.stride = 32;
         binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        std::array<VkVertexInputAttributeDescription, 3> attrs{};
+        std::array<VkVertexInputAttributeDescription, 4> attrs{};
         attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
         attrs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT,    12};
         attrs[2] = {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20};
+        attrs[3] = {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24};  // normal
 
         VkPipelineVertexInputStateCreateInfo vi{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -400,7 +409,10 @@ void TerrainRenderer::upload_chunk(const ChunkKey& key,
     if (vertex_count == 0 || !vertex_data) return;
 
     VkDeviceSize bytes = VkDeviceSize(vertex_count) * vertex_stride;
-    if (bytes > arena_->slot_size()) return;  // chunk too big for a slot
+    if (bytes > arena_->slot_size()) {
+        stat_drops_oversize_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
 
     // Get-or-allocate the slot for this key.
     ChunkArena::Slot slot;
@@ -411,14 +423,20 @@ void TerrainRenderer::upload_chunk(const ChunkKey& key,
             slot = it->second;
         } else {
             slot = arena_->allocate();
-            if (!slot.valid()) return;  // arena full
+            if (!slot.valid()) {
+                stat_drops_arena_full_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
             live_slots_.emplace(key, slot);
         }
     }
 
     // Stage the bytes; the next render() will record the copy.
     auto a = staging_->alloc(bytes, 16);
-    if (!a.valid()) return;  // staging ring full this frame
+    if (!a.valid()) {
+        stat_drops_staging_full_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     std::memcpy(a.ptr, vertex_data, bytes);
 
     // Compute base_vertex from arena byte offset / stride.
@@ -448,6 +466,7 @@ void TerrainRenderer::upload_chunk(const ChunkKey& key,
         std::lock_guard lk(pending_mutex_);
         pending_copies_.push_back(pc);
     }
+    stat_uploads_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TerrainRenderer::destroy_chunk(const ChunkKey& key) {
@@ -464,8 +483,30 @@ void TerrainRenderer::destroy_chunk(const ChunkKey& key) {
 }
 
 void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
-                             const std::array<glm::vec4, 6>& frustum) {
+                             const std::array<glm::vec4, 6>& frustum,
+                             const FogParams& fog) {
     if (!atlas_set_) return;  // can't sample without an atlas bound
+
+    stat_renders_.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard lk(live_slots_mutex_);
+        stat_active_slots_.store(uint32_t(live_slots_.size()),
+                                 std::memory_order_relaxed);
+    }
+    double now = double(SDL_GetTicks64()) / 1000.0;
+    if (stat_window_start_ == 0.0) stat_window_start_ = now;
+    if (now - stat_window_start_ >= 1.0) {
+        std::fprintf(stderr,
+                     "[vk-terrain] renders=%u uploads=%u live_slots=%u "
+                     "drops(oversz=%u arena=%u stg=%u)\n",
+                     stat_renders_.exchange(0, std::memory_order_relaxed),
+                     stat_uploads_.exchange(0, std::memory_order_relaxed),
+                     stat_active_slots_.load(std::memory_order_relaxed),
+                     stat_drops_oversize_.exchange(0, std::memory_order_relaxed),
+                     stat_drops_arena_full_.exchange(0, std::memory_order_relaxed),
+                     stat_drops_staging_full_.exchange(0, std::memory_order_relaxed));
+        stat_window_start_ = now;
+    }
 
     // 1. Drain pending staging -> arena copies. These must happen
     //    OUTSIDE any active render pass; the caller's contract is that
@@ -563,6 +604,12 @@ void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
     vkCmdBindVertexBuffers(cmd, 0, 1, &arena_buf, &zero);
     vkCmdPushConstants(cmd, terrain_pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
+    struct FragPC {
+        glm::vec4 fog_params;
+        glm::vec4 fog_colour;
+    } fpc{fog.params, fog.colour};
+    vkCmdPushConstants(cmd, terrain_pipeline_layout_,
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(fpc), &fpc);
     vkCmdDrawIndirectCount(cmd, indirect_->draws_buffer(), 0,
                            indirect_->count_buffer(), 0,
                            indirect_->max_draws(),
