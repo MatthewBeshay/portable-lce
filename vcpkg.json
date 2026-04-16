@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "portable-lce",
+  "version": "0.1.0",
+  "description": "Minecraft Legacy Console Edition port - C++23 game engine",
+  "builtin-baseline": "fb87e2bb3fe69e16c224989acb5a61349166c782",
+  "dependencies": [
+    "sdl2",
+    "glm",
+    "stb",
+    "zlib",
+    "simdutf",
+    "miniaudio",
+    "glew"
+  ],
+  "features": {
+    "mimalloc": {
+      "description": "Link mimalloc as the malloc implementation for faster allocations",
+      "dependencies": [ "mimalloc" ]
+    },
+    "vulkan": {
+      "description": "Vulkan 1.3 rendering backend with GPU-driven terrain",
+      "dependencies": [
+        "volk",
+        "vulkan-memory-allocator",
+        "glslang",
+        "spirv-reflect"
+      ]
+    },
+    "tracy": {
+      "description": "Tracy profiler integration for CPU+GPU timeline",
+      "dependencies": [ { "name": "tracy", "default-features": false } ]
+    }
+  }
+}

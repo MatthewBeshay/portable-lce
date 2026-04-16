@@ -1,0 +1,119 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": {
+          "type": "FILEPATH",
+          "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        },
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "asan-ubsan",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_FLAGS":   "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS":    "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_FLAGS":   "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS":    "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
+      "name": "windows-vs",
+      "inherits": "base",
+      "displayName": "Windows - Visual Studio 2022 (multi-config)",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64"
+    },
+    {
+      "name": "windows-vs-2026",
+      "inherits": "base",
+      "displayName": "Windows - Visual Studio 2026 Insiders (multi-config)",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64"
+    },
+    {
+      "name": "windows-ninja",
+      "inherits": "base",
+      "displayName": "Windows - Ninja (run from a VS Developer prompt)",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "generator": "Ninja Multi-Config"
+    },
+    {
+      "name": "linux-gcc",
+      "inherits": "base",
+      "displayName": "Linux - GCC + Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "linux-clang",
+      "inherits": "base",
+      "displayName": "Linux - Clang + Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "generator": "Ninja Multi-Config",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "linux-clang-asan",
+      "inherits": [ "linux-clang", "asan-ubsan" ],
+      "displayName": "Linux - Clang + ASAN/UBSAN"
+    },
+    {
+      "name": "linux-clang-tsan",
+      "inherits": [ "linux-clang", "tsan" ],
+      "displayName": "Linux - Clang + TSAN"
+    },
+    {
+      "name": "macos-clang",
+      "inherits": "base",
+      "displayName": "macOS - Clang + Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "generator": "Ninja Multi-Config"
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-vs-debug",          "configurePreset": "windows-vs",        "configuration": "Debug" },
+    { "name": "windows-vs-release",        "configurePreset": "windows-vs",        "configuration": "Release" },
+    { "name": "windows-vs-reldbg",         "configurePreset": "windows-vs",        "configuration": "RelWithDebInfo" },
+    { "name": "windows-vs-2026-debug",     "configurePreset": "windows-vs-2026",   "configuration": "Debug" },
+    { "name": "windows-vs-2026-release",   "configurePreset": "windows-vs-2026",   "configuration": "Release" },
+    { "name": "windows-ninja-debug",       "configurePreset": "windows-ninja",     "configuration": "Debug" },
+    { "name": "windows-ninja-release",     "configurePreset": "windows-ninja",     "configuration": "Release" },
+    { "name": "linux-gcc-debug",           "configurePreset": "linux-gcc",         "configuration": "Debug" },
+    { "name": "linux-gcc-release",         "configurePreset": "linux-gcc",         "configuration": "Release" },
+    { "name": "linux-clang-debug",         "configurePreset": "linux-clang",       "configuration": "Debug" },
+    { "name": "linux-clang-release",       "configurePreset": "linux-clang",       "configuration": "Release" },
+    { "name": "linux-clang-asan",          "configurePreset": "linux-clang-asan",  "configuration": "RelWithDebInfo" },
+    { "name": "linux-clang-tsan",          "configurePreset": "linux-clang-tsan",  "configuration": "RelWithDebInfo" },
+    { "name": "macos-clang-debug",         "configurePreset": "macos-clang",       "configuration": "Debug" },
+    { "name": "macos-clang-release",       "configurePreset": "macos-clang",       "configuration": "Release" }
+  ]
+}

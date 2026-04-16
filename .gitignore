@@ -8,10 +8,6 @@
 !/docs/
 !/targets/
 !/scripts/
-!/subprojects/
-/subprojects/*
-!/subprojects/*.wrap
-!/subprojects/packagefiles
 /scripts/__pycache__/
 !/.clang-format
 !/.git-blame-ignore-revs
@@ -20,6 +16,7 @@
 !/.gitmodules
 !/CONTRIBUTING.md
 !/flake.nix
-!/meson.build
-!/meson.options
+!/CMakeLists.txt
+!/CMakePresets.json
+!/vcpkg.json
 !/README.md

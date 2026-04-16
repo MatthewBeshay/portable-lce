@@ -14,10 +14,10 @@ output_stamp = Path(sys.argv[5])
 # At runtime, the client expects a `Common/` folder from the resources source and a compiled
 # media archive (LinuxMedia.arc) inside of said folder at its current working directory to launch.
 #
-# `meson install` also handles this, but installs it to system folders, which can be annoying for
+# `cmake --install` also handles this, but installs it to system folders, which can be annoying for
 # testing. Since we want a way to run it straight from `/build` when debugging, we do this instead.
 #
-# this script doesn't handle copying the same way `meson install` does but it should be good enough
+# this script doesn't handle copying the same way `cmake --install` does but it should be good enough
 dest_common = Path(client_build_dir / "Common")
 src_assets = Path(project_source_root / "targets" / "resources")
 

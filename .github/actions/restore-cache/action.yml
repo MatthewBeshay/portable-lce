@@ -1,27 +1,25 @@
 name: "Restore cache"
-description: "Restores the cache for ccache and Meson"
+description: "Restores the CMake build cache + vcpkg binary cache"
 
 inputs:
-  ccache_dir:
-    description: "The directory used by ccache"
+  vcpkg_cache_dir:
+    description: "Directory used for the vcpkg binary cache"
     required: true
     type: string
 
 runs:
   using: "composite"
   steps:
-    - name: Restore ccache cache
+    - name: Restore vcpkg binary cache
       uses: actions/cache@v4
       with:
-        path: ~/.ccache
-        key: ${{ runner.os }}-ccache-${{ hashFiles('**/meson.build') }}
+        path: ${{ inputs.vcpkg_cache_dir }}
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json') }}
+        restore-keys: ${{ runner.os }}-vcpkg-
 
-    - name: Create ccache dir
-      shell: bash
-      run: mkdir -p {{ inputs.ccache_dir }}
-
-    - name: Restore meson cache
+    - name: Restore CMake FetchContent cache
       uses: actions/cache@v4
       with:
-        path: ~/.cache/meson
-        key: ${{ runner.os }}-meson-${{ hashFiles('**/meson.build') }}
+        path: build/*/_deps
+        key: ${{ runner.os }}-fetchcontent-${{ hashFiles('CMakeLists.txt') }}
+        restore-keys: ${{ runner.os }}-fetchcontent-

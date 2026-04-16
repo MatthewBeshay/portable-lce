@@ -12,10 +12,14 @@ on:
       - '**.hpp'
       - '**.hxx'
       - '**.inl'
-      - "**meson.build"
-      - "flake.nix"
+      - "**/CMakeLists.txt"
+      - "CMakePresets.json"
+      - "vcpkg.json"
       - '.github/workflows/release-linux.yml'
   workflow_dispatch:
+
+env:
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
 
 jobs:
   release-linux:
@@ -23,51 +27,49 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache python3 python3-pip ninja-build libsdl2-dev libgl-dev libglu1-mesa-dev libpthread-stubs0-dev libglm-dev
-          python -m pip install meson
-          # Set a reasonable ccache size
-          ccache -M 5G || true
+          sudo apt-get install -y \
+            build-essential ninja-build pkg-config curl zip unzip tar git python3 \
+            libx11-dev libxft-dev libxext-dev \
+            libgl-dev libglu1-mesa-dev libpthread-stubs0-dev \
+            patchelf
 
-      - name: Install LLVM + libc++
+      - name: Install LLVM 20 + libc++
         run: |
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
           sudo apt-get install -y libc++-20-dev libc++abi-20-dev
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
 
-      - name: Restore ccache
-        uses: actions/cache@v5
+      - name: Install CMake 3.30
+        uses: lukka/get-cmake@latest
         with:
-          path: ${{ runner.temp }}/ccache
-          key: ${{ runner.os }}-ccache-${{ hashFiles('**/meson.build') }}
-          restore-keys: ${{ runner.os }}-ccache-
+          cmakeVersion: "3.30.5"
 
-      - name: Configure Meson
-        env:
-          CC: "ccache clang"
-          CXX: "ccache clang++"
-          CC_LD: lld
-          CXX_LD: lld
-        run: |
-          meson setup build --native-file=scripts/llvm_native.txt --wipe
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: "vcpkg.json"
 
-      - name: Build with Meson
-        env:
-          CCACHE_DIR: ${{ runner.temp }}/ccache
-        run: |
-          export CCACHE_DIR="${{ runner.temp }}/ccache"
-          meson compile -C build -j $(nproc)
+      - name: Restore build caches
+        uses: ./.github/actions/restore-cache
+        with:
+          vcpkg_cache_dir: ${{ github.workspace }}/vcpkg_cache
 
-      - name: Install patchelf
-        run: sudo apt-get install -y patchelf
+      - name: Configure
+        run: cmake --preset linux-clang
+
+      - name: Build
+        run: cmake --build --preset linux-clang-release -j $(nproc)
 
       - name: Package artifact
         run: |
-          cd build/targets/app
-          zip -r ../../../minecraft-client-linux.zip . --exclude "./Minecraft.Client.p/*"
+          cd build/linux-clang/targets/app/Release
+          zip -r ../../../../../minecraft-client-linux.zip .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

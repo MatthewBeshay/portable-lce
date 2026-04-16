@@ -1,0 +1,50 @@
+name: "Build CMake"
+description: "Configures and builds the project via CMake + vcpkg"
+
+inputs:
+  preset:
+    description: "CMake configure preset (e.g. linux-clang, linux-gcc, windows-vs)"
+    required: true
+    type: string
+
+  build_preset:
+    description: "CMake build preset (e.g. linux-clang-release)"
+    required: true
+    type: string
+
+  upload:
+    description: "Upload the resulting executable as a workflow artifact"
+    required: false
+    default: "true"
+    type: string
+
+  artifact_name:
+    description: "Name for the uploaded artifact"
+    required: false
+    default: "minecraft-client"
+    type: string
+
+  artifact_path:
+    description: "Path to upload when upload=true (glob allowed)"
+    required: false
+    default: "build/*/targets/app/*/Minecraft.Client*"
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure
+      shell: bash
+      run: cmake --preset "${{ inputs.preset }}"
+
+    - name: Build
+      shell: bash
+      run: cmake --build --preset "${{ inputs.build_preset }}" -j "$(nproc)"
+
+    - name: Upload executable
+      if: ${{ inputs.upload == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}-${{ github.sha }}
+        path: ${{ inputs.artifact_path }}
+        retention-days: 7

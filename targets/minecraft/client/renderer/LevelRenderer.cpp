@@ -2783,7 +2783,7 @@ void LevelRenderer::cull(Culler* culler, float a) {
 
 #else
 #error \
-    "Unknown occlusion mode, this should NEVER happen, check meson.build for misconfiguration"
+    "Unknown occlusion mode, this should NEVER happen, check CMakeLists.txt for misconfiguration"
 #endif
 }
 void LevelRenderer::playStreamingMusic(const std::string& name, int x, int y,

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Enumerate C/C++ source files for a meson target.
+"""Enumerate C/C++ source files for a CMake target.
 
-Replaces the run_command('sh', '-c', 'find ...') hack in
-targets/{minecraft,app}/meson.build. Run this whenever source files are
-added or removed and commit the regenerated *_sources.txt files.
+Produces the `sources.txt` / `common_sources.txt` files consumed by
+`targets/{minecraft,app}/CMakeLists.txt`. Run this whenever source
+files are added or removed, and commit the regenerated files.
 
 Usage:
     python3 scripts/list_sources.py
 
-Each module's sources.txt is generated relative to its meson source dir.
+Each module's sources.txt is generated relative to its CMakeLists.txt's
+source directory.
 """
 
 import os
@@ -19,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Module configuration: (output_path, scan_root, [exclude_basenames]).
 # Paths in the output file are relative to the directory containing the
-# meson.build that reads it.
+# CMakeLists.txt that reads it.
 MODULES = [
     {
         "name": "minecraft",

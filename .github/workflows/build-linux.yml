@@ -1,6 +1,5 @@
 name: Build (Linux, x86-64)
 
-# TODO: test with only pull-request
 on:
   push:
     paths: &workflow_paths
@@ -21,8 +20,9 @@ on:
       - "**.c"
       - "**.h"
       - ".github/workflows/build-linux.yml"
-      - "**/meson.build"
-      - "flake.nix"
+      - "**/CMakeLists.txt"
+      - "CMakePresets.json"
+      - "vcpkg.json"
 
   pull_request:
     paths: *workflow_paths
@@ -31,61 +31,49 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !contains(github.ref, 'dev/') }}
 
+env:
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
+
 jobs:
-  build-linux-amalgamate:
+  build-linux-clang:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Cache .git folder
-        uses: actions/cache@v5
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential ninja-build pkg-config curl zip unzip tar git python3 \
+            libx11-dev libxft-dev libxext-dev \
+            libgl-dev libglu1-mesa-dev libpthread-stubs0-dev
+
+      - name: Install LLVM 20 + libc++
+        run: |
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 20
+          sudo apt-get install -y libc++-20-dev libc++abi-20-dev
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
+
+      - name: Install CMake 3.30
+        uses: lukka/get-cmake@latest
         with:
-          path: .git
-          key: ${{ runner.os }}-git-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-git-
+          cmakeVersion: "3.30.5"
 
-      - uses: actions/checkout@v6
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          fetch-depth: 1
+          vcpkgJsonGlob: "vcpkg.json"
 
-      - name: Enter dev-shell
-        uses: ./.github/actions/enter-devshell
-
-      - name: Restore build cache
+      - name: Restore build caches
         uses: ./.github/actions/restore-cache
         with:
-          ccache_dir: ${{ runner.temp }}/ccache
+          vcpkg_cache_dir: ${{ github.workspace }}/vcpkg_cache
 
-      - name: Compile
-        uses: ./.github/actions/build-meson
+      - name: Configure + Build
+        uses: ./.github/actions/build-cmake
         with:
-          dir_name: "build_release"
-          setup_args: "-Dunity=on -Dunity_size=99999"
-
-  build-linux-full:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Cache .git folder
-        uses: actions/cache@v5
-        with:
-          path: .git
-          key: ${{ runner.os }}-git-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-git-
-
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-
-      - name: Enter dev-shell
-        uses: ./.github/actions/enter-devshell
-
-      - name: Restore build cache
-        uses: ./.github/actions/restore-cache
-        with:
-          ccache_dir: ${{ runner.temp }}/ccache
-
-      - name: Compile
-        uses: ./.github/actions/build-meson
-        with:
-          dir_name: "build_debug"
-          setup_args: "-Dunity=off"
+          preset: linux-clang
+          build_preset: linux-clang-release
+          artifact_name: minecraft-client-linux-clang

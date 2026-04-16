@@ -44,122 +44,119 @@ These platforms are currently work-in-progress:
 ## Join our community:
 * **Discord:** https://discord.gg/SC6WCZezry
 
-## Building (Linux)
+## Building
+
+The project builds with **CMake 3.28+** and uses **vcpkg** in manifest mode
+for third-party dependencies.
 
 ### Prerequisites
 
-#### System Libraries
+- **CMake ≥ 3.28**
+- **vcpkg** - clone the repo and set `VCPKG_ROOT` to its path
+  (`$env:VCPKG_ROOT` on Windows, `export VCPKG_ROOT=…` on Linux/macOS)
+- **Python 3** (used by asset pipeline scripts)
+- A **C++23** toolchain:
+  - Windows: Visual Studio 2022 17.10+ or VS 2026 (MSVC 19.40+)
+  - Linux: GCC 15+ or Clang 18+ with libc++
+  - macOS: Apple Clang from Xcode 16+
 
-Debian/Ubuntu:
+#### Platform-specific system libraries
+
+Linux (Debian/Ubuntu):
 ```bash
-sudo apt-get install -y build-essential libsdl2-dev libgl-dev libglu1-mesa-dev libpthread-stubs0-dev
+sudo apt-get install -y build-essential ninja-build libsdl2-dev libgl-dev \
+    libglu1-mesa-dev libpthread-stubs0-dev python3
 ```
 
 Arch/Manjaro:
 ```bash
-sudo pacman -S base-devel pkgconf sdl2-compat mesa glu
+sudo pacman -S base-devel cmake ninja pkgconf sdl2-compat mesa glu python
 ```
 
-Fedora/Red Hat/Nobara:
+Fedora/RHEL:
 ```bash
-sudo dnf install gcc gcc-c++ make SDL2-devel mesa-libGL-devel mesa-libGLU-devel openssl-devel
+sudo dnf install gcc gcc-c++ make cmake ninja-build SDL2-devel \
+    mesa-libGL-devel mesa-libGLU-devel openssl-devel python3
 ```
 
-#### Toolchain
+### Configure & build
 
-This project requires a C++23 compiler with full standard library support.
+`CMakePresets.json` provides presets for the common toolchains.
 
-**If your distro ships GCC 15+**, you're good - just use the system compiler:
+Windows (Visual Studio 2026 multi-config):
+```pwsh
+cmake --preset windows-vs
+cmake --build --preset windows-vs-debug
+# → build\windows-vs\targets\app\Debug\Minecraft.Client.exe
+```
 
+Windows (Ninja - launch from a VS Developer prompt so `cl.exe` is on PATH):
+```pwsh
+cmake --preset windows-ninja
+cmake --build --preset windows-ninja-debug
+```
+
+Linux (GCC):
 ```bash
-meson setup build
+cmake --preset linux-gcc
+cmake --build --preset linux-gcc-debug
+# → build/linux-gcc/targets/app/Debug/Minecraft.Client
 ```
 
-**If your distro ships an older GCC:** install LLVM with libc++ and use the provided toolchain file:
-
+Linux (Clang + libc++):
 ```bash
-# Debian/Ubuntu
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-sudo ./llvm.sh 20
-sudo apt install libc++-20-dev libc++abi-20-dev
+cmake --preset linux-clang
+cmake --build --preset linux-clang-debug
 ```
 
+macOS:
 ```bash
-# Fedora/RHEL (if needed)
-sudo dnf install clang lld libcxx-devel libcxxabi-devel
+cmake --preset macos-clang
+cmake --build --preset macos-clang-debug
 ```
 
-Then configure with the LLVM native file (see Configure & Build below).
+### Project options
 
-#### Meson + Ninja
+Pass `-DPLCE_<OPTION>=<VALUE>` at configure time:
 
-Install [Meson](https://mesonbuild.com/) and [Ninja](https://ninja-build.org/):
+| Option | Values | Default | Notes |
+|---|---|---|---|
+| `PLCE_RENDERER` | `bgfx` \| `vulkan` | `bgfx` | `vulkan` enables the raw Vulkan 1.3 backend (WIP) |
+| `PLCE_UI_BACKEND` | `shiggy` \| `java` | `shiggy` | `shiggy` is x86-64 only |
+| `PLCE_ENABLE_VSYNC` | `ON` \| `OFF` | `ON` | |
+| `PLCE_OCCLUSION_CULLING` | `off` \| `frustum` \| `bfs` \| `hardware` | `frustum` | |
+| `PLCE_ENABLE_FRAME_PROFILER` | `ON` \| `OFF` | `OFF` | |
+| `PLCE_ENABLE_MIMALLOC` | `ON` \| `OFF` | `OFF` | Requires the `mimalloc` vcpkg feature |
 
-```bash
-pip install meson ninja
-```
+vcpkg features (add to `--x-feature=<name>` when configuring):
 
-Or follow the [Meson quickstart guide](https://mesonbuild.com/Quick-guide.html).
+- `vulkan` - adds `volk`, `vulkan-memory-allocator`, `glslang`, `spirv-reflect`
+- `tracy` - CPU+GPU profiler integration
+- `mimalloc` - replaces malloc
 
-#### Docker (alternative)
+### Clean rebuild
 
-If you don't want to install dependencies, use the included devcontainer. Open the project in VS Code with the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension, or build manually:
-
-```bash
-docker build -t portable-lce-dev .devcontainer/
-docker run -it --rm -v $(pwd):/workspaces/portable-lce -w /workspaces/portable-lce portable-lce-dev bash
-```
-
-### Configure & Build
-
-```bash
-# If using system GCC 15+
-meson setup build
-
-# If using LLVM/libc++
-meson setup --native-file ./scripts/llvm_native.txt build
-
-# Compile
-meson compile -C build
-```
-
-The binary is output to:
-
-```
-./build/targets/app/Minecraft.Client
-```
-
-#### Clean
-
-To perform a clean compilation:
+Delete the preset's build directory and reconfigure:
 
 ```bash
-meson compile --clean -C build
-```
-
-...or to reconfigure an existing build directory:
-
-```bash
-meson setup --native-file ./scripts/llvm_native.txt build --reconfigure
-```
-
-...or to hard reset the build directory:
-
-```bash
-rm -r ./build
-meson setup --native-file ./scripts/llvm_native.txt build
+rm -rf build/<preset-name>
+cmake --preset <preset-name>
 ```
 
 ---
 
 ## Running
 
-Game assets are automatically copied to the build output directory during compilation. Run from that directory:
+Game assets are automatically copied next to the executable during the
+build. Launch from that directory:
 
-```sh
-./build/targets/app/Minecraft.Client
+```pwsh
+cd build\windows-vs\targets\app\Debug
+./Minecraft.Client.exe
 ```
+
+Set `BGFX_RENDERER` to pick a backend at runtime when `PLCE_RENDERER=bgfx`
+(values: `gl`, `d3d11`, `d3d12`, `vulkan`).
 
 <!-- ### View the online documentation [here](https://portable-lce.github.io/portable-lce). -->
 

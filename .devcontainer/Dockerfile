@@ -26,13 +26,11 @@ RUN apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CC="clang" \
-    CXX="clang++" \
-    CC_LD="lld" \
-    CXX_LD="lld"
+    CXX="clang++"
 
 FROM clang AS portablelce
 
-ARG MESON_VERSION=1.10.2
+ARG CMAKE_VERSION=3.30.5
 
 RUN apt-get update \
     && apt-get install -y software-properties-common \
@@ -49,15 +47,25 @@ RUN apt-get update \
         libssl-dev \
         gcc-15 g++-15 \
         git \
+        curl \
+        zip \
+        unzip \
+        tar \
+        pkg-config \
+        python3 \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100 \
     && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-15 100 \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget -qO meson.tar.gz https://github.com/mesonbuild/meson/releases/latest/download/meson-${MESON_VERSION}.tar.gz \
-    && mkdir /opt/meson \
-    && tar xf meson.tar.gz --strip-components=1 -C /opt/meson \
-    && mv /opt/meson/meson.py /opt/meson/meson \
-    && ln -s /opt/meson/meson /usr/bin/meson \
-    && rm -rf meson.tar.gz
+# CMake 3.28+ (older than Ubuntu 24.04's default).
+RUN wget -qO cmake.sh https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh \
+    && bash cmake.sh --skip-license --prefix=/usr/local \
+    && rm cmake.sh
+
+# vcpkg in manifest mode, cloned to /opt/vcpkg and pointed to by VCPKG_ROOT.
+RUN git clone --depth 1 https://github.com/microsoft/vcpkg.git /opt/vcpkg \
+    && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+ENV VCPKG_ROOT=/opt/vcpkg
+ENV PATH="/opt/vcpkg:${PATH}"
