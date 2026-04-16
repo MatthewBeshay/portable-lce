@@ -291,8 +291,8 @@ BgfxRenderPath::~BgfxRenderPath() {
     }
     textures_.clear();
 
-    for (auto& [id, h] : gl_tex_to_bgfx_) {
-        if (bgfx::isValid(h)) bgfx::destroy(h);
+    for (auto& [id, slot] : gl_tex_to_bgfx_) {
+        if (bgfx::isValid(slot.handle)) bgfx::destroy(slot.handle);
     }
     gl_tex_to_bgfx_.clear();
 
@@ -655,7 +655,8 @@ void BgfxRenderPath::DrawVertices(int primType, int count, void* data,
     if (state_.texture_enabled && state_.bound_texture >= 0) {
         auto it = gl_tex_to_bgfx_.find(state_.bound_texture);
         if (it != gl_tex_to_bgfx_.end()) {
-            bgfx::setTexture(0, s_tex0_, it->second);
+            bgfx::setTexture(0, s_tex0_, it->second.handle,
+                             it->second.sampler_flags);
             hasTexture = true;
         }
     }
@@ -943,10 +944,12 @@ bool BgfxRenderPath::CBuffCall(int index, bool) {
 
     bool hasTexture = false;
     bgfx::TextureHandle texHandle = BGFX_INVALID_HANDLE;
+    uint32_t texSamplerFlags = BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
     if (state_.texture_enabled && state_.bound_texture >= 0) {
         auto tex_it = gl_tex_to_bgfx_.find(state_.bound_texture);
         if (tex_it != gl_tex_to_bgfx_.end()) {
-            texHandle = tex_it->second;
+            texHandle = tex_it->second.handle;
+            texSamplerFlags = tex_it->second.sampler_flags;
             hasTexture = true;
         }
     }
@@ -980,7 +983,8 @@ bool BgfxRenderPath::CBuffCall(int index, bool) {
         bgfx::setUniform(u_fragParams_, fragP);
         bgfx::setUniform(u_fogColor_, state_.fog_color);
 
-        if (hasTexture) bgfx::setTexture(0, s_tex0_, texHandle);
+        if (hasTexture)
+            bgfx::setTexture(0, s_tex0_, texHandle, texSamplerFlags);
         if (state_.use_lightmap && bgfx::isValid(state_.bound_lightmap)) {
             bgfx::setTexture(1, s_tex1_, state_.bound_lightmap,
                              BGFX_SAMPLER_MIN_ANISOTROPIC |
@@ -1010,12 +1014,19 @@ int BgfxRenderPath::TextureCreate() {
 void BgfxRenderPath::TextureFree(int idx) {
     auto it = gl_tex_to_bgfx_.find(idx);
     if (it != gl_tex_to_bgfx_.end()) {
-        bgfx::destroy(it->second);
+        bgfx::destroy(it->second.handle);
         gl_tex_to_bgfx_.erase(it);
     }
 }
 
-void BgfxRenderPath::TextureBind(int idx) { state_.bound_texture = idx; }
+void BgfxRenderPath::TextureBind(int idx) {
+    state_.bound_texture = idx;
+    if (idx >= 0) {
+        auto it = gl_tex_to_bgfx_.find(idx);
+        if (it != gl_tex_to_bgfx_.end())
+            state_.bound_texture_sampler_flags = it->second.sampler_flags;
+    }
+}
 
 void BgfxRenderPath::TextureBindVertex(int idx, bool scaleLight) {
     if (idx < 0) {
@@ -1025,7 +1036,7 @@ void BgfxRenderPath::TextureBindVertex(int idx, bool scaleLight) {
 
     auto it = gl_tex_to_bgfx_.find(idx);
     if (it != gl_tex_to_bgfx_.end()) {
-        state_.bound_lightmap = it->second;
+        state_.bound_lightmap = it->second.handle;
         state_.use_lightmap = true;
     } else {
         state_.bound_lightmap = {bgfx::kInvalidHandle};
@@ -1037,24 +1048,129 @@ void BgfxRenderPath::TextureBindVertex(int idx, bool scaleLight) {
     state_.lightmap_transform[2] = scaleLight ? 8.f / 256.f : 0.0f;
     state_.lightmap_transform[3] = scaleLight ? 8.f / 256.f : 0.0f;
 }
+
 void BgfxRenderPath::TextureSetTextureLevels(int) {}
+
+void BgfxRenderPath::TextureSetParam(int param, int value) {
+    // translate OpenGL sampler params to bgfx sampler flags
+
+    constexpr int GL_TEXTURE_MIN_FILTER = 0x2801;
+    constexpr int GL_TEXTURE_MAG_FILTER = 0x2800;
+    constexpr int GL_TEXTURE_WRAP_S = 0x2802;
+    constexpr int GL_TEXTURE_WRAP_T = 0x2803;
+    constexpr int GL_NEAREST = 0x2600;
+    constexpr int GL_LINEAR = 0x2601;
+    constexpr int GL_NEAREST_MIPMAP_NEAREST = 0x2700;
+    constexpr int GL_LINEAR_MIPMAP_NEAREST = 0x2701;
+    constexpr int GL_NEAREST_MIPMAP_LINEAR = 0x2702;
+    constexpr int GL_LINEAR_MIPMAP_LINEAR = 0x2703;
+    constexpr int GL_REPEAT = 0x2901;
+    constexpr int GL_CLAMP_TO_EDGE = 0x812F;
+    constexpr int GL_MIRRORED_REPEAT = 0x8370;
+
+    if (state_.bound_texture < 0) return;
+
+    auto& pending = gl_tex_to_bgfx_[state_.bound_texture];
+
+    uint32_t& f = pending.sampler_flags;
+
+    switch (param) {
+        case GL_TEXTURE_MIN_FILTER:
+            f &= ~(BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT);
+            switch (value) {
+                case GL_NEAREST:
+                    f |= BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT;
+                    break;
+                case GL_LINEAR:
+                    f |= BGFX_SAMPLER_MIP_POINT;
+                    break;
+                case GL_NEAREST_MIPMAP_NEAREST:
+                    f |= BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT;
+                    break;
+                case GL_LINEAR_MIPMAP_NEAREST:
+                    f |= BGFX_SAMPLER_MIP_POINT;
+                    break;
+                case GL_NEAREST_MIPMAP_LINEAR:
+                    f |= BGFX_SAMPLER_MIN_POINT;
+                    break;
+                case GL_LINEAR_MIPMAP_LINEAR:
+                    // both point bits already cleared above
+                    break;
+                default:
+                    break;
+            }
+            break;
+
+        case GL_TEXTURE_MAG_FILTER:
+            f &= ~BGFX_SAMPLER_MAG_POINT;
+            if (value == GL_NEAREST) f |= BGFX_SAMPLER_MAG_POINT;
+            // bgfx default is bilinear mag
+            break;
+
+        case GL_TEXTURE_WRAP_S:
+            f &= ~(BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_U_MIRROR);
+            switch (value) {
+                case GL_CLAMP_TO_EDGE:
+                    f |= BGFX_SAMPLER_U_CLAMP;
+                    break;
+                case GL_MIRRORED_REPEAT:
+                    f |= BGFX_SAMPLER_U_MIRROR;
+                    break;
+                case GL_REPEAT:
+                default:
+                    // bgfx default is wrap
+                    break;
+            }
+            break;
+
+        case GL_TEXTURE_WRAP_T:
+            f &= ~(BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_V_MIRROR);
+            switch (value) {
+                case GL_CLAMP_TO_EDGE:
+                    f |= BGFX_SAMPLER_V_CLAMP;
+                    break;
+                case GL_MIRRORED_REPEAT:
+                    f |= BGFX_SAMPLER_V_MIRROR;
+                    break;
+                case GL_REPEAT:
+                default:
+                    break;
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    auto it = gl_tex_to_bgfx_.find(state_.bound_texture);
+    if (it != gl_tex_to_bgfx_.end()) {
+        it->second.sampler_flags = f;
+        if (state_.bound_texture == it->first)
+            state_.bound_texture_sampler_flags = f;
+    }
+}
 
 void BgfxRenderPath::TextureData(int width, int height, void* data, int level,
                                  int) {
     if (level > 0) return;
     if (state_.bound_texture < 0 || !data || width <= 0 || height <= 0) return;
-    auto it = gl_tex_to_bgfx_.find(state_.bound_texture);
-    if (it != gl_tex_to_bgfx_.end()) {
-        bgfx::destroy(it->second);
+
+    auto& slot = gl_tex_to_bgfx_[state_.bound_texture];
+
+    // if sampler flags changed, we have to recreate the texture
+    uint32_t flags = slot.sampler_flags;
+    if (!bgfx::isValid(slot.handle) || slot.sampler_flags != flags) {
+        if (bgfx::isValid(slot.handle)) bgfx::destroy(slot.handle);
+
+        slot.handle = bgfx::createTexture2D(width, height, false, 1,
+                                            bgfx::TextureFormat::RGBA8, flags);
+        slot.sampler_flags = flags;
+        state_.bound_texture_sampler_flags = flags;
     }
-    bgfx::TextureHandle th = bgfx::createTexture2D(
-        width, height, false, 1, bgfx::TextureFormat::RGBA8,
-        BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);  // no mem
 
-    const bgfx::Memory* mem = bgfx::copy(data, width * height * 4);
-    bgfx::updateTexture2D(th, 0, 0, 0, 0, width, height, mem);
-
-    gl_tex_to_bgfx_[state_.bound_texture] = th;
+    const bgfx::Memory* mem = bgfx::copy(data, (uint32_t)(width * height * 4));
+    bgfx::updateTexture2D(slot.handle, 0, (uint8_t)level, 0, 0, (uint16_t)width,
+                          (uint16_t)height, mem);
 }
 
 void BgfxRenderPath::TextureDataUpdate(int xoff, int yoff, int w, int h,
@@ -1063,10 +1179,9 @@ void BgfxRenderPath::TextureDataUpdate(int xoff, int yoff, int w, int h,
     auto it = gl_tex_to_bgfx_.find(state_.bound_texture);
     if (it == gl_tex_to_bgfx_.end()) return;
     const bgfx::Memory* mem = bgfx::copy(data, w * h * 4);
-    bgfx::updateTexture2D(it->second, 0, 0, xoff, yoff, w, h, mem);
+    bgfx::updateTexture2D(it->second.handle, 0, 0, xoff, yoff, w, h, mem);
 }
 
-void BgfxRenderPath::TextureSetParam(int, int) {}
 int BgfxRenderPath::TextureGetTextureLevels() { return 1; }
 void BgfxRenderPath::ReadPixels(int, int, int, int, void*) {}
 static int* stb_pixels_to_argb(unsigned char* pixels, int w, int h) {
@@ -1249,7 +1364,8 @@ void BgfxRenderPath::submit_immediate(const DrawCall& dc) {
     if (state_.texture_enabled && state_.bound_texture >= 0) {
         auto it = gl_tex_to_bgfx_.find(state_.bound_texture);
         if (it != gl_tex_to_bgfx_.end()) {
-            bgfx::setTexture(0, s_tex0_, it->second);
+            bgfx::setTexture(0, s_tex0_, it->second.handle,
+                             it->second.sampler_flags);
             hasTexture = true;
         }
     }

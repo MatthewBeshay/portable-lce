@@ -227,7 +227,12 @@ private:
     std::vector<TextureSlot> textures_;
 
     // GL texture ID to our handle map (for legacy TextureCreate/Bind)
-    std::unordered_map<int, bgfx::TextureHandle> gl_tex_to_bgfx_;
+    struct GlTexSlot {
+        bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+        uint32_t sampler_flags =
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
+    };
+    std::unordered_map<int, GlTexSlot> gl_tex_to_bgfx_;
     int next_gl_tex_id_ = 1;
 
     // CBuffer (display list) system
@@ -253,6 +258,8 @@ private:
         bool fog_enabled = false;
         bool lighting_enabled = false;
         int bound_texture = -1;
+        uint32_t bound_texture_sampler_flags =
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
         float tint_color[4] = {1, 1, 1, 1};
         float chunk_offset[3] = {0, 0, 0};
         float fog_mode = 0;
@@ -264,7 +271,9 @@ private:
         float light1_dir[4] = {-0.173913f, 0.869565f, 0.608696f, 0};
         float light_diffuse[4] = {0.6f, 0.6f, 0.6f, 1};
         float light_ambient[4] = {0.4f, 0.4f, 0.4f, 1};
-        float global_lm[4] = {240.0, 240.0, 0.0, 0.0}; // actually a vec2, last two components ignored
+        float global_lm[4] = {
+            240.0, 240.0, 0.0,
+            0.0};  // actually a vec2, last two components ignored
         float alpha_ref = 0.1f;
         float clear_color[4] = {0.19f, 0.19f, 0.19f, 1.0f};
         float depth_slope_bias = 0.0f;

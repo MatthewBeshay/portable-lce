@@ -1288,7 +1288,6 @@ void Gui::renderVignette(float br, int w, int h) {
     if (br < 0) br = 0;
     if (br > 1) br = 1;
     tbr += (br - tbr) * 0.01f;
-    return;
 
 #if defined(ENABLE_JAVA_GUIS)
     auto [tvb, span] = RenderPath.alloc_transient_vertices(
