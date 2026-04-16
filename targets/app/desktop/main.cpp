@@ -443,11 +443,23 @@ int main(int argc, const char* argv[]) {
 #endif
     SDL_SetMainReady();
     SDL_Init(SDL_INIT_VIDEO);
+    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+#if defined(PLCE_RENDERER_VULKAN)
+    window_flags |= SDL_WINDOW_VULKAN;
+#endif
     SDL_Window* sdl_window = SDL_CreateWindow(
         "Minecraft Console Edition", SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED, reqW > 0 ? reqW : 1280, reqH > 0 ? reqH : 720,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        window_flags);
+    if (!sdl_window) {
+        std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
+        return 1;
+    }
+#if defined(PLCE_RENDERER_VULKAN)
+    auto render_path = make_vulkan_render_path(sdl_window);
+#else
     auto render_path = make_bgfx_render_path(sdl_window);
+#endif
     rp::render_path_internal::set_active(render_path.get());
 
     // Read the file containing the product codes

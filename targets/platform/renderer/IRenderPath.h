@@ -638,3 +638,4 @@ IRenderPath& get_active();
 
 struct SDL_Window;
 std::unique_ptr<rp::IRenderPath> make_bgfx_render_path(SDL_Window* window);
+std::unique_ptr<rp::IRenderPath> make_vulkan_render_path(SDL_Window* window);

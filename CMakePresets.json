@@ -53,6 +53,15 @@
       "architecture": "x64"
     },
     {
+      "name": "windows-vs-2026-vulkan",
+      "inherits": "windows-vs-2026",
+      "displayName": "Windows - VS 2026 + Vulkan renderer",
+      "cacheVariables": {
+        "PLCE_RENDERER": "vulkan",
+        "VCPKG_MANIFEST_FEATURES": "vulkan"
+      }
+    },
+    {
       "name": "windows-ninja",
       "inherits": "base",
       "displayName": "Windows - Ninja (run from a VS Developer prompt)",

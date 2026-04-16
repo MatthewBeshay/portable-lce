@@ -21,10 +21,13 @@
     "vulkan": {
       "description": "Vulkan 1.3 rendering backend with GPU-driven terrain",
       "dependencies": [
+        "vulkan-headers",
+        "vulkan-loader",
         "volk",
         "vulkan-memory-allocator",
         "glslang",
-        "spirv-reflect"
+        "spirv-reflect",
+        { "name": "sdl2", "features": [ "vulkan" ] }
       ]
     },
     "tracy": {

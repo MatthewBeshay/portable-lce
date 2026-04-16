@@ -85,6 +85,12 @@ if(PLCE_ENABLE_FRAME_PROFILER)
     target_compile_definitions(plce_global_defs INTERFACE ENABLE_FRAME_PROFILER)
 endif()
 
+if(PLCE_RENDERER STREQUAL "vulkan")
+    target_compile_definitions(plce_global_defs INTERFACE PLCE_RENDERER_VULKAN)
+else()
+    target_compile_definitions(plce_global_defs INTERFACE PLCE_RENDERER_BGFX)
+endif()
+
 if(PLCE_UI_BACKEND STREQUAL "shiggy")
     target_compile_definitions(plce_global_defs INTERFACE _ENABLEIGGY)
 elseif(PLCE_UI_BACKEND STREQUAL "java")
@@ -156,7 +162,10 @@ find_path(MINIAUDIO_INCLUDE_DIR "miniaudio.h" REQUIRED)
 find_package(GLEW CONFIG QUIET)
 
 if(PLCE_RENDERER STREQUAL "vulkan")
-    find_package(Vulkan REQUIRED)
+    # vcpkg ports: vulkan-headers + vulkan-loader avoid the per-machine
+    # LunarG SDK install. find_package(Vulkan) prefers them when present.
+    find_package(VulkanHeaders CONFIG REQUIRED)
+    find_package(VulkanLoader CONFIG REQUIRED)
     find_package(volk CONFIG REQUIRED)
     find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 endif()
