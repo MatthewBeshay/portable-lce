@@ -148,11 +148,18 @@ private:
     VkPipeline            cull_pipeline_    = VK_NULL_HANDLE;
     VkPipeline            terrain_pipeline_ = VK_NULL_HANDLE;
 
-    VkDescriptorPool      desc_pool_     = VK_NULL_HANDLE;
-    VkDescriptorSet       cull_set_      = VK_NULL_HANDLE;
-    VkDescriptorSet       terrain_set_   = VK_NULL_HANDLE;
-    bool                  atlas_set_     = false;
-    bool                  lightmap_set_  = false;
+    VkDescriptorPool      desc_pool_           = VK_NULL_HANDLE;
+    VkDescriptorSet       cull_set_            = VK_NULL_HANDLE;
+    VkDescriptorSet       terrain_set_         = VK_NULL_HANDLE;
+    bool                  atlas_set_           = false;
+    bool                  lightmap_set_        = false;
+    // Descriptor cache: skip vkUpdateDescriptorSets if the (view, sampler)
+    // pair already matches what's bound. Per-frame redundant updates were
+    // racing with in-flight frames and causing flicker.
+    VkImageView           cached_atlas_view_   = VK_NULL_HANDLE;
+    VkSampler             cached_atlas_sampler_= VK_NULL_HANDLE;
+    VkImageView           cached_lm_view_      = VK_NULL_HANDLE;
+    VkSampler             cached_lm_sampler_   = VK_NULL_HANDLE;
 
     // Pending staging->arena copies queued between frames.
     struct PendingCopy {

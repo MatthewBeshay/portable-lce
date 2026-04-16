@@ -19,10 +19,15 @@ layout(location = 3) out float v_eye_dist;
 // Hardcoded sun + sky directions in world space, Lambert shading.
 // Replaces vs_4jcraft.sc's u_light0Dir / u_light1Dir until those state
 // hooks are wired through StateSetLightDirection.
+//
+// AMBIENT is high (0.85) because the legacy game expects faces that
+// don't face a light to still be bright. Items in hand, dropped items,
+// entities all use this shader and they shouldn't read as "in shadow"
+// just because their normals don't catch the sun.
 const vec3 SUN_DIR = normalize(vec3(0.5, 1.0, 0.3));
 const vec3 SKY_DIR = normalize(vec3(-0.3, 1.0, -0.5));
-const vec3 AMBIENT = vec3(0.5);
-const vec3 DIFFUSE = vec3(0.5);
+const vec3 AMBIENT = vec3(0.85);
+const vec3 DIFFUSE = vec3(0.15);
 
 void main() {
     vec3 world = a_pos + pc.chunk_offset;

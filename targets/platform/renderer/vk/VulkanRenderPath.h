@@ -207,7 +207,12 @@ public:
     void set_terrain_atlas(int texture_id) override;
 
 private:
-    static constexpr uint32_t kFramesInFlight = 2;
+    // 1 frame in flight = serialise CPU/GPU. We share the chunk arena
+    // between frames; with 2 in flight, frame N+1's staging->arena copy
+    // can race frame N's vertex read of the same slot, producing visible
+    // flicker. Serialising fixes the race; the throughput cost is small
+    // for the kind of scenes we render.
+    static constexpr uint32_t kFramesInFlight = 1;
     static constexpr VkDeviceSize kTransientVbSize = 16ull * 1024 * 1024;
 
     struct PerFrame {

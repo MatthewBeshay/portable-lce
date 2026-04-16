@@ -392,6 +392,12 @@ void TerrainRenderer::destroy_descriptor_pool() {
 
 void TerrainRenderer::set_atlas(VkImageView view, VkSampler sampler) {
     if (!view || !sampler) return;
+    if (view == cached_atlas_view_ && sampler == cached_atlas_sampler_ &&
+        atlas_set_ && (lightmap_set_ ||
+                       (cached_lm_view_ == view &&
+                        cached_lm_sampler_ == sampler))) {
+        return;  // already bound; updating would race with in-flight frames
+    }
     VkDescriptorImageInfo dii[2]{
         {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
         {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
@@ -414,13 +420,21 @@ void TerrainRenderer::set_atlas(VkImageView view, VkSampler sampler) {
         w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[1].pImageInfo = &dii[1];
         count = 2;
+        cached_lm_view_ = view;
+        cached_lm_sampler_ = sampler;
     }
     vkUpdateDescriptorSets(device_, count, w, 0, nullptr);
+    cached_atlas_view_ = view;
+    cached_atlas_sampler_ = sampler;
     atlas_set_ = true;
 }
 
 void TerrainRenderer::set_lightmap(VkImageView view, VkSampler sampler) {
     if (!view || !sampler) return;
+    if (view == cached_lm_view_ && sampler == cached_lm_sampler_ &&
+        lightmap_set_) {
+        return;
+    }
     VkDescriptorImageInfo dii{sampler, view,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -430,6 +444,8 @@ void TerrainRenderer::set_lightmap(VkImageView view, VkSampler sampler) {
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.pImageInfo = &dii;
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    cached_lm_view_ = view;
+    cached_lm_sampler_ = sampler;
     lightmap_set_ = true;
 }
 
