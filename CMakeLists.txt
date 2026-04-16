@@ -55,6 +55,9 @@ set_property(CACHE PLCE_OCCLUSION_CULLING PROPERTY STRINGS
 option(PLCE_ENABLE_MIMALLOC
     "Link mimalloc as the system allocator (requires vcpkg 'mimalloc' feature)" OFF)
 
+option(PLCE_VK_GPU_CHUNKS
+    "Route chunk tessellation through the Vulkan TerrainRenderer (GPU-driven). Requires PLCE_RENDERER=vulkan." OFF)
+
 set(PLCE_ISA_BASELINE "x86-64-v3" CACHE STRING
     "Baseline ISA for non-MSVC compilers (off | native | x86-64-v2 | x86-64-v3 | x86-64-v4)")
 set_property(CACHE PLCE_ISA_BASELINE PROPERTY STRINGS
@@ -87,6 +90,9 @@ endif()
 
 if(PLCE_RENDERER STREQUAL "vulkan")
     target_compile_definitions(plce_global_defs INTERFACE PLCE_RENDERER_VULKAN)
+    if(PLCE_VK_GPU_CHUNKS)
+        target_compile_definitions(plce_global_defs INTERFACE PLCE_VK_GPU_CHUNKS)
+    endif()
 else()
     target_compile_definitions(plce_global_defs INTERFACE PLCE_RENDERER_BGFX)
 endif()

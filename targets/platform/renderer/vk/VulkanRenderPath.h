@@ -18,6 +18,8 @@ struct VmaAllocation_T;
 using VmaAllocator = VmaAllocator_T*;
 using VmaAllocation = VmaAllocation_T*;
 
+namespace plce::vk_render { class TerrainRenderer; }
+
 class VulkanRenderPath final : public rp::IRenderPath {
 public:
     struct CBuffDraw {
@@ -189,6 +191,15 @@ public:
     void EndEvent() override {}
     void submit_immediate(const rp::DrawCall&) override {}
 
+    void chunk_upload(const ChunkUpload&) override;
+    void chunk_destroy(int32_t cx, int32_t cy, int32_t cz,
+                       uint8_t layer) override;
+    void chunk_upload_from_cbuff(int cbuff_id,
+                                 const ChunkUpload& base) override;
+    void render_terrain(const float* mvp_4x4,
+                        const float* frustum_24) override;
+    void set_terrain_atlas(int texture_id) override;
+
 private:
     static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkDeviceSize kTransientVbSize = 16ull * 1024 * 1024;
@@ -215,6 +226,7 @@ private:
     void create_pipeline_layout();
     void destroy_pipeline_layout();
     void destroy_all_pipelines();
+    void ensure_render_pass(PerFrame& f);
     void create_quad_index_buffer();
     void destroy_quad_index_buffer();
     void create_depth_image(uint32_t width, uint32_t height);
@@ -327,6 +339,7 @@ private:
     uint32_t frame_index_    = 0;
     uint32_t acquired_image_ = 0;
     bool     frame_active_   = false;
+    bool     pass_active_    = false;
     bool     pipeline_bound_ = false;
 
     rp::FrameFramebuffer fb_{};
@@ -341,6 +354,8 @@ private:
 
     int next_handle_ = 0;
     int next_cbuff_  = 1;
+
+    std::unique_ptr<plce::vk_render::TerrainRenderer> terrain_;
 
     // Per-frame stats reported once per second to stderr.
     uint32_t stat_draws_total_       = 0;

@@ -1,0 +1,73 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// One thread per chunk slot. Each surviving chunk emits one
+// VkDrawIndirectCommand = {vertexCount, instanceCount, firstVertex,
+// firstInstance}. firstInstance carries the slot index so the vertex
+// shader can look up its world position from the metadata SSBO.
+
+layout(local_size_x = 64) in;
+
+struct ChunkSlot {
+    vec3  world_pos;
+    uint  vert_count;
+    vec3  aabb_min;
+    uint  base_vertex;
+    vec3  aabb_max;
+    uint  face_mask;
+};
+
+layout(set = 0, binding = 0, std430) readonly buffer ChunkMeta {
+    ChunkSlot slots[];
+} meta;
+
+struct DrawCmd {
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+};
+
+layout(set = 0, binding = 1, std430) writeonly buffer Draws {
+    DrawCmd cmds[];
+} draws;
+
+layout(set = 0, binding = 2, std430) buffer DrawCount {
+    uint count;
+} cnt;
+
+layout(push_constant) uniform PC {
+    vec4 frustum[6];   // 6 planes (xyz=normal, w=offset); inside if dot(p,1) >= 0
+    uint slot_count;
+    uint max_draws;
+} pc;
+
+bool aabb_visible(vec3 mn, vec3 mx) {
+    for (int i = 0; i < 6; ++i) {
+        vec3 p;
+        p.x = (pc.frustum[i].x >= 0.0) ? mx.x : mn.x;
+        p.y = (pc.frustum[i].y >= 0.0) ? mx.y : mn.y;
+        p.z = (pc.frustum[i].z >= 0.0) ? mx.z : mn.z;
+        if (dot(pc.frustum[i].xyz, p) + pc.frustum[i].w < 0.0) return false;
+    }
+    return true;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.slot_count) return;
+
+    ChunkSlot s = meta.slots[id];
+    if (s.vert_count == 0u) return;
+    if (!aabb_visible(s.aabb_min, s.aabb_max)) return;
+
+    uint slot = atomicAdd(cnt.count, 1u);
+    if (slot >= pc.max_draws) return;
+
+    DrawCmd cmd;
+    cmd.vertex_count   = s.vert_count;
+    cmd.instance_count = 1u;
+    cmd.first_vertex   = s.base_vertex;
+    cmd.first_instance = id;   // chunk slot index, used by vertex shader
+    draws.cmds[slot] = cmd;
+}

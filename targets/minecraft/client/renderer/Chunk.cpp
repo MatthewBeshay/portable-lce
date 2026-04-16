@@ -480,7 +480,14 @@ void Chunk::rebuild() {
 
                             RenderPath.CBuffStart(lists + currentLayer);
                             RenderPath.StateSetDepthMask(true);            // 4J added
+#if defined(PLCE_VK_GPU_CHUNKS)
+                            // Vulkan TerrainRenderer expects the 32-byte
+                            // standard format; the compact 16-byte format
+                            // would need a custom unpack in terrain.vert.
+                            t->useCompactVertices(false);
+#else
                             t->useCompactVertices(true);  // 4J added
+#endif
                             t->begin();
                             t->offset((float)(-this->x), (float)(-this->y),
                                       (float)(-this->z));
@@ -512,6 +519,25 @@ void Chunk::rebuild() {
             t->end();
             bounds.addBounds(t->bounds);  // 4J MGH - added
             RenderPath.CBuffEnd();
+#if defined(PLCE_VK_GPU_CHUNKS)
+            // Drain the just-recorded CBuff into the TerrainRenderer's
+            // GPU-driven path. The CBuff stays around so the legacy
+            // CBuffCall in LevelRenderer remains valid as a fallback.
+            rp::IRenderPath::ChunkUpload up{};
+            up.cx = this->x; up.cy = this->y; up.cz = this->z;
+            up.layer = uint8_t(currentLayer);
+            up.world_origin[0] = (float)this->x;
+            up.world_origin[1] = (float)this->y;
+            up.world_origin[2] = (float)this->z;
+            // Use the chunk's box (16x128x16-ish for Minecraft chunks).
+            up.aabb_min[0] = (float)this->x;
+            up.aabb_min[1] = (float)this->y;
+            up.aabb_min[2] = (float)this->z;
+            up.aabb_max[0] = (float)this->x + 16.0f;
+            up.aabb_max[1] = (float)this->y + 128.0f;
+            up.aabb_max[2] = (float)this->z + 16.0f;
+            RenderPath.chunk_upload_from_cbuff(lists + currentLayer, up);
+#endif
             t->useCompactVertices(false);  // 4J added
             t->offset(0, 0, 0);
         } else {

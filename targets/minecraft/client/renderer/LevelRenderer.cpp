@@ -856,6 +856,44 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha) {
 
     {
         FRAME_PROFILE_SCOPE(ChunkPlayback);
+#if defined(PLCE_VK_GPU_CHUNKS)
+        // GPU-driven path: TerrainRenderer iterates all visible chunks via
+        // vkCmdDrawIndirectCount. Extract frustum planes from the current
+        // MVP matrix (Gribb-Hartmann), call render_terrain once.
+        const float* mv  = RenderPath.MatrixGet(rp::MatrixStack::modelview);
+        const float* prj = RenderPath.MatrixGet(rp::MatrixStack::projection);
+        glm::mat4 mvp;
+        {
+            glm::mat4 mv_m, prj_m;
+            std::memcpy(&mv_m[0][0],  mv,  64);
+            std::memcpy(&prj_m[0][0], prj, 64);
+            mvp = prj_m * mv_m;
+        }
+        float frustum[24];
+        // Plane = row3 ± rowN, normalised. Stored as [nx,ny,nz,d].
+        auto plane = [&](int idx, glm::vec4 p) {
+            float n = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+            if (n > 0) p /= n;
+            frustum[idx * 4 + 0] = p.x;
+            frustum[idx * 4 + 1] = p.y;
+            frustum[idx * 4 + 2] = p.z;
+            frustum[idx * 4 + 3] = p.w;
+        };
+        glm::vec4 r0(mvp[0][0], mvp[1][0], mvp[2][0], mvp[3][0]);
+        glm::vec4 r1(mvp[0][1], mvp[1][1], mvp[2][1], mvp[3][1]);
+        glm::vec4 r2(mvp[0][2], mvp[1][2], mvp[2][2], mvp[3][2]);
+        glm::vec4 r3(mvp[0][3], mvp[1][3], mvp[2][3], mvp[3][3]);
+        plane(0, r3 + r0);  // left
+        plane(1, r3 - r0);  // right
+        plane(2, r3 + r1);  // bottom
+        plane(3, r3 - r1);  // top
+        plane(4, r2);       // near (Vulkan depth [0,1])
+        plane(5, r3 - r2);  // far
+        float mvp_arr[16];
+        std::memcpy(mvp_arr, &mvp[0][0], 64);
+        RenderPath.render_terrain(mvp_arr, frustum);
+        count = int(sortList.size());
+#else
         for (ClipChunk* chunk : sortList) {
             int list = chunk->globalIdx * 2 + layer;
             list += chunkLists;
@@ -870,6 +908,7 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha) {
             count++;
         }
         RenderPath.SetChunkOffset(0.f, 0.f, 0.f);
+#endif
     }
 
     RenderPath.MatrixPop();

@@ -3,12 +3,18 @@ if(PLCE_RENDERER STREQUAL "vulkan")
 
     plce_add_library(plce_platform_renderer_vk SOURCES
         vk/VulkanRenderPath.cpp
+        vk/render/ChunkArena.cpp
+        vk/render/ChunkMetadata.cpp
+        vk/render/IndirectDrawBuffer.cpp
+        vk/render/StagingRing.cpp
+        vk/render/TerrainRenderer.cpp
         RenderPathGlobals.cpp
         gl_stubs.cpp
     )
 
     target_include_directories(plce_platform_renderer_vk
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..
+                ${CMAKE_CURRENT_SOURCE_DIR}/vk
                 ${Stb_INCLUDE_DIR}
                 ${VMA_INCLUDE_DIR}
     )
@@ -25,6 +31,12 @@ if(PLCE_RENDERER STREQUAL "vulkan")
         vk/shaders/basic.vert kBasicVertSpv)
     plce_compile_shader(plce_platform_renderer_vk
         vk/shaders/basic.frag kBasicFragSpv)
+    plce_compile_shader(plce_platform_renderer_vk
+        vk/shaders/terrain_cull.comp kTerrainCullSpv)
+    plce_compile_shader(plce_platform_renderer_vk
+        vk/shaders/terrain.vert kTerrainVertSpv)
+    plce_compile_shader(plce_platform_renderer_vk
+        vk/shaders/terrain.frag kTerrainFragSpv)
 
     add_library(plce_platform_renderer ALIAS plce_platform_renderer_vk)
     return()

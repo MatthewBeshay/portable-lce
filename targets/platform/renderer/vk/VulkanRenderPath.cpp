@@ -22,6 +22,8 @@
 #include "vk/shaders/basic.vert.spv.h"
 #include "vk/shaders/basic.frag.spv.h"
 
+#include "render/TerrainRenderer.h"
+
 namespace {
 
 constexpr const char* kAppName = "portable-lce";
@@ -104,6 +106,12 @@ VulkanRenderPath::VulkanRenderPath(SDL_Window* window) : window_(window) {
     default_texture_ = ensure_default_texture();
     bound_texture_   = default_texture_;
 
+    plce::vk_render::TerrainRenderer::Config tcfg{};
+    tcfg.color_format = swapchain_format_;
+    tcfg.depth_format = depth_format_;
+    terrain_ = std::make_unique<plce::vk_render::TerrainRenderer>(
+        device_, allocator_, graphics_family_, graphics_queue_, tcfg);
+
     std::fprintf(stderr, "[vk] renderer=Vulkan viewport=%ux%u images=%zu\n",
                  swapchain_extent_.width, swapchain_extent_.height,
                  swapchain_views_.size());
@@ -111,6 +119,7 @@ VulkanRenderPath::VulkanRenderPath(SDL_Window* window) : window_(window) {
 
 VulkanRenderPath::~VulkanRenderPath() {
     if (device_) vkDeviceWaitIdle(device_);
+    terrain_.reset();
     destroy_per_frame();
     destroy_quad_index_buffer();
     destroy_all_pipelines();
@@ -1025,6 +1034,12 @@ void VulkanRenderPath::begin_render_pass(PerFrame& f) {
     vkCmdSetScissor(f.cmd, 0, 1, &sc);
 }
 
+void VulkanRenderPath::ensure_render_pass(PerFrame& f) {
+    if (pass_active_) return;
+    begin_render_pass(f);
+    pass_active_ = true;
+}
+
 void VulkanRenderPath::end_render_pass(PerFrame& f) {
     vkCmdEndRendering(f.cmd);
 
@@ -1069,12 +1084,15 @@ void VulkanRenderPath::StartFrame() {
     f.transient_offset = 0;
     pipeline_bound_ = false;
     pso_key_dirty_ = true;
+    pass_active_ = false;
 
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(f.cmd, &bi);
 
-    begin_render_pass(f);
+    // Render pass is started lazily so callers can record transfer/compute
+    // work (e.g. TerrainRenderer staging copies + cull dispatch) between
+    // StartFrame and the first draw.
 
     frame_active_ = true;
 }
@@ -1082,6 +1100,11 @@ void VulkanRenderPath::StartFrame() {
 void VulkanRenderPath::Present() {
     if (!frame_active_) return;
     PerFrame& f = frames_[frame_index_];
+
+    // If nothing drew this frame, the render pass was never begun. Start
+    // it now so the swapchain image at least gets the cleared colour and
+    // ends in PRESENT_SRC_KHR layout.
+    ensure_render_pass(f);
 
     end_render_pass(f);
     vkEndCommandBuffer(f.cmd);
@@ -1303,6 +1326,9 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
     if (!frame_active_) return;
     (void)vertexType;
     (void)shaderType;
+
+    PerFrame& f_pass = frames_[frame_index_];
+    ensure_render_pass(f_pass);
 
     // The pipeline is fixed at TRIANGLE_LIST. Convert legacy primitives:
     //   GL_TRIANGLES (0x0004) - already triangle list, draw as-is
@@ -1603,6 +1629,108 @@ void VulkanRenderPath::StateSetFaceCull(bool e) {
         current_pso_key_.cull_back = e;
         pso_key_dirty_ = true;
     }
+}
+
+// ---------------------------------------------------------------------------
+// GPU-driven terrain hooks (Phase 4)
+// ---------------------------------------------------------------------------
+
+void VulkanRenderPath::chunk_upload(const ChunkUpload& u) {
+    if (!terrain_) return;
+    plce::vk_render::TerrainRenderer::ChunkKey key{u.cx, u.cy, u.cz, u.layer};
+    terrain_->upload_chunk(
+        key,
+        glm::vec3(u.world_origin[0], u.world_origin[1], u.world_origin[2]),
+        glm::vec3(u.aabb_min[0], u.aabb_min[1], u.aabb_min[2]),
+        glm::vec3(u.aabb_max[0], u.aabb_max[1], u.aabb_max[2]),
+        u.vertex_data, u.vertex_count, u.vertex_stride);
+}
+
+void VulkanRenderPath::chunk_destroy(int32_t cx, int32_t cy, int32_t cz,
+                                     uint8_t layer) {
+    if (!terrain_) return;
+    terrain_->destroy_chunk({cx, cy, cz, layer});
+}
+
+void VulkanRenderPath::chunk_upload_from_cbuff(int cbuff_id,
+                                               const ChunkUpload& base) {
+    if (!terrain_ || cbuff_id < 0) return;
+    // Walk the recorded draws under lock, copy their vertex bytes into
+    // one contiguous buffer, then call upload_chunk with that buffer.
+    // The caller owns the CBuff lifetime; we don't free it here.
+    std::vector<std::byte> combined;
+    uint32_t total_verts = 0;
+    constexpr uint32_t kStride = 32;
+    {
+        std::lock_guard lk(cbuffs_mutex_);
+        if (size_t(cbuff_id) >= cbuffs_.size()) return;
+        auto& cb = cbuffs_[cbuff_id];
+        if (!cb.valid) return;
+        size_t total_bytes = 0;
+        for (auto& d : cb.draws) total_bytes += d.verts.size();
+        combined.reserve(total_bytes);
+        for (auto& d : cb.draws) {
+            // Only quad batches in the standard 32-byte format are valid
+            // chunk geometry for Phase 4 v1.
+            if (d.primType != 0x0007) continue;
+            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
+            total_verts += uint32_t(d.verts.size() / kStride);
+        }
+    }
+    if (total_verts == 0) return;
+
+    ChunkUpload up = base;
+    up.vertex_data   = combined.data();
+    up.vertex_count  = total_verts;
+    up.vertex_stride = kStride;
+    chunk_upload(up);
+}
+
+void VulkanRenderPath::set_terrain_atlas(int texture_id) {
+    if (!terrain_) return;
+    std::lock_guard lk(textures_mutex_);
+    if (texture_id <= 0 || size_t(texture_id) >= textures_.size()) return;
+    auto& t = textures_[texture_id];
+    if (!t.ready || !t.view) return;
+    terrain_->set_atlas(t.view, tex_sampler_);
+}
+
+void VulkanRenderPath::render_terrain(const float* mvp_4x4,
+                                      const float* frustum_24) {
+    if (!terrain_ || !frame_active_ || !mvp_4x4 || !frustum_24) return;
+
+    // Auto-bind the currently-bound texture as the atlas. The game does
+    // a TextureBind(terrain_atlas) right before chunk rendering, so this
+    // saves us a separate set_terrain_atlas() call from the game code.
+    {
+        std::lock_guard lk(textures_mutex_);
+        int tex = bound_texture_;
+        if (tex > 0 && size_t(tex) < textures_.size() && textures_[tex].ready) {
+            terrain_->set_atlas(textures_[tex].view, tex_sampler_);
+        } else if (default_texture_ > 0 &&
+                   size_t(default_texture_) < textures_.size()) {
+            terrain_->set_atlas(textures_[default_texture_].view, tex_sampler_);
+        }
+    }
+
+    PerFrame& f = frames_[frame_index_];
+    glm::mat4 mvp;
+    std::memcpy(&mvp[0][0], mvp_4x4, sizeof(glm::mat4));
+    std::array<glm::vec4, 6> frustum;
+    for (int i = 0; i < 6; ++i) {
+        frustum[i] = glm::vec4(frustum_24[i * 4 + 0],
+                               frustum_24[i * 4 + 1],
+                               frustum_24[i * 4 + 2],
+                               frustum_24[i * 4 + 3]);
+    }
+    // Indirect draw must be inside the render pass. Copies + cull happen
+    // before begin; ensure_render_pass() begins it just in time.
+    ensure_render_pass(f);
+    terrain_->render(f.cmd, mvp, frustum);
+    // The terrain pipeline trashes the bound state; force a rebind on the
+    // next legacy DrawVertices.
+    pipeline_bound_ = false;
+    pso_key_dirty_ = true;
 }
 
 // ---------------------------------------------------------------------------

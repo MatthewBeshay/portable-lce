@@ -569,6 +569,35 @@ public:
 
     // Immediate single-draw submission
     virtual void submit_immediate(const DrawCall& dc) = 0;
+
+    // GPU-driven terrain hooks (Phase 4). Default no-op so existing
+    // backends (bgfx) ignore them; the Vulkan backend wires them through
+    // to its TerrainRenderer when PLCE_VK_GPU_CHUNKS is enabled.
+    struct ChunkUpload {
+        int32_t  cx, cy, cz;
+        uint8_t  layer;
+        float    world_origin[3];
+        float    aabb_min[3];
+        float    aabb_max[3];
+        const void* vertex_data = nullptr;
+        uint32_t vertex_count   = 0;
+        uint32_t vertex_stride  = 0;
+    };
+    virtual void chunk_upload(const ChunkUpload&) {}
+    virtual void chunk_destroy(int32_t /*cx*/, int32_t /*cy*/,
+                               int32_t /*cz*/, uint8_t /*layer*/) {}
+    // Drains a recorded CBuff (built via the existing Tesselator + CBuff
+    // path) into one contiguous chunk upload. Lets us reuse the legacy
+    // tessellation pipeline without modifying Tesselator.
+    virtual void chunk_upload_from_cbuff(int /*cbuff_id*/,
+                                         const ChunkUpload& /*base*/) {}
+    // Records the prepare phase (staging copies + cull dispatch) before
+    // the next draw, then the indirect draw inside the active render pass.
+    virtual void render_terrain(const float* /*mvp_4x4*/,
+                                const float* /*frustum_24*/) {}
+    // Marks `texture_id` (from TextureCreate / glGenTextures_4J) as the
+    // terrain atlas; binds it into the TerrainRenderer's descriptor set.
+    virtual void set_terrain_atlas(int /*texture_id*/) {}
 };
 
 // ---------------------------------------------------------------------------
