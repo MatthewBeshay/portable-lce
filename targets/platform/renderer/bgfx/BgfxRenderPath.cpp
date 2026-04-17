@@ -161,7 +161,10 @@ BgfxRenderPath::BgfxRenderPath(SDL_Window* window) : window_(window) {
     #endif
     #ifdef BGFX_RENDERER_METAL 
         init.type = bgfx::RendererType::Metal;
-    #endif // 
+    #endif 
+    #ifdef BGFX_RENDERER_D3D12
+        init.Type = bgfx:RendererType::Direct3D12;
+    #endif
             
    
     init.resolution.width = width_;
