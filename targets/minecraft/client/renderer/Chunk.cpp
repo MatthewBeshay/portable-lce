@@ -555,11 +555,19 @@ void Chunk::rebuild() {
                                               LevelRenderer::CHUNK_FLAG_EMPTY0,
                                               currentLayer);
             RenderPath.CBuffClear(lists + currentLayer);
+#if defined(PLCE_VK_GPU_CHUNKS)
+            // Clear the arena slot so the old mesh stops rendering.
+            RenderPath.chunk_destroy(this->x, this->y, this->z,
+                                     uint8_t(currentLayer));
+#endif
         }
         if ((currentLayer == 0) && (!renderNextLayer)) {
             levelRenderer->setGlobalChunkFlag(this->x, this->y, this->z, level,
                                               LevelRenderer::CHUNK_FLAG_EMPTY1);
             RenderPath.CBuffClear(lists + 1);
+#if defined(PLCE_VK_GPU_CHUNKS)
+            RenderPath.chunk_destroy(this->x, this->y, this->z, 1);
+#endif
             break;
         }
     }
@@ -782,6 +790,16 @@ void Chunk::reset() {
                         // this unused list
                         RenderPath.CBuffClear(lists + i);
                     }
+#if defined(PLCE_VK_GPU_CHUNKS)
+                    // Free the matching slots in the Vulkan TerrainRenderer
+                    // arena. Without this the arena fills monotonically and
+                    // new chunk uploads start dropping (live_slots stuck at
+                    // the cap).
+                    for (uint8_t layer = 0; layer < 3; ++layer) {
+                        RenderPath.chunk_destroy(this->x, this->y, this->z,
+                                                 layer);
+                    }
+#endif
                     levelRenderer->setGlobalChunkFlags(x, y, z, level, 0);
                 }
             }

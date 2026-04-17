@@ -891,7 +891,7 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha) {
         plane(5, r3 - r2);  // far
         float mvp_arr[16];
         std::memcpy(mvp_arr, &mvp[0][0], 64);
-        RenderPath.render_terrain(mvp_arr, frustum);
+        RenderPath.render_terrain(mvp_arr, frustum, uint8_t(layer));
         count = int(sortList.size());
 #else
         for (ClipChunk* chunk : sortList) {

@@ -86,17 +86,20 @@ public:
 
     [[nodiscard]] rp::MaterialHandle create_material(
         const rp::MaterialDesc&) override {
-        return rp::kInvalidMaterial;
+        // We don't yet honour MaterialDesc - HUD overlays that use a
+        // material also call StateSet* before submit_immediate, so the
+        // state-driven path produces the right pipeline. Return a
+        // unique-but-otherwise-meaningless handle so the game knows the
+        // material exists. handle.id 0 is reserved for kInvalidMaterial.
+        return rp::MaterialHandle{++next_material_id_, 1};
     }
     void update_material(rp::MaterialHandle, const rp::MaterialDesc&) override {
     }
     void destroy_material(rp::MaterialHandle) override {}
 
     [[nodiscard]] std::pair<rp::TransientVertexBuffer, std::span<std::byte>>
-    alloc_transient_vertices(uint32_t, rp::VertexLayout,
-                             rp::PrimitiveType) override {
-        return {{}, {}};
-    }
+    alloc_transient_vertices(uint32_t vertex_count, rp::VertexLayout layout,
+                             rp::PrimitiveType primitive) override;
 
     void read_framebuffer(const rp::TextureReadback&) override {}
     [[nodiscard]] rp::ResourceFootprint query_resource_footprint()
@@ -133,7 +136,8 @@ public:
     void TextureSetTextureLevels(int) override {}
     void TextureData(int width, int height, void* data, int level,
                      int format) override;
-    void TextureDataUpdate(int, int, int, int, void*, int) override {}
+    void TextureDataUpdate(int xoff, int yoff, int w, int h, void* data,
+                           int level) override;
     void TextureSetParam(int, int) override {}
     [[nodiscard]] int TextureGetTextureLevels() override { return 1; }
 
@@ -141,18 +145,21 @@ public:
     void StateSetDepthMask(bool e) override;
     void StateSetBlendEnable(bool e) override;
     void StateSetBlendFunc(rp::BlendFactor s, rp::BlendFactor d) override;
-    void StateSetBlendFactor(unsigned int) override {}
+    void StateSetBlendFactor(unsigned int argb) override;
     void StateSetAlphaFunc(rp::AlphaTest f, float ref) override {
         alpha_test_func_ = f;
         alpha_ref_ = ref;
     }
     void StateSetDepthFunc(rp::DepthTest f) override;
     void StateSetFaceCull(bool e) override;
-    void StateSetLineWidth(float) override {}
-    void StateSetWriteEnable(bool, bool, bool, bool) override {}
+    void StateSetLineWidth(float w) override { line_width_ = w; }
+    void StateSetWriteEnable(bool r, bool g, bool b, bool a) override;
     void StateSetDepthTestEnable(bool e) override;
     void StateSetAlphaTestEnable(bool e) override { alpha_test_enabled_ = e; }
-    void StateSetDepthSlopeAndBias(float, float) override {}
+    void StateSetDepthSlopeAndBias(float slope, float bias) override {
+        depth_bias_slope_    = slope;
+        depth_bias_constant_ = bias;
+    }
     void StateSetFogEnable(bool e) override { fog_enabled_ = e; }
     void StateSetFogMode(rp::FogMode m) override { fog_mode_ = m; }
     void StateSetFogNearDistance(float d) override { fog_start_ = d; }
@@ -162,17 +169,32 @@ public:
         fog_colour_ = {r, g, b, 1.0f};
     }
     void StateSetLightingEnable(bool e) override { lighting_enabled_ = e; }
-    void StateSetLightColour(int, float, float, float) override {}
-    void StateSetLightAmbientColour(float, float, float) override {}
-    void StateSetLightDirection(int, float, float, float) override {}
+    void StateSetLightColour(int, float r, float g, float b) override {
+        light_diffuse_ = {r, g, b};
+    }
+    void StateSetLightAmbientColour(float r, float g, float b) override {
+        light_ambient_ = {r, g, b};
+    }
+    void StateSetLightDirection(int idx, float x, float y, float z) override;
     void StateSetLightEnable(int, bool) override {}
     void StateSetViewport(int) override {}
     void StateSetEnableViewportClipPlanes(bool) override {}
     void StateSetStencil(int, uint8_t, uint8_t, uint8_t) override {}
     void StateSetForceLOD(int) override {}
-    void StateSetTextureEnable(bool) override {}
-    void StateSetActiveTexture(int) override {}
-    void StateSetVertexTextureUV(float, float) override {}
+    // Match GL renderer: texture-enable only takes effect when the active
+    // texture unit is 0 (the colour atlas). Unit 1 is the lightmap and
+    // its enable is handled separately via TextureBindVertex.
+    void StateSetTextureEnable(bool e) override {
+        if (active_texture_unit_ == 0) texture_enabled_ = e;
+    }
+    void StateSetActiveTexture(int gl_enum) override {
+        // GL_TEXTURE0 = 0x84C0, GL_TEXTURE1 = 0x84C1.
+        active_texture_unit_ = (gl_enum == 0x84C1) ? 1 : 0;
+    }
+    void StateSetVertexTextureUV(float u, float v) override {
+        global_lm_uv_[0] = u;
+        global_lm_uv_[1] = v;
+    }
 
     // Chunk offset support requires per-CBuff state capture (Tesselator
     // emits chunk-local vertices but the offset is set on the main thread,
@@ -189,13 +211,21 @@ public:
 
     void Set_matrixDirty() override {}
     void CBuffLockStaticCreations() override {}
-    void UpdateGamma(unsigned short) override {}
+    void UpdateGamma(unsigned short usGamma) override {
+        // Match GL renderer: GAMMA_MAX=32768, gamma = 0.5 + g/32768.
+        // Default g=16384 -> gamma=1.0 (identity). The fragment shader
+        // uses inv_gamma = 1/gamma directly.
+        constexpr float kGammaMax = 32768.0f;
+        float gamma = 0.5f + float(usGamma) * (1.0f / kGammaMax);
+        if (gamma < 0.01f) gamma = 0.01f;
+        inv_gamma_ = 1.0f / gamma;
+    }
     void Suspend() override {}
     [[nodiscard]] bool Suspended() override { return false; }
     void Resume() override {}
     void BeginEvent(const char*) override {}
     void EndEvent() override {}
-    void submit_immediate(const rp::DrawCall&) override {}
+    void submit_immediate(const rp::DrawCall&) override;
 
     void chunk_upload(const ChunkUpload&) override;
     void chunk_destroy(int32_t cx, int32_t cy, int32_t cz,
@@ -203,7 +233,8 @@ public:
     void chunk_upload_from_cbuff(int cbuff_id,
                                  const ChunkUpload& base) override;
     void render_terrain(const float* mvp_4x4,
-                        const float* frustum_24) override;
+                        const float* frustum_24,
+                        uint8_t layer = 0) override;
     void set_terrain_atlas(int texture_id) override;
 
 private:
@@ -266,6 +297,10 @@ public:
         // alpha blending; only takes effect when blend_enable is true.
         uint8_t blend_src  = 6;   // VK_BLEND_FACTOR_SRC_ALPHA
         uint8_t blend_dst  = 7;   // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+        // Per-channel colour write mask. Bits R|G|B|A = 0xF means default
+        // "write everything"; HUD shadow-masking uses 0x0 to draw alpha
+        // only or similar tricks.
+        uint8_t color_mask = 0x0F;
         bool operator==(const PsoKey&) const = default;
     };
     struct PsoKeyHash {
@@ -277,7 +312,8 @@ public:
                        | (uint64_t(k.lines)        << 4)
                        | (uint64_t(k.depth_func)   << 8)
                        | (uint64_t(k.blend_src)    << 16)
-                       | (uint64_t(k.blend_dst)    << 24);
+                       | (uint64_t(k.blend_dst)    << 24)
+                       | (uint64_t(k.color_mask)   << 32);
             return std::hash<uint64_t>{}(v);
         }
     };
@@ -320,14 +356,52 @@ private:
     // when Tesselator emits the 0x00000000 sentinel as the per-vertex colour.
     std::array<float, 4> state_colour_{1.0f, 1.0f, 1.0f, 1.0f};
 
+    // Constant blend factor (set via StateSetBlendFactor). Pushed to the
+    // pipeline via vkCmdSetBlendConstants - required for the HUD's
+    // constant_alpha / one_minus_constant_alpha blends, otherwise the HUD
+    // draws with src*0 + dst*1 and contributes nothing.
+    std::array<float, 4> blend_constants_{1.0f, 1.0f, 1.0f, 1.0f};
+
+    // Polygon offset (set via StateSetDepthSlopeAndBias). Pushed via
+    // vkCmdSetDepthBias each draw - decals (held-item sparkle, fire on
+    // entities) rely on this to sit just in front of the surface they
+    // overlay, otherwise they z-fight.
+    float depth_bias_constant_ = 0.0f;
+    float depth_bias_slope_    = 0.0f;
+
+    // 1/gamma sent to fragment shader (UpdateGamma converts ushort to
+    // float). Default 1.0 = no correction. Game gamma slider passes a
+    // value in [0..32768]; see UpdateGamma() for the mapping.
+    float inv_gamma_ = 1.0f;
+
+    // Line width set via StateSetLineWidth - applied per draw via
+    // vkCmdSetLineWidth. Used by the block-selection outline renderer.
+    // Hardware may clamp; we cap defensively at 8 to stay inside the
+    // common Vulkan wideLines limit.
+    float line_width_ = 1.0f;
+
     // Per-chunk world-space offset. Chunks submit their vertices in
     // chunk-local space and rely on the shader to add this offset.
     std::array<float, 3> chunk_offset_{0.0f, 0.0f, 0.0f};
 
-    // Lighting toggle (set via StateSetLightingEnable). Hard-coded sun
-    // direction in the vertex shader for now; lights are not yet wired
-    // through StateSetLightDirection / StateSetLightColour.
+    // Global lightmap UV (set via StateSetVertexTextureUV). Used by the
+    // tesselator's "no per-vertex LM" sentinel (0xfe00fe00) to fall back
+    // to a single UV - matches GL renderer's uGlobalLM. Defaults to
+    // (240, 240) which is full-bright in the legacy lightmap layout.
+    std::array<float, 2> global_lm_uv_{240.0f, 240.0f};
+
+    // Lighting toggle (set via StateSetLightingEnable). When enabled,
+    // basic.vert applies Lambertian shading using two directional lights
+    // (light0_dir_eye_, light1_dir_eye_). The light directions are stored
+    // in EYE space - we pre-transform by the modelview at the time
+    // StateSetLightDirection() is called, matching the GL renderer's
+    // behaviour. The vertex shader transforms the normal by the
+    // current modelview to bring it into the same eye space.
     bool                 lighting_enabled_ = false;
+    glm::vec3            light0_dir_eye_{0.174f, 0.870f, -0.609f};
+    glm::vec3            light1_dir_eye_{-0.174f, 0.870f, 0.609f};
+    glm::vec3            light_diffuse_{0.6f, 0.6f, 0.6f};
+    glm::vec3            light_ambient_{0.4f, 0.4f, 0.4f};
 
     // Alpha-test (cutout) state for grass / leaves / fences.
     bool                 alpha_test_enabled_ = false;
@@ -366,6 +440,11 @@ private:
     std::vector<TextureSlot> textures_;
     int default_texture_ = 0;
     int bound_texture_   = 0;
+    // Mirror of GL_ACTIVE_TEXTURE / glEnable(GL_TEXTURE_2D). The game uses
+    // unit 1 for the lightmap and unit 0 for the main atlas; texture-enable
+    // only governs unit 0 (matches the GL renderer).
+    int  active_texture_unit_ = 0;
+    bool texture_enabled_     = true;
 
     std::array<PerFrame, kFramesInFlight> frames_{};
     uint32_t frame_index_    = 0;
@@ -387,6 +466,7 @@ private:
     int next_handle_ = 0;
     int next_cbuff_  = 1;
     int lightmap_texture_ = 0;
+    uint32_t next_material_id_ = 0;
 
     std::unique_ptr<plce::vk_render::TerrainRenderer> terrain_;
 
@@ -396,6 +476,8 @@ private:
     uint32_t stat_tex_creates_       = 0;
     uint32_t stat_tex_uploads_       = 0;
     uint32_t stat_tex_binds_         = 0;
+    uint32_t stat_state_colour_changes_ = 0;
+    uint32_t stat_clear_colour_changes_ = 0;
     uint32_t stat_frames_            = 0;
     double   stat_window_start_secs_ = 0.0;
 

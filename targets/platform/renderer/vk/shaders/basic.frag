@@ -8,11 +8,12 @@ layout(location = 3) in float v_eye_dist;
 layout(set = 0, binding = 0) uniform sampler2D u_tex;
 
 layout(push_constant) uniform PC {
-    layout(offset = 80)  uint  flags;        // bit 0 textured, bit 1 alpha_test
-    layout(offset = 84)  float alpha_ref;
-    layout(offset = 96)  vec4  state_colour;
-    layout(offset = 112) vec4  fog_params;   // mode, start, end, density
-    layout(offset = 128) vec4  fog_colour;
+    layout(offset = 192) uint  flags;        // bit 0 textured, bit 1 alpha_test
+    layout(offset = 196) float alpha_ref;
+    layout(offset = 200) float inv_gamma;    // 1/gamma; 1.0 = no correction
+    layout(offset = 208) vec4  state_colour;
+    layout(offset = 224) vec4  fog_params;   // mode, start, end, density
+    layout(offset = 240) vec4  fog_colour;
 } pc;
 
 layout(location = 0) out vec4 out_color;
@@ -44,4 +45,7 @@ void main() {
         }
         out_color.rgb = mix(pc.fog_colour.rgb, out_color.rgb, f);
     }
+    // Final gamma curve - matches GL renderer's pow(c.rgb, vec3(uInvGamma)).
+    // Default inv_gamma=1.0 makes this a no-op.
+    out_color.rgb = pow(out_color.rgb, vec3(pc.inv_gamma));
 }

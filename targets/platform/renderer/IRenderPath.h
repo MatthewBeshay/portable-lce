@@ -594,7 +594,8 @@ public:
     // Records the prepare phase (staging copies + cull dispatch) before
     // the next draw, then the indirect draw inside the active render pass.
     virtual void render_terrain(const float* /*mvp_4x4*/,
-                                const float* /*frustum_24*/) {}
+                                const float* /*frustum_24*/,
+                                uint8_t /*layer*/ = 0) {}
     // Marks `texture_id` (from TextureCreate / glGenTextures_4J) as the
     // terrain atlas; binds it into the TerrainRenderer's descriptor set.
     virtual void set_terrain_atlas(int /*texture_id*/) {}

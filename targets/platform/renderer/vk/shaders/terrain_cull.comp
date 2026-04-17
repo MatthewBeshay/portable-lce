@@ -40,6 +40,7 @@ layout(push_constant) uniform PC {
     vec4 frustum[6];   // 6 planes (xyz=normal, w=offset); inside if dot(p,1) >= 0
     uint slot_count;
     uint max_draws;
+    uint target_layer; // only emit draws for slots whose layer matches
 } pc;
 
 bool aabb_visible(vec3 mn, vec3 mx) {
@@ -59,6 +60,9 @@ void main() {
 
     ChunkSlot s = meta.slots[id];
     if (s.vert_count == 0u) return;
+    // Layer is packed into bits 24-31 of face_mask.
+    uint slot_layer = s.face_mask >> 24u;
+    if (slot_layer != pc.target_layer) return;
     if (!aabb_visible(s.aabb_min, s.aabb_max)) return;
 
     uint slot = atomicAdd(cnt.count, 1u);

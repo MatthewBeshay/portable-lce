@@ -25,6 +25,7 @@ layout(set = 0, binding = 0, std430) readonly buffer ChunkMeta {
 
 layout(push_constant) uniform PC {
     mat4 mvp;
+    vec4 camera_pos;   // world-space camera position for radial fog
 } pc;
 
 layout(location = 0) out vec2  v_uv;
@@ -43,9 +44,11 @@ void main() {
     // memory bytes are [a, b, g, r]. R8G8B8A8_UNORM gives us those bytes
     // as (a, b, g, r) -- swap back to RGBA.
     v_color = a_color.wzyx;
-    v_color_was_zero =
-        ((v_color.r + v_color.g + v_color.b) < 0.004) ? 1.0 : 0.0;
-    v_eye_dist = clip.w;
+    // Strict 0x00000000 sentinel - matches GL renderer's vertex.vert.
+    v_color_was_zero = (a_color == vec4(0.0)) ? 1.0 : 0.0;
+    // Radial fog distance matching GL's length(uMV * pos). Using clip.w
+    // gives planar fog which creates a visible horizontal line.
+    v_eye_dist = length(world - pc.camera_pos.xyz);
 
     // Lightmap UV. Tesselator writes 0xfe00fe00 (= int16 -512, -512) when
     // a vertex has no per-vertex lightmap coord; the legacy GL renderer

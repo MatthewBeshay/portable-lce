@@ -10,9 +10,9 @@ layout(set = 0, binding = 1) uniform sampler2D u_atlas;
 layout(set = 0, binding = 2) uniform sampler2D u_lightmap;
 
 layout(push_constant) uniform PC {
-    layout(offset = 64) vec4 fog_params;   // mode, start, end, density
-    layout(offset = 80) vec4 fog_colour;
-    layout(offset = 96) vec4 tint;         // StateSetColour modulation
+    layout(offset = 80)  vec4 fog_params;  // mode, start, end, density
+    layout(offset = 96)  vec4 fog_colour;
+    layout(offset = 112) vec4 tint;        // StateSetColour modulation
 } pc;
 
 layout(location = 0) out vec4 out_color;

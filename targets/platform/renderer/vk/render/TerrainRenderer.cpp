@@ -126,11 +126,11 @@ void TerrainRenderer::create_pipelines() {
     // and push-constant ranges.
     {
         // Cull pipeline layout: 1 set + push constant
-        // (6 frustum vec4 + slot_count u32 + max_draws u32 = 6*16 + 8 = 104B)
+        // (6 frustum vec4 + slot_count + max_draws + target_layer + pad = 112B)
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 6 * 16 + 8;
+        pc.size = 6 * 16 + 16;  // +8 for target_layer + pad
         VkPipelineLayoutCreateInfo lci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         lci.setLayoutCount = 1;
@@ -143,15 +143,15 @@ void TerrainRenderer::create_pipelines() {
     }
     {
         // Terrain pipeline layout: 1 set + push constants
-        //   vertex   [0   .. 63]:  mat4 mvp
-        //   fragment [64  .. 111]: vec4 fog_params + vec4 fog_colour
+        //   vertex   [0   .. 79]:  mat4 mvp(64) + vec4 camera_pos(16)
+        //   fragment [80  .. 127]: vec4 fog_params + vec4 fog_colour
         //                          + vec4 tint
         VkPushConstantRange pc[2]{};
         pc[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         pc[0].offset = 0;
-        pc[0].size = 64;
+        pc[0].size = 80;
         pc[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        pc[1].offset = 64;
+        pc[1].offset = 80;
         pc[1].size = 48;
         VkPipelineLayoutCreateInfo lci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -504,7 +504,9 @@ void TerrainRenderer::upload_chunk(const ChunkKey& key,
     md.aabb_max[2]  = aabb_max.z;
     md.vert_count   = vertex_count;
     md.base_vertex  = base_vertex;
-    md.face_mask    = 0x3F;  // all six faces visible (no face cull yet)
+    // Low 8 bits: face visibility (0x3F = all faces). Bits 24-31: render
+    // layer so the cull shader can filter per-layer draw calls.
+    md.face_mask    = 0x3F | (uint32_t(key.layer) << 24);
     metadata_->update(slot, md);
 
     PendingCopy pc{};
@@ -534,6 +536,8 @@ void TerrainRenderer::destroy_chunk(const ChunkKey& key) {
 
 void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
                              const std::array<glm::vec4, 6>& frustum,
+                             uint32_t target_layer,
+                             const glm::vec4& camera_pos,
                              const FogParams& fog,
                              const glm::vec4& tint) {
     if (!atlas_set_) return;  // can't sample without an atlas bound
@@ -615,10 +619,13 @@ void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
         glm::vec4 frustum[6];
         uint32_t  slot_count;
         uint32_t  max_draws;
+        uint32_t  target_layer;
+        uint32_t  pad_;
     } cpc{};
     for (int i = 0; i < 6; ++i) cpc.frustum[i] = frustum[i];
-    cpc.slot_count = arena_->slot_count();
-    cpc.max_draws  = indirect_->max_draws();
+    cpc.slot_count    = arena_->slot_count();
+    cpc.max_draws     = indirect_->max_draws();
+    cpc.target_layer  = target_layer;
     vkCmdPushConstants(cmd, cull_pipeline_layout_,
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cpc), &cpc);
     uint32_t groups = (cpc.slot_count + 63u) / 64u;
@@ -653,15 +660,19 @@ void TerrainRenderer::render(VkCommandBuffer cmd, const glm::mat4& mvp,
     VkDeviceSize zero = 0;
     VkBuffer arena_buf = arena_->buffer();
     vkCmdBindVertexBuffers(cmd, 0, 1, &arena_buf, &zero);
+    struct VertPC {
+        glm::mat4 mvp;
+        glm::vec4 camera_pos;
+    } vpc{mvp, camera_pos};
     vkCmdPushConstants(cmd, terrain_pipeline_layout_,
-                       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
+                       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(vpc), &vpc);
     struct FragPC {
         glm::vec4 fog_params;
         glm::vec4 fog_colour;
         glm::vec4 tint;
     } fpc{fog.params, fog.colour, tint};
     vkCmdPushConstants(cmd, terrain_pipeline_layout_,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, 64, sizeof(fpc), &fpc);
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 80, sizeof(fpc), &fpc);
     vkCmdDrawIndirectCount(cmd, indirect_->draws_buffer(), 0,
                            indirect_->count_buffer(), 0,
                            indirect_->max_draws(),

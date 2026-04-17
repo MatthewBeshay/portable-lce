@@ -109,6 +109,8 @@ public:
     void render(VkCommandBuffer cmd,
                 const glm::mat4& mvp,
                 const std::array<glm::vec4, 6>& frustum_planes,
+                uint32_t target_layer = 0,
+                const glm::vec4& camera_pos = glm::vec4(0.0f),
                 const FogParams& fog = {},
                 const glm::vec4& tint = glm::vec4(1.0f));
 
