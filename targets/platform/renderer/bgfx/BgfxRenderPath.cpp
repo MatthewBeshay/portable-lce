@@ -933,6 +933,27 @@ bool BgfxRenderPath::CBuffCall(int index, bool) {
                       state_.use_lightmap ? 1.0f : 0.0f, state_.alpha_ref,
                       state_.fog_enabled ? 1.0f : 0.0f};
 
+    bgfx::setUniform(u_baseColor_, state_.tint_color);
+    bgfx::setUniform(u_chunkOffset_, chunkOff);
+    bgfx::setUniform(u_lightParams_, lp);
+    bgfx::setUniform(u_light0Dir_, state_.light0_dir);
+    bgfx::setUniform(u_light1Dir_, state_.light1_dir);
+    bgfx::setUniform(u_lightDiffuse_, state_.light_diffuse);
+    bgfx::setUniform(u_lightAmbient_, state_.light_ambient);
+    bgfx::setUniform(u_fogParams_, fp);
+    bgfx::setUniform(u_lmTransform_, state_.lightmap_transform);
+    bgfx::setUniform(u_globalLM_, state_.global_lm);
+    bgfx::setUniform(u_fragParams_, fragP);
+    bgfx::setUniform(u_fogColor_, state_.fog_color);
+
+    if (hasTexture) bgfx::setTexture(0, s_tex0_, texHandle, texSamplerFlags);
+    if (state_.use_lightmap && bgfx::isValid(state_.bound_lightmap)) {
+        bgfx::setTexture(1, s_tex1_, state_.bound_lightmap,
+                         BGFX_SAMPLER_MIN_ANISOTROPIC |
+                             BGFX_SAMPLER_MAG_ANISOTROPIC |
+                             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    }
+
     for (const auto& dc : cb.draws) {
         uint64_t primBits = 0;
         if (dc.prim == 0x0005)
@@ -945,28 +966,6 @@ bool BgfxRenderPath::CBuffCall(int index, bool) {
         bgfx::setTransform(glm::value_ptr(mvp));
         bgfx::setState(state_.bgfx_state | primBits, state_.blend_factor_rgba);
         bgfx::setVertexBuffer(0, cb.vbh, dc.first, dc.count);
-
-        bgfx::setUniform(u_baseColor_, state_.tint_color);
-        bgfx::setUniform(u_chunkOffset_, chunkOff);
-        bgfx::setUniform(u_lightParams_, lp);
-        bgfx::setUniform(u_light0Dir_, state_.light0_dir);
-        bgfx::setUniform(u_light1Dir_, state_.light1_dir);
-        bgfx::setUniform(u_lightDiffuse_, state_.light_diffuse);
-        bgfx::setUniform(u_lightAmbient_, state_.light_ambient);
-        bgfx::setUniform(u_fogParams_, fp);
-        bgfx::setUniform(u_lmTransform_, state_.lightmap_transform);
-        bgfx::setUniform(u_globalLM_, state_.global_lm);
-        bgfx::setUniform(u_fragParams_, fragP);
-        bgfx::setUniform(u_fogColor_, state_.fog_color);
-
-        if (hasTexture)
-            bgfx::setTexture(0, s_tex0_, texHandle, texSamplerFlags);
-        if (state_.use_lightmap && bgfx::isValid(state_.bound_lightmap)) {
-            bgfx::setTexture(1, s_tex1_, state_.bound_lightmap,
-                             BGFX_SAMPLER_MIN_ANISOTROPIC |
-                                 BGFX_SAMPLER_MAG_ANISOTROPIC |
-                                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-        }
 
         if (bgfx::isValid(program_))
             bgfx::submit(current_view_id_, program_);
