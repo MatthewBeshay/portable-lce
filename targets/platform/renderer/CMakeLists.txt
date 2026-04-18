@@ -2,12 +2,12 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     find_path(VMA_INCLUDE_DIR "vma/vk_mem_alloc.h" REQUIRED)
 
     plce_add_library(plce_platform_renderer_vk SOURCES
-        vk/Device.cpp
-        vk/VulkanRenderPath.cpp
         vk2/Device.cpp
         vk2/FrameContext.cpp
         vk2/PipelineCache.cpp
         vk2/Swapchain.cpp
+        vk2/Renderer.cpp
+        vk2/vma_impl.cpp
         vk/render/ChunkArena.cpp
         vk/render/ChunkMetadata.cpp
         vk/render/IndirectDrawBuffer.cpp
