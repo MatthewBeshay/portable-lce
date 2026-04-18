@@ -502,11 +502,9 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
     // We Y-flip in the shader so vertex winding stays GL-style.
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
-    // Always allow depth bias - actual values come from
-    // vkCmdSetDepthBias via VK_DYNAMIC_STATE_DEPTH_BIAS. Game uses this
-    // for decals (held-item sparkle, fire on entities) to avoid
-    // z-fighting. When unused the dynamic state is just (0,0,0).
-    rs.depthBiasEnable = VK_TRUE;
+    // bgfx disables hardware depth bias entirely and instead applies
+    // the bias as a Z offset in the MVP matrix. Match that approach.
+    rs.depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo ms{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -546,8 +544,7 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
                                    VK_DYNAMIC_STATE_SCISSOR,
                                    VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
                                    VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-                                   VK_DYNAMIC_STATE_DEPTH_BIAS,
-                                   VK_DYNAMIC_STATE_LINE_WIDTH};
+                                   };
     VkPipelineDynamicStateCreateInfo dyn{
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dyn.dynamicStateCount = uint32_t(std::size(dyn_states));
@@ -1620,17 +1617,9 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     // Apply depth bias for THIS draw, then reset the stored state to 0.
     // This matches GL behaviour: glPolygonOffset is only active between
-    // Apply depth bias for this draw, then reset. The game's
-    // renderHitOutline sets bias to -2 and never calls (0,0) to reset
-    // — it relies on GL's glDisable(GL_POLYGON_OFFSET_FILL) pattern.
-    // Without auto-reset, the -2 bias leaks into all subsequent
-    // CBuffCall draws (sky, clouds, entities), causing flashing.
-    vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
-    depth_bias_constant_ = 0.0f;
-    depth_bias_slope_    = 0.0f;
-    // Hardware that doesn't support wideLines clamps line width to 1.0;
-    // also defensively clamp to a sane upper bound.
-    vkCmdSetLineWidth(f.cmd, std::clamp(line_width_, 1.0f, 8.0f));
+    // Depth bias and line width are not dynamic state — bgfx doesn't
+    // use hardware depth bias at all. Bias is applied via MVP Z offset
+    // below (see vpc.mvp[3][2] modification).
 
     // Snapshot the active texture's descriptor under the textures lock so
     // worker-thread Bind/Data can't move the vector underneath us.
@@ -1679,6 +1668,13 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
     static_assert(sizeof(VertPC) == 192, "VertPC must be exactly 192 bytes");
     const glm::mat4& mv = modelview_stack_.back();
     vpc.mvp = projection_stack_.back() * mv;
+    // Software depth bias: bgfx applies bias by offsetting mvp[3][2]
+    // (the Z translation in clip space). This avoids hardware depth bias
+    // which leaked state and caused flashing.
+    constexpr float Z_BIAS_EPSILON = 6e-5f;
+    vpc.mvp[3][2] += depth_bias_constant_ * Z_BIAS_EPSILON;
+    depth_bias_constant_ = 0.0f;
+    depth_bias_slope_    = 0.0f;
     // Plain mat3(modelview) - no inverse-transpose. Game models use uniform
     // scaling so the cheap path matches the GL renderer's behaviour.
     glm::mat3 nm(mv);
@@ -1822,10 +1818,6 @@ void VulkanRenderPath::submit_immediate(const rp::DrawCall& dc) {
     }
     vkCmdSetPrimitiveTopology(f.cmd, to_vk_topology(tvb.primitive));
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
-    vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
-    depth_bias_constant_ = 0.0f;
-    depth_bias_slope_    = 0.0f;
-    vkCmdSetLineWidth(f.cmd, std::clamp(line_width_, 1.0f, 8.0f));
 
     VkDescriptorSet ds = VK_NULL_HANDLE;
     bool textured_active = false;
@@ -1863,6 +1855,10 @@ void VulkanRenderPath::submit_immediate(const rp::DrawCall& dc) {
     static_assert(sizeof(VertPC) == 192);
     const glm::mat4& mv = modelview_stack_.back();
     vpc.mvp = projection_stack_.back() * mv;
+    constexpr float Z_BIAS_EPSILON2 = 6e-5f;
+    vpc.mvp[3][2] += depth_bias_constant_ * Z_BIAS_EPSILON2;
+    depth_bias_constant_ = 0.0f;
+    depth_bias_slope_    = 0.0f;
     glm::mat3 nm(mv);
     vpc.nm_col0 = glm::vec4(nm[0], 1.0f);  // identity tex transform
     vpc.nm_col1 = glm::vec4(nm[1], 1.0f);
