@@ -1,0 +1,46 @@
+#pragma once
+
+#include <vulkan/vulkan.h>
+#include <vma/vk_mem_alloc.h>
+
+#include <cstdint>
+#include <vector>
+
+namespace plce::vk2 {
+
+class Device;
+
+/// Swapchain + depth attachment. Handles creation, resize, and cleanup.
+class Swapchain {
+public:
+    void create(const Device& dev, uint32_t w, uint32_t h);
+    void destroy(const Device& dev);
+    void resize(const Device& dev, uint32_t w, uint32_t h);
+
+    VkSwapchainKHR handle()  const { return swapchain_; }
+    VkFormat       format()  const { return format_; }
+    VkExtent2D     extent()  const { return extent_; }
+    VkFormat       depth_format() const { return depth_format_; }
+    VkImageView    depth_view()   const { return depth_view_; }
+
+    VkImage     image(uint32_t i)  const { return images_[i]; }
+    VkImageView view(uint32_t i)   const { return views_[i]; }
+    uint32_t    image_count()      const { return uint32_t(images_.size()); }
+
+private:
+    void create_depth(const Device& dev);
+    void destroy_depth(const Device& dev);
+
+    VkSwapchainKHR           swapchain_    = VK_NULL_HANDLE;
+    VkFormat                 format_       = VK_FORMAT_UNDEFINED;
+    VkExtent2D               extent_       = {};
+    std::vector<VkImage>     images_;
+    std::vector<VkImageView> views_;
+
+    static constexpr VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
+    VkImage       depth_image_ = VK_NULL_HANDLE;
+    VmaAllocation depth_alloc_ = nullptr;
+    VkImageView   depth_view_  = VK_NULL_HANDLE;
+};
+
+}  // namespace plce::vk2

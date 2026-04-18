@@ -4,6 +4,9 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     plce_add_library(plce_platform_renderer_vk SOURCES
         vk/Device.cpp
         vk/VulkanRenderPath.cpp
+        vk2/Device.cpp
+        vk2/FrameContext.cpp
+        vk2/Swapchain.cpp
         vk/render/ChunkArena.cpp
         vk/render/ChunkMetadata.cpp
         vk/render/IndirectDrawBuffer.cpp
@@ -16,6 +19,7 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     target_include_directories(plce_platform_renderer_vk
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..
                 ${CMAKE_CURRENT_SOURCE_DIR}/vk
+                ${CMAKE_CURRENT_SOURCE_DIR}/vk2
                 ${Stb_INCLUDE_DIR}
                 ${VMA_INCLUDE_DIR}
     )
