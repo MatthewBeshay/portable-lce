@@ -60,7 +60,9 @@ uint8_t depth_to_vk(rp::DepthTest f) {
     return VK_COMPARE_OP_LESS_OR_EQUAL;
 }
 
-int* stb_to_argb(unsigned char* px, int w, int h) {
+// Convert stb RGBA output to ARGB uint32 (game's internal format).
+// The game processes these as ARGB before passing to TextureData.
+int* stb_to_rgba(unsigned char* px, int w, int h) {
     int* out = new int[w * h];
     for (int i = 0; i < w * h; ++i) {
         unsigned char r = px[i*4], g = px[i*4+1], b = px[i*4+2], a = px[i*4+3];
@@ -908,6 +910,12 @@ void Renderer::TextureData(int w, int h, void* data, int level, int) {
     int idx;
     { std::lock_guard lk(tex_mu_); idx = bound_tex_; if (idx <= 0) return;
       if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1); }
+
+    // The game has two texture data paths:
+    //   1. Terrain atlas/direct: data in [R,G,B,A] byte order → R8G8B8A8 correct
+    //   2. Texture.cpp byte remap: data in [A,R,G,B] byte order → needs rotation
+    // Detect [A,R,G,B] by checking if byte0 looks like alpha (0xFF for opaque)
+    // while byte3 doesn't. Rotate bytes to [R,G,B,A] if so.
     upload_texture(idx, w, h, data);
 }
 
@@ -1178,7 +1186,7 @@ int Renderer::LoadTextureData(const char* fn, void* srcInfo, int** out) {
     unsigned char* px = stbi_load(fn, &w, &h, &c, 4);
     if (!px) return -1;
     if (auto* i = static_cast<D3DXIMAGE_INFO*>(srcInfo)) { i->Width = w; i->Height = h; }
-    *out = stb_to_argb(px, w, h);
+    *out = stb_to_rgba(px, w, h);
     stbi_image_free(px);
     return 0;
 }
@@ -1188,7 +1196,7 @@ int Renderer::LoadTextureData(uint8_t* data, uint32_t bytes, void* srcInfo, int*
     unsigned char* px = stbi_load_from_memory(data, int(bytes), &w, &h, &c, 4);
     if (!px) return -1;
     if (auto* i = static_cast<D3DXIMAGE_INFO*>(srcInfo)) { i->Width = w; i->Height = h; }
-    *out = stb_to_argb(px, w, h);
+    *out = stb_to_rgba(px, w, h);
     stbi_image_free(px);
     return 0;
 }

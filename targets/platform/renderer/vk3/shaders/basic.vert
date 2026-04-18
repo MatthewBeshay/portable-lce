@@ -45,8 +45,12 @@ void main() {
     // Little-endian memory: [A,B,G,R]. R8G8B8A8_UNORM reads bytes as
     // (R,G,B,A) = (A,B,G,R). The .abgr swizzle restores correct RGBA.
     // Sentinel: all-zero = use state_colour (base tint).
+    // Vertex colour — R8G8B8A8_UNORM reads bytes directly as RGBA.
+    // No swizzle needed (bgfx uses .abgr because it reads Color0 as BGRA
+    // internally, but Vulkan R8G8B8A8 reads in natural byte order).
+    // Sentinel: all-zero vertex color = use state_colour (base tint).
     bool sentinel = all(equal(a_color, vec4(0.0)));
-    vec4 col = sentinel ? pc.state_colour : a_color.abgr;
+    vec4 col = sentinel ? pc.state_colour : a_color;
 
     // Per-vertex directional lighting (2 lights + ambient)
     if (pc.chunk_lit.w > 0.5) {
