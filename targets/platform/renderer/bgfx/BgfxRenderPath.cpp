@@ -153,15 +153,16 @@ BgfxRenderPath::BgfxRenderPath(SDL_Window* window) : window_(window) {
     init.platformData.nwh = wmi.info.cocoa.window;
 #endif
 
-    #ifdef BGFX_RENDERER_VULKAN 
-        init.type = bgfx::RendererType::Vulkan;
-    #endif
-    #ifdef BGFX_RENDERER_OPENGL
-        init.type = bgfx::RendererType::OpenGL;
-    #endif
-    #ifdef BGFX_RENDERER_METAL 
-        init.type = bgfx::RendererType::Metal;
-    #endif 
+    init.type = bgfx::RendererType::OpenGL;
+#if defined(_WIN32)
+    init.type = bgfx::RendererType::Direct3D12;
+#endif
+    if (const char* env = std::getenv("BGFX_RENDERER")) {
+        if      (std::strcmp(env, "gl")    == 0) init.type = bgfx::RendererType::OpenGL;
+        else if (std::strcmp(env, "d3d11") == 0) init.type = bgfx::RendererType::Direct3D11;
+        else if (std::strcmp(env, "d3d12") == 0) init.type = bgfx::RendererType::Direct3D12;
+        else if (std::strcmp(env, "vulkan")== 0) init.type = bgfx::RendererType::Vulkan;
+    }
     #ifdef BGFX_RENDERER_D3D12
         init.Type = bgfx:RendererType::Direct3D12;
     #endif
@@ -780,11 +781,11 @@ void BgfxRenderPath::resize(uint32_t w, uint32_t h) {
     width_ = w;
     height_ = h;
 #ifdef ENABLE_VSYNC 
-    bgfx::reset(w, h, BGFX_RESET_VSYNC)
-#else 
-       bgfx::reset(w, h, BGFX_RESET_NONE);
-#endif // 
-   }
+    bgfx::reset(w, h, BGFX_RESET_VSYNC);
+#else
+    bgfx::reset(w, h, BGFX_RESET_NONE);
+#endif
+}
 
 const FrameFramebuffer& BgfxRenderPath::framebuffer() const { return fb_; }
 void BgfxRenderPath::read_framebuffer(const TextureReadback&) {}

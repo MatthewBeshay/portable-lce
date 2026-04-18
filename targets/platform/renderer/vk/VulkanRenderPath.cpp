@@ -1620,11 +1620,11 @@ void VulkanRenderPath::DrawVertices(int primType, int count, void* data,
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     // Apply depth bias for THIS draw, then reset the stored state to 0.
     // This matches GL behaviour: glPolygonOffset is only active between
-    // the glEnable(GL_POLYGON_OFFSET_FILL) and glDisable() calls. The
-    // game sets StateSetDepthSlopeAndBias(-2,-2) for one specific draw
-    // (held item overlay) but doesn't always call (0,0) to reset.
-    // Without this auto-reset, the -2 bias bleeds into every subsequent
-    // entity/HUD draw, pushing them in front of terrain ("world flash").
+    // Apply depth bias for this draw, then reset. The game's
+    // renderHitOutline sets bias to -2 and never calls (0,0) to reset
+    // — it relies on GL's glDisable(GL_POLYGON_OFFSET_FILL) pattern.
+    // Without auto-reset, the -2 bias leaks into all subsequent
+    // CBuffCall draws (sky, clouds, entities), causing flashing.
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
     depth_bias_constant_ = 0.0f;
     depth_bias_slope_    = 0.0f;
@@ -1975,7 +1975,6 @@ void VulkanRenderPath::CBuffEnd() {
 }
 
 bool VulkanRenderPath::CBuffCall(int index, bool /*full*/) {
-    return false;  // DEBUG: CBuffCall disabled, direct DrawVertices still active
     if (index < 0 || !frame_active_) return false;
     // Snapshot the draws under the lock so workers can't move the vector
     // out from under us mid-replay.

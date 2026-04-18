@@ -244,7 +244,7 @@ private:
     // flicker. Serialising fixes the race; the throughput cost is small
     // for the kind of scenes we render.
     static constexpr uint32_t kFramesInFlight = 1;
-    static constexpr VkDeviceSize kTransientVbSize = 16ull * 1024 * 1024;
+    static constexpr VkDeviceSize kTransientVbSize = 128ull * 1024 * 1024;
 
     struct PerFrame {
         VkCommandPool   pool   = VK_NULL_HANDLE;
