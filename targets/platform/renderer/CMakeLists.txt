@@ -2,25 +2,19 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     find_path(VMA_INCLUDE_DIR "vma/vk_mem_alloc.h" REQUIRED)
 
     plce_add_library(plce_platform_renderer_vk SOURCES
-        vk2/Device.cpp
-        vk2/FrameContext.cpp
-        vk2/PipelineCache.cpp
-        vk2/Swapchain.cpp
-        vk2/Renderer.cpp
-        vk2/vma_impl.cpp
-        vk/render/ChunkArena.cpp
-        vk/render/ChunkMetadata.cpp
-        vk/render/IndirectDrawBuffer.cpp
-        vk/render/StagingRing.cpp
-        vk/render/TerrainRenderer.cpp
+        vk3/Device.cpp
+        vk3/FrameContext.cpp
+        vk3/PipelineCache.cpp
+        vk3/Swapchain.cpp
+        vk3/Renderer.cpp
+        vk3/vma_impl.cpp
         RenderPathGlobals.cpp
         gl_stubs.cpp
     )
 
     target_include_directories(plce_platform_renderer_vk
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..
-                ${CMAKE_CURRENT_SOURCE_DIR}/vk
-                ${CMAKE_CURRENT_SOURCE_DIR}/vk2
+                ${CMAKE_CURRENT_SOURCE_DIR}/vk3
                 ${Stb_INCLUDE_DIR}
                 ${VMA_INCLUDE_DIR}
     )
@@ -34,15 +28,9 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     )
 
     plce_compile_shader(plce_platform_renderer_vk
-        vk/shaders/basic.vert kBasicVertSpv)
+        vk3/shaders/basic.vert kBasicVertSpv)
     plce_compile_shader(plce_platform_renderer_vk
-        vk/shaders/basic.frag kBasicFragSpv)
-    plce_compile_shader(plce_platform_renderer_vk
-        vk/shaders/terrain_cull.comp kTerrainCullSpv)
-    plce_compile_shader(plce_platform_renderer_vk
-        vk/shaders/terrain.vert kTerrainVertSpv)
-    plce_compile_shader(plce_platform_renderer_vk
-        vk/shaders/terrain.frag kTerrainFragSpv)
+        vk3/shaders/basic.frag kBasicFragSpv)
 
     add_library(plce_platform_renderer ALIAS plce_platform_renderer_vk)
     return()

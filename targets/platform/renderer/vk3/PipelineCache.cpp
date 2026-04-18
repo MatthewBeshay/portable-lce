@@ -1,16 +1,16 @@
 #include "PipelineCache.h"
 
 #include <cstdio>
-#include <cstring>
 #include <stdexcept>
 
-namespace plce::vk2 {
+namespace plce::vk3 {
 
 namespace {
-void check(VkResult r, const char* w) {
+void check(VkResult r, const char* msg) {
     if (r != VK_SUCCESS) {
-        char b[128]; std::snprintf(b, sizeof b, "%s: %d", w, int(r));
-        throw std::runtime_error(b);
+        char buf[128];
+        std::snprintf(buf, sizeof buf, "%s: VkResult=%d", msg, int(r));
+        throw std::runtime_error(buf);
     }
 }
 
@@ -48,9 +48,7 @@ VkPipeline PipelineCache::get(const PsoKey& key) {
 }
 
 void PipelineCache::warm_up() {
-    // Pre-create the most common pipeline variants so the first draw
-    // of each type doesn't hitch.
-    PsoKey opaque{};  // depth test+write, no blend, no cull
+    PsoKey opaque{};
     get(opaque);
 
     PsoKey opaque_cull = opaque;
@@ -66,11 +64,11 @@ void PipelineCache::warm_up() {
     depth_off.depth_test = 0;
     get(depth_off);
 
-    PsoKey lines{};
-    lines.lines = 1;
-    get(lines);
+    PsoKey lines_key{};
+    lines_key.lines = 1;
+    get(lines_key);
 
-    std::fprintf(stderr, "[vk2] warmed %zu pipelines\n", cache_.size());
+    std::fprintf(stderr, "[vk3] warmed %zu pipelines\n", cache_.size());
 }
 
 VkPipeline PipelineCache::create(const PsoKey& key) {
@@ -85,21 +83,20 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     stages[1].module = frag_mod_;
     stages[1].pName  = "main";
 
-    // Vertex input: 32-byte world_standard format
-    // [pos vec3 | uv vec2 | color rgba8 | normal rgba8snorm | tex2 short2]
-    VkVertexInputBindingDescription binding{0, 32,
-        VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[4]{
+    // Vertex input: 32-byte WorldStandardVertex
+    VkVertexInputBindingDescription binding{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[5]{
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},   // pos
         {1, 0, VK_FORMAT_R32G32_SFLOAT,    12},  // uv
         {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20},  // color
         {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24},  // normal
+        {4, 0, VK_FORMAT_R16G16_SINT,      28},  // lightmap UVs
     };
     VkPipelineVertexInputStateCreateInfo vi{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount   = 1;
     vi.pVertexBindingDescriptions      = &binding;
-    vi.vertexAttributeDescriptionCount = 4;
+    vi.vertexAttributeDescriptionCount = 5;
     vi.pVertexAttributeDescriptions    = attrs;
 
     // Input assembly — topology is dynamic
@@ -113,19 +110,14 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     vp.viewportCount = 1;
     vp.scissorCount  = 1;
 
-    // Rasterization
+    // Rasterization — CW front face (Y-flip reverses winding)
     VkPipelineRasterizationStateCreateInfo rs{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode    = (key.lines || !key.cull_back)
-                         ? VK_CULL_MODE_NONE
-                         : VK_CULL_MODE_BACK_BIT;
-    // Matrix Y-flip (mvp[1] = -mvp[1]) reverses triangle winding,
-    // so CW in clip space corresponds to CCW in GL / world space.
-    rs.frontFace   = VK_FRONT_FACE_CLOCKWISE;
-    rs.lineWidth   = 1.0f;
-    // No hardware depth bias — applied via MVP Z offset (bgfx pattern).
-    rs.depthBiasEnable = VK_FALSE;
+    rs.polygonMode    = VK_POLYGON_MODE_FILL;
+    rs.cullMode       = VK_CULL_MODE_NONE;  // TODO: debug — disable culling
+    rs.frontFace      = VK_FRONT_FACE_CLOCKWISE;
+    rs.lineWidth      = 1.0f;
+    rs.depthBiasEnable = VK_TRUE;  // dynamic depth bias via vkCmdSetDepthBias
 
     // Multisample
     VkPipelineMultisampleStateCreateInfo ms{
@@ -145,7 +137,6 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     att.srcColorBlendFactor = VkBlendFactor(key.blend_src);
     att.dstColorBlendFactor = VkBlendFactor(key.blend_dst);
     att.colorBlendOp        = VK_BLEND_OP_ADD;
-    // Alpha blend: match color factors (GL glBlendFunc sets both).
     att.srcAlphaBlendFactor = VkBlendFactor(key.blend_src);
     att.dstAlphaBlendFactor = VkBlendFactor(key.blend_dst);
     att.alphaBlendOp        = VK_BLEND_OP_ADD;
@@ -160,19 +151,20 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     cb.attachmentCount = 1;
     cb.pAttachments    = &att;
 
-    // Dynamic state — minimal set matching bgfx
+    // Dynamic state
     VkDynamicState dyn_states[] = {
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+        VK_DYNAMIC_STATE_DEPTH_BIAS,
     };
     VkPipelineDynamicStateCreateInfo dyn{
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dyn.dynamicStateCount = uint32_t(std::size(dyn_states));
     dyn.pDynamicStates    = dyn_states;
 
-    // Dynamic rendering
+    // Dynamic rendering (no VkRenderPass)
     VkPipelineRenderingCreateInfo prci{
         VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     prci.colorAttachmentCount    = 1;
@@ -202,4 +194,4 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     return pipeline;
 }
 
-}  // namespace plce::vk2
+}  // namespace plce::vk3

@@ -26,7 +26,7 @@ public:
     Device& operator=(const Device&) = delete;
 
     // Accessors
-    VkInstance       instance()        const { return instance_; }
+    VkInstance       instance()       const { return instance_; }
     VkPhysicalDevice physical()       const { return phys_; }
     VkDevice         handle()         const { return device_; }
     VkSurfaceKHR     surface()        const { return surface_; }
@@ -46,7 +46,7 @@ public:
 private:
     template <typename T> static constexpr VkObjectType object_type();
 
-    VkInstance                instance_  = VK_NULL_HANDLE;
+    VkInstance                instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger_ = VK_NULL_HANDLE;
     VkSurfaceKHR             surface_   = VK_NULL_HANDLE;
     VkPhysicalDevice         phys_      = VK_NULL_HANDLE;

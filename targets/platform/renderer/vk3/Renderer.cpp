@@ -13,11 +13,10 @@
 #include <stdexcept>
 
 #include "platform/PlatformTypes.h"
-#include "vk/shaders/basic.vert.spv.h"
-#include "vk/shaders/basic.frag.spv.h"
-#include "render/TerrainRenderer.h"
+#include "vk3/shaders/basic.vert.spv.h"  // kBasicVertSpv
+#include "vk3/shaders/basic.frag.spv.h"  // kBasicFragSpv
 
-namespace plce::vk2 {
+namespace plce::vk3 {
 
 namespace {
 
@@ -70,7 +69,7 @@ int* stb_to_argb(unsigned char* px, int w, int h) {
     return out;
 }
 
-// Push constant block — matches the GLSL layout in basic.vert / basic.frag.
+// Push constant block -- matches the GLSL layout in basic.vert / basic.frag.
 // Single 256-byte range shared by both vertex and fragment stages.
 struct alignas(16) PushConstants {
     glm::mat4 mvp;              // 0
@@ -93,7 +92,6 @@ struct alignas(16) PushConstants {
 static_assert(sizeof(PushConstants) == 256);
 
 // Expand compact 16-byte vertex format to 32-byte world_standard.
-// Returns expanded byte vector; count is updated to reflect quad→tri conversion.
 std::vector<std::byte> expand_compact(const void* data, int& count) {
     constexpr uint32_t kStride = 32;
     int quads = count / 4;
@@ -101,7 +99,6 @@ std::vector<std::byte> expand_compact(const void* data, int& count) {
     std::vector<std::byte> out(size_t(tri_verts) * kStride);
     const int16_t* src = static_cast<const int16_t*>(data);
     for (int q = 0; q < quads; ++q) {
-        // Each quad: 4 vertices of 8 int16s = 32 int16s
         std::byte expanded[4 * kStride];
         for (int v = 0; v < 4; ++v) {
             const int16_t* sv = src + q * 4 * 8 + v * 8;
@@ -122,12 +119,28 @@ std::vector<std::byte> expand_compact(const void* data, int& count) {
             auto* dstS = reinterpret_cast<int16_t*>(dst + 28);
             dstS[0] = sv[6]; dstS[1] = sv[7];
         }
-        // Quad → 2 triangles: 0,1,2 then 0,2,3
         auto put = [&](int ti, int vi) {
             std::memcpy(out.data() + (q * 6 + ti) * kStride,
                         expanded + vi * kStride, kStride);
         };
         put(0,0); put(1,1); put(2,2); put(3,0); put(4,2); put(5,3);
+    }
+    count = tri_verts;
+    return out;
+}
+
+// Convert triangle fan to triangle list on CPU.
+std::vector<std::byte> fan_to_list(const void* data, int& count) {
+    constexpr uint32_t kStride = 32;
+    if (count < 3) { count = 0; return {}; }
+    int tri_count = count - 2;
+    int tri_verts = tri_count * 3;
+    std::vector<std::byte> out(size_t(tri_verts) * kStride);
+    const std::byte* src = static_cast<const std::byte*>(data);
+    for (int i = 0; i < tri_count; ++i) {
+        std::memcpy(out.data() + (i * 3 + 0) * kStride, src, kStride);
+        std::memcpy(out.data() + (i * 3 + 1) * kStride, src + (i + 1) * kStride, kStride);
+        std::memcpy(out.data() + (i * 3 + 2) * kStride, src + (i + 2) * kStride, kStride);
     }
     count = tri_verts;
     return out;
@@ -153,9 +166,8 @@ Renderer::Renderer(SDL_Window* window)
            }),
       window_(window) {
 
-    swap_.create(dev_, 0, 0);  // uses surface caps for initial size
+    swap_.create(dev_, 0, 0);
 
-    // Per-frame contexts
     for (auto& f : frames_)
         f.create(dev_.handle(), dev_.allocator(), dev_.queue_family());
 
@@ -185,27 +197,6 @@ Renderer::Renderer(SDL_Window* window)
         ci.pPoolSizes    = &ps;
         check(vkCreateDescriptorPool(dev_.handle(), &ci, nullptr, &tex_pool_),
               "desc pool");
-    }
-
-    // Samplers
-    {
-        VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        ci.magFilter    = VK_FILTER_NEAREST;
-        ci.minFilter    = VK_FILTER_NEAREST;
-        ci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        ci.maxLod       = VK_LOD_CLAMP_NONE;
-        check(vkCreateSampler(dev_.handle(), &ci, nullptr, &tex_sampler_),
-              "sampler");
-        ci.magFilter    = VK_FILTER_LINEAR;
-        ci.minFilter    = VK_FILTER_LINEAR;
-        ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        check(vkCreateSampler(dev_.handle(), &ci, nullptr, &tex_sampler_lm_),
-              "sampler lm");
     }
 
     // Pipeline layout: single shared push constant range (256 bytes)
@@ -258,7 +249,6 @@ Renderer::Renderer(SDL_Window* window)
         check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &quad_ib_,
                               &quad_ib_alloc_, nullptr), "quad ib");
 
-        // Upload via staging
         VkBuffer stg = VK_NULL_HANDLE; VmaAllocation sa = nullptr;
         VmaAllocationInfo si{};
         VkBufferCreateInfo sci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -289,7 +279,7 @@ Renderer::Renderer(SDL_Window* window)
         VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
         sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
         vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
-        vkQueueWaitIdle(dev_.queue());  // one-time init, acceptable
+        vkQueueWaitIdle(dev_.queue());
         vmaDestroyBuffer(dev_.allocator(), stg, sa);
         vkDestroyCommandPool(dev_.handle(), pool, nullptr);
     }
@@ -317,13 +307,6 @@ Renderer::Renderer(SDL_Window* window)
     default_tex_ = ensure_default_texture();
     bound_tex_   = default_tex_;
 
-    // Terrain renderer
-    plce::vk_render::TerrainRenderer::Config tcfg{};
-    tcfg.color_format = swap_.format();
-    tcfg.depth_format = swap_.depth_format();
-    terrain_ = std::make_unique<plce::vk_render::TerrainRenderer>(
-        dev_.handle(), dev_.allocator(), dev_.queue_family(), dev_.queue(), tcfg);
-
     {
         int w, h;
         SDL_GetWindowSize(window_, &w, &h);
@@ -334,15 +317,13 @@ Renderer::Renderer(SDL_Window* window)
         fb_.is_hi_def     = h >= 720;
     }
 
-    std::fprintf(stderr, "[vk2] renderer ready %ux%u images=%u\n",
+    std::fprintf(stderr, "[vk3] renderer ready %ux%u images=%u\n",
                  swap_.extent().width, swap_.extent().height,
                  swap_.image_count());
 }
 
 Renderer::~Renderer() {
-    vkDeviceWaitIdle(dev_.handle());  // teardown only — acceptable per best practices
-    terrain_.reset();
-    // CBuff GPU buffers
+    vkDeviceWaitIdle(dev_.handle());
     for (auto& cb : cbufs_)
         if (cb.vb) vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
     if (upload_pool_) vkDestroyCommandPool(dev_.handle(), upload_pool_, nullptr);
@@ -354,12 +335,35 @@ Renderer::~Renderer() {
         if (t.view)  vkDestroyImageView(dev_.handle(), t.view, nullptr);
         if (t.image) vmaDestroyImage(dev_.allocator(), t.image, t.alloc);
     }
-    if (tex_sampler_)    vkDestroySampler(dev_.handle(), tex_sampler_, nullptr);
-    if (tex_sampler_lm_) vkDestroySampler(dev_.handle(), tex_sampler_lm_, nullptr);
+    for (auto& [k, s] : sampler_cache_)
+        vkDestroySampler(dev_.handle(), s, nullptr);
     if (tex_pool_)       vkDestroyDescriptorPool(dev_.handle(), tex_pool_, nullptr);
     if (tex_set_layout_) vkDestroyDescriptorSetLayout(dev_.handle(), tex_set_layout_, nullptr);
     for (auto& f : frames_) f.destroy(dev_.handle(), dev_.allocator());
     swap_.destroy(dev_);
+}
+
+// ===================================================================
+// SAMPLER CACHE
+// ===================================================================
+
+VkSampler Renderer::get_or_create_sampler(const SamplerKey& key) {
+    auto it = sampler_cache_.find(key);
+    if (it != sampler_cache_.end()) return it->second;
+
+    VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    ci.magFilter    = key.mag_filter;
+    ci.minFilter    = key.min_filter;
+    ci.mipmapMode   = key.mip_mode;
+    ci.addressModeU = key.wrap_s;
+    ci.addressModeV = key.wrap_t;
+    ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    ci.maxLod       = VK_LOD_CLAMP_NONE;
+
+    VkSampler sampler = VK_NULL_HANDLE;
+    check(vkCreateSampler(dev_.handle(), &ci, nullptr, &sampler), "sampler");
+    sampler_cache_.emplace(key, sampler);
+    return sampler;
 }
 
 // ===================================================================
@@ -370,9 +374,6 @@ void Renderer::StartFrame() {
     if (frame_active_) return;
     auto& f = frame();
 
-    // Update framebuffer info every frame (matches bgfx renderer).
-    // Must populate ALL FrameFramebuffer fields — game reads aspect,
-    // is_widescreen, is_hi_def for UI layout decisions.
     {
         int w, h;
         SDL_GetWindowSize(window_, &w, &h);
@@ -383,8 +384,6 @@ void Renderer::StartFrame() {
         fb_.is_hi_def     = h >= 720;
     }
 
-    // Wait for previous GPU work on this frame slot — ensures the
-    // semaphore from the last acquire is no longer pending.
     vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
 
     VkResult acq = vkAcquireNextImageKHR(dev_.handle(), swap_.handle(),
@@ -398,7 +397,6 @@ void Renderer::StartFrame() {
         if (acq != VK_SUCCESS) return;
     }
 
-    // Begin recording (fence wait inside is instant — already waited above)
     f.begin(dev_.handle());
 
     pso_dirty_    = true;
@@ -446,7 +444,7 @@ void Renderer::Present() {
     double now = double(SDL_GetTicks64()) / 1000.0;
     if (stat_start_ == 0) stat_start_ = now;
     if (now - stat_start_ >= 1.0) {
-        std::fprintf(stderr, "[vk2] fps=%u draws=%u\n", stat_frames_, stat_draws_);
+        std::fprintf(stderr, "[vk3] fps=%u draws=%u\n", stat_frames_, stat_draws_);
         stat_frames_ = stat_draws_ = 0;
         stat_start_ = now;
     }
@@ -462,7 +460,6 @@ void Renderer::begin_pass() {
     auto& f = frame();
     VkCommandBuffer cmd = f.cmd;
 
-    // Barriers: UNDEFINED → attachment optimal (color + depth)
     VkImageMemoryBarrier2 bars[2]{};
     bars[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     bars[0].srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -487,7 +484,6 @@ void Renderer::begin_pass() {
     dep.pImageMemoryBarriers    = bars;
     vkCmdPipelineBarrier2(cmd, &dep);
 
-    // Begin dynamic rendering
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView   = swap_.view(acquired_img_);
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -512,9 +508,9 @@ void Renderer::begin_pass() {
 
     VkViewport vp{0, 0, float(swap_.extent().width),
                   float(swap_.extent().height), 0, 1};
-    VkRect2D sc{{0,0}, swap_.extent()};
+    VkRect2D sc_r{{0,0}, swap_.extent()};
     vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdSetScissor(cmd, 0, 1, &sc_r);
 }
 
 void Renderer::end_pass() {
@@ -564,12 +560,14 @@ void Renderer::SetClearColour(const float rgba[4]) {
 
 void Renderer::resize(uint32_t w, uint32_t h) {
     if (w == 0 || h == 0) return;
-    // Wait for BOTH frame slots to finish before touching swapchain
     for (auto& f : frames_)
         vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
     swap_.resize(dev_, w, h);
     fb_.width = swap_.extent().width;
     fb_.height = swap_.extent().height;
+    fb_.aspect = fb_.height > 0 ? float(fb_.width) / float(fb_.height) : 1.0f;
+    fb_.is_widescreen = fb_.aspect > 1.5f;
+    fb_.is_hi_def     = fb_.height >= 720;
 }
 
 // ===================================================================
@@ -664,15 +662,68 @@ void Renderer::UpdateGamma(unsigned short g) {
 }
 
 // ===================================================================
+// PUSH CONSTANTS HELPER
+// ===================================================================
+
+void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* tint) {
+    PushConstants& pc = *static_cast<PushConstants*>(out);
+    const auto& mv = mv_stack_.back();
+    pc.mvp = proj_stack_.back() * mv;
+    // Y-flip for Vulkan NDC: negate ROW 1 (not column 1)
+    for (int c = 0; c < 4; ++c) pc.mvp[c][1] = -pc.mvp[c][1];
+
+    glm::mat3 nm(mv);
+    const auto& tm = tex_stack_.back();
+    pc.nm0       = glm::vec4(nm[0], tm[0][0]);
+    pc.nm1       = glm::vec4(nm[1], tm[1][1]);
+    pc.nm2       = glm::vec4(nm[2], tm[3][0]);
+    pc.chunk_lit = glm::vec4(chunk_offset_[0], chunk_offset_[1],
+                             chunk_offset_[2], lighting_enabled_ ? 1.0f : 0.0f);
+    pc.l0        = glm::vec4(light0_dir_eye_, tm[3][1]);
+    pc.l1        = glm::vec4(light1_dir_eye_, mv[3][0]);
+    pc.ldiff     = glm::vec4(light_diffuse_,  mv[3][1]);
+    pc.lamb      = glm::vec4(light_ambient_,  mv[3][2]);
+
+    float fog_mode_f = 0;
+    if (fog_enabled_) {
+        switch (fog_mode_) {
+            case rp::FogMode::linear:         fog_mode_f = 1; break;
+            case rp::FogMode::exponential:    fog_mode_f = 2; break;
+            case rp::FogMode::exponential_sq: fog_mode_f = 3; break;
+            default: break;
+        }
+    }
+    pc.fog_params = glm::vec4(fog_mode_f, fog_start_, fog_end_, fog_density_);
+
+    if (tint) {
+        pc.state_colour = glm::vec4(state_colour_[0] * (*tint)[0],
+                                    state_colour_[1] * (*tint)[1],
+                                    state_colour_[2] * (*tint)[2],
+                                    state_colour_[3] * (*tint)[3]);
+    } else {
+        pc.state_colour = glm::vec4(state_colour_[0], state_colour_[1],
+                                    state_colour_[2], state_colour_[3]);
+    }
+    pc.fog_colour = glm::vec4(fog_colour_[0], fog_colour_[1],
+                              fog_colour_[2], fog_colour_[3]);
+    pc.alpha_ref  = alpha_ref_;
+    pc.inv_gamma  = inv_gamma_;
+    pc.flags      = ((textured && texture_enabled_) ? 1u : 0u) |
+                    (alpha_test_enabled_ ? 2u : 0u);
+    pc._pad       = 0;
+}
+
+// ===================================================================
 // DRAW
 // ===================================================================
 
 void Renderer::DrawVertices(int primType, int count, void* data,
                             int vType, int /*sType*/) {
     if (count <= 0 || !data) return;
-    if (!frame_active_) return;
 
-    // Handle CBuffDraw recording (thread-local, deferred until CBuffEnd)
+    // CBuff recording must be checked BEFORE frame_active_ — worker
+    // threads rebuild chunks between frames when frame_active_ is false.
+    // Recording just copies to CPU memory, no GPU state needed.
     if (t_rec.id >= 0) {
         constexpr uint32_t kStd = 32;
         CBuffDraw d;
@@ -686,6 +737,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
         return;
     }
 
+    if (!frame_active_) return;
     ensure_pass();
 
     // Expand compact format (vType==1) to world_standard 32-byte
@@ -694,7 +746,16 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     if (vType == 1) {
         expanded = expand_compact(data, count);
         vdata = expanded.data();
-        primType = 0x0004;  // already triangulated by expand_compact
+        primType = 0x0004;  // already triangulated
+    }
+
+    // Convert triangle fans to triangle list on CPU
+    std::vector<std::byte> fan_expanded;
+    if (primType == 0x0006) {
+        fan_expanded = fan_to_list(vdata, count);
+        if (count == 0) return;
+        vdata = fan_expanded.data();
+        primType = 0x0004;
     }
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -704,7 +765,6 @@ void Renderer::DrawVertices(int primType, int count, void* data,
         case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;     is_lines = true; break;
         case 0x0004: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  break;
         case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
-        case 0x0006: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;   break;
         case 0x0007: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  is_quads = true; break;
         default: return;
     }
@@ -729,14 +789,19 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     vkCmdSetPrimitiveTopology(f.cmd, topo);
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
 
-    // Texture — use bound texture if ready, otherwise fall back to default
+    // Dynamic depth bias
+    vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
+
+    // Texture
     VkDescriptorSet ds = VK_NULL_HANDLE;
     bool textured = false;
     {
         std::lock_guard lk(tex_mu_);
         int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
                    textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-        ds = textures_[tex].desc_set;
+        auto& ts = textures_[tex];
+        if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
+        ds = ts.desc_set;
         textured = (tex != default_tex_);
     }
     if (ds) vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -744,46 +809,8 @@ void Renderer::DrawVertices(int primType, int count, void* data,
 
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
 
-    // Fill push constants (single 256-byte block, both stages)
     PushConstants pc{};
-    const auto& mv = mv_stack_.back();
-    pc.mvp = proj_stack_.back() * mv;
-    constexpr float Z_BIAS_EPS = 6e-5f;
-    pc.mvp[3][2] += depth_bias_constant_ * Z_BIAS_EPS;
-    depth_bias_constant_ = 0; depth_bias_slope_ = 0;
-    // Y-flip for Vulkan NDC: negate ROW 1 (not column 1) so both
-    // the scale and translation of Y are flipped. Column-negate only
-    // works for perspective (where mvp[3][1]==0) but breaks ortho.
-    for (int c = 0; c < 4; ++c) pc.mvp[c][1] = -pc.mvp[c][1];
-
-    glm::mat3 nm(mv);
-    const auto& tm = tex_stack_.back();
-    pc.nm0       = glm::vec4(nm[0], tm[0][0]);
-    pc.nm1       = glm::vec4(nm[1], tm[1][1]);
-    pc.nm2       = glm::vec4(nm[2], tm[3][0]);
-    pc.chunk_lit = glm::vec4(0, 0, 0, lighting_enabled_ ? 1.0f : 0.0f);
-    pc.l0        = glm::vec4(light0_dir_eye_, tm[3][1]);
-    pc.l1        = glm::vec4(light1_dir_eye_, mv[3][0]);
-    pc.ldiff     = glm::vec4(light_diffuse_,  mv[3][1]);
-    pc.lamb      = glm::vec4(light_ambient_,  mv[3][2]);
-    float fog_mode_f = 0;
-    if (fog_enabled_) {
-        switch (fog_mode_) {
-            case rp::FogMode::linear:         fog_mode_f = 1; break;
-            case rp::FogMode::exponential:    fog_mode_f = 2; break;
-            case rp::FogMode::exponential_sq: fog_mode_f = 3; break;
-            default: break;
-        }
-    }
-    pc.fog_params    = glm::vec4(fog_mode_f, fog_start_, fog_end_, fog_density_);
-    pc.state_colour  = glm::vec4(state_colour_[0], state_colour_[1],
-                                 state_colour_[2], state_colour_[3]);
-    pc.fog_colour    = glm::vec4(fog_colour_[0], fog_colour_[1],
-                                 fog_colour_[2], fog_colour_[3]);
-    pc.alpha_ref     = alpha_ref_;
-    pc.inv_gamma     = inv_gamma_;
-    pc.flags         = ((textured && texture_enabled_) ? 1u : 0u) |
-                       (alpha_test_enabled_ ? 2u : 0u);
+    fill_push_constants(&pc, textured);
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
@@ -795,6 +822,10 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     } else {
         vkCmdDraw(f.cmd, uint32_t(count), 1, 0, 0);
     }
+
+    // Reset depth bias after draw
+    depth_bias_constant_ = 0;
+    depth_bias_slope_    = 0;
     ++stat_draws_;
 }
 
@@ -810,8 +841,8 @@ void Renderer::SetFullscreen(bool fs) {
 void Renderer::Close() { should_close_ = true; }
 bool Renderer::ShouldClose() { return should_close_; }
 const rp::FrameFramebuffer& Renderer::framebuffer() const { return fb_; }
-bool Renderer::IsWidescreen() { return fb_.width > fb_.height; }
-bool Renderer::IsHiDef() { return fb_.height >= 720; }
+bool Renderer::IsWidescreen() { return fb_.is_widescreen; }
+bool Renderer::IsHiDef() { return fb_.is_hi_def; }
 
 // ===================================================================
 // DEBUG
@@ -854,7 +885,6 @@ void Renderer::TextureFree(int idx) {
     if (idx <= 0 || size_t(idx) >= textures_.size()) return;
     if (idx == default_tex_) return;
     auto& t = textures_[idx];
-    // Defer destruction until frame fence signals
     if (t.view || t.image) {
         auto view = t.view; auto img = t.image; auto alloc = t.alloc;
         auto dev = dev_.handle(); auto vma = dev_.allocator();
@@ -869,7 +899,6 @@ void Renderer::TextureFree(int idx) {
 void Renderer::TextureBind(int idx) {
     std::lock_guard lk(tex_mu_);
     if (idx < 0) { bound_tex_ = default_tex_; return; }
-    // Auto-create slot if needed (matches OpenGL glBindTexture behaviour)
     if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1);
     bound_tex_ = idx;
 }
@@ -892,6 +921,77 @@ void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int l
     upload_texture(idx, w, h, data);
 }
 
+void Renderer::TextureSetParam(int param, int value) {
+    std::lock_guard lk(tex_mu_);
+    if (bound_tex_ <= 0 || size_t(bound_tex_) >= textures_.size()) return;
+    auto& t = textures_[bound_tex_];
+
+    constexpr int GL_TEXTURE_MIN_FILTER = 0x2801;
+    constexpr int GL_TEXTURE_MAG_FILTER = 0x2800;
+    constexpr int GL_TEXTURE_WRAP_S     = 0x2802;
+    constexpr int GL_TEXTURE_WRAP_T     = 0x2803;
+    constexpr int GL_NEAREST            = 0x2600;
+    constexpr int GL_LINEAR             = 0x2601;
+    constexpr int GL_NEAREST_MIPMAP_NEAREST = 0x2700;
+    constexpr int GL_LINEAR_MIPMAP_NEAREST  = 0x2701;
+    constexpr int GL_NEAREST_MIPMAP_LINEAR  = 0x2702;
+    constexpr int GL_LINEAR_MIPMAP_LINEAR   = 0x2703;
+    constexpr int GL_REPEAT        = 0x2901;
+    constexpr int GL_CLAMP_TO_EDGE = 0x812F;
+
+    switch (param) {
+        case GL_TEXTURE_MIN_FILTER:
+            switch (value) {
+                case GL_NEAREST:
+                    t.sampler_key.min_filter = VK_FILTER_NEAREST;
+                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                    break;
+                case GL_LINEAR:
+                    t.sampler_key.min_filter = VK_FILTER_LINEAR;
+                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                    break;
+                case GL_NEAREST_MIPMAP_NEAREST:
+                    t.sampler_key.min_filter = VK_FILTER_NEAREST;
+                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                    break;
+                case GL_LINEAR_MIPMAP_NEAREST:
+                    t.sampler_key.min_filter = VK_FILTER_LINEAR;
+                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                    break;
+                case GL_NEAREST_MIPMAP_LINEAR:
+                    t.sampler_key.min_filter = VK_FILTER_NEAREST;
+                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+                    break;
+                case GL_LINEAR_MIPMAP_LINEAR:
+                    t.sampler_key.min_filter = VK_FILTER_LINEAR;
+                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+                    break;
+            }
+            t.sampler_dirty = true;
+            break;
+
+        case GL_TEXTURE_MAG_FILTER:
+            t.sampler_key.mag_filter = (value == GL_NEAREST)
+                ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+            t.sampler_dirty = true;
+            break;
+
+        case GL_TEXTURE_WRAP_S:
+            t.sampler_key.wrap_s = (value == GL_CLAMP_TO_EDGE)
+                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            t.sampler_dirty = true;
+            break;
+
+        case GL_TEXTURE_WRAP_T:
+            t.sampler_key.wrap_t = (value == GL_CLAMP_TO_EDGE)
+                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            t.sampler_dirty = true;
+            break;
+    }
+}
+
 int Renderer::ensure_default_texture() {
     int idx = TextureCreate();
     uint32_t pixel = 0xFFFFFFFF;
@@ -900,11 +1000,22 @@ int Renderer::ensure_default_texture() {
     return idx;
 }
 
+void Renderer::update_tex_descriptor(TexSlot& t) {
+    if (!t.desc_set || !t.view) return;
+    VkSampler sampler = get_or_create_sampler(t.sampler_key);
+    VkDescriptorImageInfo dii{sampler, t.view,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    wd.dstSet = t.desc_set; wd.dstBinding = 0; wd.descriptorCount = 1;
+    wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wd.pImageInfo = &dii;
+    vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
+}
+
 void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
     auto& t = textures_[idx];
     bool reuse = t.ready && t.width == uint32_t(w) && t.height == uint32_t(h);
     if (t.ready && !reuse) {
-        // Defer old image destruction
         auto view = t.view; auto img = t.image; auto alloc = t.alloc;
         auto dev = dev_.handle(); auto vma = dev_.allocator();
         frame().deletions.push([=]() {
@@ -912,7 +1023,8 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
             if (img)  vmaDestroyImage(vma, img, alloc);
         });
         VkDescriptorSet keep = t.desc_set;
-        t = {}; t.desc_set = keep;
+        SamplerKey sk = t.sampler_key;
+        t = {}; t.desc_set = keep; t.sampler_key = sk;
     }
     t.width = w; t.height = h;
 
@@ -946,17 +1058,23 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
         dai.pSetLayouts = &tex_set_layout_;
         vkAllocateDescriptorSets(dev_.handle(), &dai, &t.desc_set);
     }
-    VkDescriptorImageInfo dii{tex_sampler_, t.view,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    wd.dstSet = t.desc_set; wd.dstBinding = 0; wd.descriptorCount = 1;
-    wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wd.pImageInfo = &dii;
-    vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
+    // Write descriptor with per-texture sampler
+    {
+        VkSampler sampler = get_or_create_sampler(t.sampler_key);
+        VkDescriptorImageInfo dii{sampler, t.view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        wd.dstSet = t.desc_set; wd.dstBinding = 0; wd.descriptorCount = 1;
+        wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wd.pImageInfo = &dii;
+        vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
+    }
+    t.sampler_dirty = false;
 
     // Stage + copy via upload pool
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
     if (bytes > kStagingSize) return;
+
     std::memcpy(staging_mapped_, pixels, bytes);
 
     VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -967,7 +1085,7 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
     bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bbi);
 
-    // UNDEFINED → TRANSFER_DST
+    // UNDEFINED -> TRANSFER_DST
     {
         VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -1015,7 +1133,7 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
         mw = nw; mh = nh;
     }
 
-    // All mips → SHADER_READ_ONLY
+    // All mips -> SHADER_READ_ONLY
     {
         VkImageMemoryBarrier2 ends[2]{}; uint32_t n = 0;
         if (mips > 1) {
@@ -1050,7 +1168,7 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
     vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
-    vkQueueWaitIdle(dev_.queue());  // TODO: batch into frame cmd
+    vkQueueWaitIdle(dev_.queue());
     vkResetCommandBuffer(cmd, 0);
     t.ready = true;
 }
@@ -1135,12 +1253,31 @@ void Renderer::cbuf_upload(CBuff& cb) {
     cb.gpu_draws.clear();
 
     for (auto& d : cb.draws) {
-        uint32_t verts = uint32_t(d.verts.size() / kStride);
-        if (verts == 0) continue;
-        uint32_t byte_off = uint32_t(combined.size());
+        const void* src = d.verts.data();
+        int vert_count;
+        std::vector<std::byte> expanded_storage;
+
+        if (d.vertexType == 1) {
+            vert_count = int(d.verts.size() / 16);
+            expanded_storage = expand_compact(src, vert_count);
+            src = expanded_storage.data();
+            // expand_compact already triangulates quads
+            uint32_t byte_off = uint32_t(combined.size());
+            combined.insert(combined.end(),
+                            static_cast<const std::byte*>(src),
+                            static_cast<const std::byte*>(src) + size_t(vert_count) * kStride);
+            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), 0x0004});
+            continue;
+        }
+
+        vert_count = int(d.verts.size() / kStride);
+        if (vert_count == 0) continue;
+
         if (d.primType == 0x0007) {
-            if (verts % 4 != 0) continue;
-            uint32_t quads = verts / 4;
+            // Quads -> triangles
+            if (vert_count % 4 != 0) continue;
+            uint32_t quads = vert_count / 4;
+            uint32_t byte_off = uint32_t(combined.size());
             for (uint32_t q = 0; q < quads; ++q) {
                 const std::byte* b = d.verts.data() + q * 4 * kStride;
                 auto push = [&](uint32_t i) {
@@ -1149,9 +1286,19 @@ void Renderer::cbuf_upload(CBuff& cb) {
                 push(0); push(1); push(2); push(0); push(2); push(3);
             }
             cb.gpu_draws.push_back({byte_off, quads * 6, 0x0004});
+        } else if (d.primType == 0x0006) {
+            // Fan -> triangles
+            if (vert_count < 3) continue;
+            int fan_count = vert_count;
+            auto fan_data = fan_to_list(d.verts.data(), fan_count);
+            if (fan_count == 0) continue;
+            uint32_t byte_off = uint32_t(combined.size());
+            combined.insert(combined.end(), fan_data.begin(), fan_data.end());
+            cb.gpu_draws.push_back({byte_off, uint32_t(fan_count), 0x0004});
         } else {
+            uint32_t byte_off = uint32_t(combined.size());
             combined.insert(combined.end(), d.verts.begin(), d.verts.end());
-            cb.gpu_draws.push_back({byte_off, verts, d.primType});
+            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), d.primType});
         }
     }
     if (combined.empty()) { cb.uploaded = false; return; }
@@ -1170,7 +1317,6 @@ void Renderer::cbuf_upload(CBuff& cb) {
         cb.vb_size = needed;
     }
 
-    // Stage + copy
     if (needed > kStagingSize) { cb.uploaded = false; return; }
     std::memcpy(staging_mapped_, combined.data(), needed);
 
@@ -1189,7 +1335,7 @@ void Renderer::cbuf_upload(CBuff& cb) {
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
     vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
-    vkQueueWaitIdle(dev_.queue());  // TODO: batch into frame cmd
+    vkQueueWaitIdle(dev_.queue());
     vkResetCommandBuffer(cmd, 0);
     cb.uploaded = true;
 }
@@ -1197,16 +1343,29 @@ void Renderer::cbuf_upload(CBuff& cb) {
 bool Renderer::CBuffCall(int index, bool) {
     if (index < 0 || !frame_active_) return false;
 
+    static uint32_t s_ok = 0, s_fail_size = 0, s_fail_valid = 0, s_fail_upload = 0, s_total = 0;
+    ++s_total;
+
     VkBuffer vb = VK_NULL_HANDLE;
     std::vector<CBuffSubDraw> draws;
     {
         std::lock_guard lk(cbuf_mu_);
-        if (size_t(index) >= cbufs_.size()) return false;
+        if (size_t(index) >= cbufs_.size()) { ++s_fail_size; goto report; }
+        {
         auto& cb = cbufs_[index];
-        if (!cb.valid || cb.draws.empty()) return false;
-        if (!cb.uploaded) { cbuf_upload(cb); if (!cb.uploaded) return false; }
+        if (!cb.valid || cb.draws.empty()) { ++s_fail_valid; goto report; }
+        if (!cb.uploaded) { cbuf_upload(cb); if (!cb.uploaded) { ++s_fail_upload; goto report; } }
         vb = cb.vb; draws = cb.gpu_draws;
+        ++s_ok;
+        }
     }
+    goto draw;
+report:
+    if (s_total % 2000 == 0)
+        std::fprintf(stderr, "[vk3-cb] total=%u ok=%u sz=%u val=%u upl=%u\n",
+                     s_total, s_ok, s_fail_size, s_fail_valid, s_fail_upload);
+    return false;
+draw:
 
     auto& f = frame();
     ensure_pass();
@@ -1217,6 +1376,7 @@ bool Renderer::CBuffCall(int index, bool) {
         last_bound_pso_ = pso_key_; pso_dirty_ = false;
     }
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+    vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
     VkDescriptorSet ds = VK_NULL_HANDLE;
     bool textured = false;
@@ -1224,48 +1384,16 @@ bool Renderer::CBuffCall(int index, bool) {
         std::lock_guard lk(tex_mu_);
         int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
                    textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-        ds = textures_[tex].desc_set;
+        auto& ts = textures_[tex];
+        if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
+        ds = ts.desc_set;
         textured = (tex != default_tex_);
     }
     if (ds) vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                      pipeline_layout_, 0, 1, &ds, 0, nullptr);
 
-    // Fill push constants (single 256-byte block)
     PushConstants pc{};
-    const auto& mv = mv_stack_.back();
-    pc.mvp = proj_stack_.back() * mv;
-    constexpr float Z_BIAS_EPS = 6e-5f;
-    pc.mvp[3][2] += depth_bias_constant_ * Z_BIAS_EPS;
-    depth_bias_constant_ = 0; depth_bias_slope_ = 0;
-    for (int c = 0; c < 4; ++c) pc.mvp[c][1] = -pc.mvp[c][1];
-    glm::mat3 nm(mv);
-    const auto& tm = tex_stack_.back();
-    pc.nm0       = glm::vec4(nm[0], tm[0][0]);
-    pc.nm1       = glm::vec4(nm[1], tm[1][1]);
-    pc.nm2       = glm::vec4(nm[2], tm[3][0]);
-    pc.chunk_lit = glm::vec4(0, 0, 0, lighting_enabled_ ? 1.0f : 0.0f);
-    pc.l0        = glm::vec4(light0_dir_eye_, tm[3][1]);
-    pc.l1        = glm::vec4(light1_dir_eye_, mv[3][0]);
-    pc.ldiff     = glm::vec4(light_diffuse_,  mv[3][1]);
-    pc.lamb      = glm::vec4(light_ambient_,  mv[3][2]);
-    float fog_mode_f = 0;
-    if (fog_enabled_) {
-        switch (fog_mode_) {
-            case rp::FogMode::linear:         fog_mode_f = 1; break;
-            case rp::FogMode::exponential:    fog_mode_f = 2; break;
-            case rp::FogMode::exponential_sq: fog_mode_f = 3; break;
-            default: break;
-        }
-    }
-    pc.fog_params    = glm::vec4(fog_mode_f, fog_start_, fog_end_, fog_density_);
-    pc.state_colour  = glm::vec4(state_colour_[0], state_colour_[1],
-                                 state_colour_[2], state_colour_[3]);
-    pc.fog_colour    = glm::vec4(fog_colour_[0], fog_colour_[1],
-                                 fog_colour_[2], fog_colour_[3]);
-    pc.alpha_ref     = alpha_ref_;
-    pc.inv_gamma     = inv_gamma_;
-    pc.flags         = ((textured && texture_enabled_) ? 1u : 0u) |
-                       (alpha_test_enabled_ ? 2u : 0u);
+    fill_push_constants(&pc, textured);
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
@@ -1278,12 +1406,14 @@ bool Renderer::CBuffCall(int index, bool) {
             case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
             case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP; break;
             case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
-            case 0x0006: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
         }
         vkCmdSetPrimitiveTopology(f.cmd, topo);
         vkCmdDraw(f.cmd, sd.vertex_count, 1, 0, 0);
         ++stat_draws_;
     }
+
+    depth_bias_constant_ = 0;
+    depth_bias_slope_    = 0;
     return true;
 }
 
@@ -1325,6 +1455,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
         last_bound_pso_ = pso_key_; pso_dirty_ = false;
     }
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+    vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     switch (tvb.primitive) {
@@ -1340,7 +1471,9 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     { std::lock_guard lk(tex_mu_);
       int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
                  textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-      ds = textures_[tex].desc_set; textured = (tex != default_tex_); }
+      auto& ts = textures_[tex];
+      if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
+      ds = ts.desc_set; textured = (tex != default_tex_); }
     if (ds) vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                      pipeline_layout_, 0, 1, &ds, 0, nullptr);
 
@@ -1348,159 +1481,26 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
 
     PushConstants pc{};
-    const auto& mv = mv_stack_.back();
-    pc.mvp = proj_stack_.back() * mv;
-    for (int c = 0; c < 4; ++c) pc.mvp[c][1] = -pc.mvp[c][1];
-    glm::mat3 nm(mv);
-    const auto& tm = tex_stack_.back();
-    pc.nm0       = glm::vec4(nm[0], tm[0][0]);
-    pc.nm1       = glm::vec4(nm[1], tm[1][1]);
-    pc.nm2       = glm::vec4(nm[2], tm[3][0]);
-    pc.chunk_lit = glm::vec4(0, 0, 0, lighting_enabled_ ? 1.0f : 0.0f);
-    pc.l0        = glm::vec4(light0_dir_eye_, tm[3][1]);
-    pc.l1        = glm::vec4(light1_dir_eye_, mv[3][0]);
-    pc.ldiff     = glm::vec4(light_diffuse_,  mv[3][1]);
-    pc.lamb      = glm::vec4(light_ambient_,  mv[3][2]);
-    float fog_mode_f = 0;
-    if (fog_enabled_) {
-        switch (fog_mode_) {
-            case rp::FogMode::linear:         fog_mode_f = 1; break;
-            case rp::FogMode::exponential:    fog_mode_f = 2; break;
-            case rp::FogMode::exponential_sq: fog_mode_f = 3; break;
-            default: break;
-        }
-    }
-    pc.fog_params   = glm::vec4(fog_mode_f, fog_start_, fog_end_, fog_density_);
-    // Apply tint from DrawCall
-    pc.state_colour = glm::vec4(state_colour_[0] * dc.tint_color[0],
-                                state_colour_[1] * dc.tint_color[1],
-                                state_colour_[2] * dc.tint_color[2],
-                                state_colour_[3] * dc.tint_color[3]);
-    pc.fog_colour   = glm::vec4(fog_colour_[0], fog_colour_[1],
-                                fog_colour_[2], fog_colour_[3]);
-    pc.alpha_ref    = alpha_ref_;
-    pc.inv_gamma    = inv_gamma_;
-    pc.flags        = ((textured && texture_enabled_) ? 1u : 0u) |
-                      (alpha_test_enabled_ ? 2u : 0u);
+    glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],
+                   dc.tint_color[2], dc.tint_color[3]);
+    fill_push_constants(&pc, textured, &tint);
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
 
     vkCmdDraw(f.cmd, tvb.vertex_count, 1, 0, 0);
+
+    depth_bias_constant_ = 0;
+    depth_bias_slope_    = 0;
     ++stat_draws_;
 }
 
-// ===================================================================
-// TERRAIN (delegates to existing TerrainRenderer)
-// ===================================================================
-
-void Renderer::chunk_upload(const ChunkUpload& up) {
-    if (!terrain_) return;
-    terrain_->upload_chunk({up.cx, up.cy, up.cz, up.layer},
-                           {up.world_origin[0], up.world_origin[1], up.world_origin[2]},
-                           {up.aabb_min[0], up.aabb_min[1], up.aabb_min[2]},
-                           {up.aabb_max[0], up.aabb_max[1], up.aabb_max[2]},
-                           up.vertex_data, up.vertex_count, up.vertex_stride);
-}
-
-void Renderer::chunk_destroy(int32_t cx, int32_t cy, int32_t cz, uint8_t layer) {
-    if (terrain_) terrain_->destroy_chunk({cx, cy, cz, layer});
-}
-
-void Renderer::chunk_upload_from_cbuff(int cbuff_id, const ChunkUpload& base) {
-    if (!terrain_ || cbuff_id < 0) return;
-    constexpr uint32_t kStride = 32;
-    std::vector<std::byte> combined;
-    uint32_t total = 0;
-    {
-        std::lock_guard lk(cbuf_mu_);
-        if (size_t(cbuff_id) >= cbufs_.size()) return;
-        auto& cb = cbufs_[cbuff_id];
-        if (!cb.valid) return;
-        size_t est = 0;
-        for (auto& d : cb.draws) est += d.verts.size() * 6 / 4;
-        combined.reserve(est);
-        for (auto& d : cb.draws) {
-            if (d.primType != 0x0007) continue;
-            uint32_t v = uint32_t(d.verts.size() / kStride);
-            if (v == 0 || v % 4 != 0) continue;
-            for (uint32_t q = 0; q < v/4; ++q) {
-                const std::byte* b = d.verts.data() + q * 4 * kStride;
-                auto push = [&](uint32_t i) {
-                    combined.insert(combined.end(), b+i*kStride, b+(i+1)*kStride);
-                };
-                push(0); push(1); push(2); push(0); push(2); push(3);
-            }
-            total += (v/4) * 6;
-        }
-    }
-    if (total == 0) return;
-    ChunkUpload up = base;
-    up.vertex_data = combined.data();
-    up.vertex_count = total;
-    up.vertex_stride = kStride;
-    chunk_upload(up);
-}
-
-void Renderer::render_terrain(const float* mvp_4x4, const float* frustum_24, uint8_t layer) {
-    if (!terrain_ || !frame_active_ || !mvp_4x4 || !frustum_24) return;
-
-    {
-        std::lock_guard lk(tex_mu_);
-        int tex = bound_tex_;
-        if (tex > 0 && size_t(tex) < textures_.size() && textures_[tex].ready)
-            terrain_->set_atlas(textures_[tex].view, tex_sampler_);
-        int lm = lightmap_tex_;
-        if (lm > 0 && size_t(lm) < textures_.size() && textures_[lm].ready)
-            terrain_->set_lightmap(textures_[lm].view, tex_sampler_lm_);
-    }
-
-    auto& f = frame();
-    ensure_pass();
-
-    glm::mat4 mvp; std::memcpy(&mvp[0][0], mvp_4x4, 64);
-    std::array<glm::vec4, 6> frustum;
-    for (int i = 0; i < 6; ++i)
-        frustum[i] = glm::vec4(frustum_24[i*4], frustum_24[i*4+1],
-                               frustum_24[i*4+2], frustum_24[i*4+3]);
-
-    plce::vk_render::TerrainRenderer::FogParams fog{};
-    if (fog_enabled_) {
-        switch (fog_mode_) {
-            case rp::FogMode::linear: fog.params.x = 1; break;
-            case rp::FogMode::exponential: fog.params.x = 2; break;
-            case rp::FogMode::exponential_sq: fog.params.x = 3; break;
-            default: break;
-        }
-    }
-    fog.params.y = fog_start_; fog.params.z = fog_end_; fog.params.w = fog_density_;
-    fog.colour = glm::vec4(fog_colour_[0], fog_colour_[1], fog_colour_[2], fog_colour_[3]);
-
-    const auto& cam_mv = mv_stack_.back();
-    glm::mat3 cr(cam_mv); glm::vec3 ct(cam_mv[3]);
-    glm::vec3 cw = -glm::inverse(cr) * ct;
-
-    glm::vec4 tint(state_colour_[0], state_colour_[1], state_colour_[2], state_colour_[3]);
-    terrain_->render(f.cmd, mvp, frustum, uint32_t(layer), glm::vec4(cw, 0), fog, tint);
-
-    pso_dirty_ = true;
-}
-
-void Renderer::set_terrain_atlas(int tex_id) {
-    if (!terrain_) return;
-    std::lock_guard lk(tex_mu_);
-    if (tex_id <= 0 || size_t(tex_id) >= textures_.size()) return;
-    auto& t = textures_[tex_id];
-    if (!t.ready || !t.view) return;
-    terrain_->set_atlas(t.view, tex_sampler_);
-}
-
-}  // namespace plce::vk2
+}  // namespace plce::vk3
 
 // ===================================================================
-// FACTORY (replaces make_vulkan_render_path)
+// FACTORY
 // ===================================================================
 
 std::unique_ptr<rp::IRenderPath> make_vulkan_render_path(SDL_Window* window) {
-    return std::make_unique<plce::vk2::Renderer>(window);
+    return std::make_unique<plce::vk3::Renderer>(window);
 }
