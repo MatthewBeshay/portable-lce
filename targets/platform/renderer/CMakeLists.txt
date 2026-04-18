@@ -6,6 +6,7 @@ if(PLCE_RENDERER STREQUAL "vulkan")
         vk/VulkanRenderPath.cpp
         vk2/Device.cpp
         vk2/FrameContext.cpp
+        vk2/PipelineCache.cpp
         vk2/Swapchain.cpp
         vk/render/ChunkArena.cpp
         vk/render/ChunkMetadata.cpp
