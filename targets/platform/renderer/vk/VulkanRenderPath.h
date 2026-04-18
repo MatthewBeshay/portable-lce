@@ -243,8 +243,17 @@ private:
     // can race frame N's vertex read of the same slot, producing visible
     // flicker. Serialising fixes the race; the throughput cost is small
     // for the kind of scenes we render.
-    static constexpr uint32_t kFramesInFlight = 1;
+    static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkDeviceSize kTransientVbSize = 128ull * 1024 * 1024;
+    // Persistent staging buffer for texture uploads. Avoids per-upload
+    // vmaCreateBuffer/vmaDestroyBuffer churn (lightmap updates 40x/sec).
+    static constexpr VkDeviceSize kStagingBufSize = 16ull * 1024 * 1024;
+    VkBuffer      staging_buf_    = VK_NULL_HANDLE;
+    VmaAllocation staging_alloc_  = nullptr;
+    std::byte*    staging_mapped_ = nullptr;
+    // Reusable one-shot command pool for uploads (avoids per-upload pool
+    // create/destroy).
+    VkCommandPool upload_pool_ = VK_NULL_HANDLE;
 
     struct PerFrame {
         VkCommandPool   pool   = VK_NULL_HANDLE;
@@ -484,10 +493,26 @@ private:
     // CBuff* (display list) record/replay store. Recording state is
     // per-thread (chunk meshers run on worker threads); the shared pool is
     // mutex-protected. Same model as the bgfx backend.
-    struct CBuff {
-        std::vector<CBuffDraw> draws;
-        bool valid = false;
+    //
+    // Each CBuff owns a persistent device-local VkBuffer that's uploaded
+    // ONCE at CBuffEnd time (matching bgfx's createDynamicVertexBuffer
+    // pattern). CBuffCall then just binds the buffer and issues draws
+    // with offsets — no per-frame transient copies.
+    struct CBuffSubDraw {
+        uint32_t vertex_offset = 0;  // byte offset into vb
+        uint32_t vertex_count  = 0;
+        int      prim_type     = 0;
     };
+    struct CBuff {
+        std::vector<CBuffDraw> draws;    // raw recorded draws (for chunk_upload_from_cbuff)
+        std::vector<CBuffSubDraw> gpu_draws;  // pre-baked draw commands
+        VkBuffer      vb     = VK_NULL_HANDLE;
+        VmaAllocation alloc  = nullptr;
+        uint32_t      vb_size = 0;
+        bool valid    = false;
+        bool uploaded = false;
+    };
+    void cbuff_upload(CBuff& cb);
     std::vector<CBuff> cbuffs_;
     mutable std::mutex cbuffs_mutex_;
     mutable std::mutex textures_mutex_;

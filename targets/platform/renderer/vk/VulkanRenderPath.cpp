@@ -103,6 +103,30 @@ VulkanRenderPath::VulkanRenderPath(SDL_Window* window) : window_(window) {
     create_pipeline_layout();
     create_quad_index_buffer();
     create_per_frame();
+
+    // Persistent staging buffer for texture uploads (avoids per-upload alloc).
+    {
+        VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size = kStagingBufSize;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                   VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo info{};
+        vmaCreateBuffer(allocator_, &bci, &ai, &staging_buf_, &staging_alloc_,
+                        &info);
+        staging_mapped_ = static_cast<std::byte*>(info.pMappedData);
+    }
+    // Reusable command pool for one-shot uploads.
+    {
+        VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        ci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+                   VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        ci.queueFamilyIndex = graphics_family_;
+        vkCreateCommandPool(device_, &ci, nullptr, &upload_pool_);
+    }
+
     default_texture_ = ensure_default_texture();
     bound_texture_   = default_texture_;
 
@@ -120,6 +144,8 @@ VulkanRenderPath::VulkanRenderPath(SDL_Window* window) : window_(window) {
 VulkanRenderPath::~VulkanRenderPath() {
     if (device_) vkDeviceWaitIdle(device_);
     terrain_.reset();
+    if (upload_pool_) vkDestroyCommandPool(device_, upload_pool_, nullptr);
+    if (staging_buf_) vmaDestroyBuffer(allocator_, staging_buf_, staging_alloc_);
     destroy_per_frame();
     destroy_quad_index_buffer();
     destroy_all_pipelines();
@@ -499,7 +525,6 @@ VkPipeline VulkanRenderPath::ensure_pipeline(const PsoKey& key) {
     // No back-face culling for lines - they have no winding.
     rs.cullMode = (key.lines || !key.cull_back) ? VK_CULL_MODE_NONE
                                                 : VK_CULL_MODE_BACK_BIT;
-    // We Y-flip in the shader so vertex winding stays GL-style.
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
     // bgfx disables hardware depth bias entirely and instead applies
@@ -843,38 +868,19 @@ void VulkanRenderPath::upload_texture(int idx, int width, int height,
     w.pImageInfo = &dii;
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
 
-    // Upload pixels via a host-visible staging buffer + immediate copy. The
-    // game uploads textures one-shot during init; this is fine here.
+    // Upload pixels via persistent staging buffer + reusable command pool.
     VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size = bytes;
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VmaAllocationCreateInfo sai{};
-    sai.usage = VMA_MEMORY_USAGE_AUTO;
-    sai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    VkBuffer staging = VK_NULL_HANDLE;
-    VmaAllocation staging_alloc = nullptr;
-    VmaAllocationInfo staging_info{};
-    vk_check(vmaCreateBuffer(allocator_, &bci, &sai, &staging, &staging_alloc,
-                             &staging_info),
-             "vmaCreateBuffer(tex staging)");
-    std::memcpy(staging_info.pMappedData, pixels, bytes);
+    if (bytes > kStagingBufSize) return;  // oversized texture, skip
+    std::memcpy(staging_mapped_, pixels, bytes);
 
-    // One-time submit cmd buffer.
-    VkCommandPoolCreateInfo pci2{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    pci2.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    pci2.queueFamilyIndex = graphics_family_;
-    VkCommandPool one_pool = VK_NULL_HANDLE;
-    vkCreateCommandPool(device_, &pci2, nullptr, &one_pool);
     VkCommandBufferAllocateInfo cai{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = one_pool;
+    cai.commandPool = upload_pool_;
     cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cai.commandBufferCount = 1;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     vkAllocateCommandBuffers(device_, &cai, &cmd);
+    VkBuffer staging = staging_buf_;
     VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bbi);
@@ -1002,9 +1008,8 @@ void VulkanRenderPath::upload_texture(int idx, int width, int height,
     vkQueueSubmit2(graphics_queue_, 1, &si2, VK_NULL_HANDLE);
     vkQueueWaitIdle(graphics_queue_);
 
-    vmaDestroyBuffer(allocator_, staging, staging_alloc);
-    vkFreeCommandBuffers(device_, one_pool, 1, &cmd);
-    vkDestroyCommandPool(device_, one_pool, nullptr);
+    // Staging buffer and pool are persistent — just reset the cmd buffer.
+    vkResetCommandBuffer(cmd, 0);
 
     t.ready = true;
 }
@@ -1933,6 +1938,12 @@ int VulkanRenderPath::CBuffCreate(int n) {
 
 void VulkanRenderPath::CBuffDeleteAll() {
     std::lock_guard lk(cbuffs_mutex_);
+    vkDeviceWaitIdle(device_);
+    for (auto& cb : cbuffs_) {
+        if (cb.vb) {
+            vmaDestroyBuffer(allocator_, cb.vb, cb.alloc);
+        }
+    }
     cbuffs_.clear();
     next_cbuff_ = 1;
     t_rec.cbuff_id = -1;
@@ -1947,8 +1958,18 @@ void VulkanRenderPath::CBuffStart(int index, bool /*full*/) {
 void VulkanRenderPath::CBuffClear(int index) {
     std::lock_guard lk(cbuffs_mutex_);
     if (index < 0 || size_t(index) >= cbuffs_.size()) return;
-    cbuffs_[index].draws.clear();
-    cbuffs_[index].valid = false;
+    auto& cb = cbuffs_[index];
+    cb.draws.clear();
+    cb.gpu_draws.clear();
+    if (cb.vb) {
+        vkDeviceWaitIdle(device_);
+        vmaDestroyBuffer(allocator_, cb.vb, cb.alloc);
+        cb.vb = VK_NULL_HANDLE;
+        cb.alloc = nullptr;
+        cb.vb_size = 0;
+    }
+    cb.valid = false;
+    cb.uploaded = false;
 }
 
 int VulkanRenderPath::CBuffSize(int index) {
@@ -1965,26 +1986,252 @@ void VulkanRenderPath::CBuffEnd() {
     if (size_t(id) >= cbuffs_.size()) {
         cbuffs_.resize(size_t(id) + 1);
     }
-    cbuffs_[id].draws = std::move(t_rec.draws);
-    cbuffs_[id].valid = !cbuffs_[id].draws.empty();
+    auto& cb = cbuffs_[id];
+    cb.draws = std::move(t_rec.draws);
+    cb.valid = !cb.draws.empty();
+    cb.uploaded = false;  // mark for lazy upload on first CBuffCall
     t_rec.draws.clear();
+}
+
+void VulkanRenderPath::cbuff_upload(CBuff& cb) {
+    // Flatten all recorded draws into one contiguous vertex buffer,
+    // expanding GL_QUADS to triangle lists (same as DrawVertices).
+    // This runs ONCE at CBuffEnd time, not per frame.
+    constexpr uint32_t kStride = 32;
+    std::vector<std::byte> combined;
+    cb.gpu_draws.clear();
+
+    for (auto& d : cb.draws) {
+        uint32_t verts = uint32_t(d.verts.size() / kStride);
+        if (verts == 0) continue;
+        uint32_t byte_offset = uint32_t(combined.size());
+
+        if (d.primType == 0x0007) {  // GL_QUADS → triangle list
+            if (verts % 4 != 0) continue;
+            uint32_t quads = verts / 4;
+            for (uint32_t q = 0; q < quads; ++q) {
+                const std::byte* base = d.verts.data() + q * 4 * kStride;
+                auto push = [&](uint32_t i) {
+                    combined.insert(combined.end(),
+                                   base + i * kStride,
+                                   base + (i + 1) * kStride);
+                };
+                push(0); push(1); push(2);
+                push(0); push(2); push(3);
+            }
+            CBuffSubDraw sd{};
+            sd.vertex_offset = byte_offset;
+            sd.vertex_count  = quads * 6;
+            sd.prim_type     = 0x0004;  // TRIANGLE_LIST
+            cb.gpu_draws.push_back(sd);
+        } else {
+            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
+            CBuffSubDraw sd{};
+            sd.vertex_offset = byte_offset;
+            sd.vertex_count  = verts;
+            sd.prim_type     = d.primType;
+            cb.gpu_draws.push_back(sd);
+        }
+    }
+
+    if (combined.empty()) { cb.uploaded = false; return; }
+
+    // Create or resize the persistent VkBuffer.
+    uint32_t needed = uint32_t(combined.size());
+    if (cb.vb && cb.vb_size < needed) {
+        vkDeviceWaitIdle(device_);
+        vmaDestroyBuffer(allocator_, cb.vb, cb.alloc);
+        cb.vb = VK_NULL_HANDLE;
+        cb.alloc = nullptr;
+    }
+    if (!cb.vb) {
+        VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size = needed;
+        bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        vmaCreateBuffer(allocator_, &bci, &ai, &cb.vb, &cb.alloc, nullptr);
+        cb.vb_size = needed;
+    }
+
+    // Upload via staging buffer + one-shot command.
+    VkBufferCreateInfo sci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    sci.size = needed;
+    sci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VmaAllocationCreateInfo sai{};
+    sai.usage = VMA_MEMORY_USAGE_AUTO;
+    sai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation staging_alloc = nullptr;
+    VmaAllocationInfo staging_info{};
+    vmaCreateBuffer(allocator_, &sci, &sai, &staging, &staging_alloc, &staging_info);
+    std::memcpy(staging_info.pMappedData, combined.data(), needed);
+
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pci.queueFamilyIndex = graphics_family_;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    vkCreateCommandPool(device_, &pci, nullptr, &pool);
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(device_, &cai, &cmd);
+    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bbi);
+    VkBufferCopy region{0, 0, needed};
+    vkCmdCopyBuffer(cmd, staging, cb.vb, 1, &region);
+    vkEndCommandBuffer(cmd);
+    VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    csi.commandBuffer = cmd;
+    VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    si.commandBufferInfoCount = 1;
+    si.pCommandBufferInfos = &csi;
+    vkQueueSubmit2(graphics_queue_, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphics_queue_);
+    vmaDestroyBuffer(allocator_, staging, staging_alloc);
+    vkFreeCommandBuffers(device_, pool, 1, &cmd);
+    vkDestroyCommandPool(device_, pool, nullptr);
+
+    cb.uploaded = true;
 }
 
 bool VulkanRenderPath::CBuffCall(int index, bool /*full*/) {
     if (index < 0 || !frame_active_) return false;
-    // Snapshot the draws under the lock so workers can't move the vector
-    // out from under us mid-replay.
-    std::vector<CBuffDraw> snapshot;
+
+    // Lazy upload on first call (CBuffEnd runs on worker threads
+    // where Vulkan queue submission is unsafe).
+    VkBuffer vb = VK_NULL_HANDLE;
+    std::vector<CBuffSubDraw> draws;
     {
         std::lock_guard lk(cbuffs_mutex_);
         if (size_t(index) >= cbuffs_.size()) return false;
         auto& cb = cbuffs_[index];
         if (!cb.valid || cb.draws.empty()) return false;
-        snapshot = cb.draws;  // copy; bgfx-style pool already does this
+        if (!cb.uploaded) {
+            cbuff_upload(cb);
+            if (!cb.uploaded) return false;
+        }
+        vb = cb.vb;
+        draws = cb.gpu_draws;
     }
-    for (auto& d : snapshot) {
-        DrawVertices(d.primType, int(d.verts.size() / 32), d.verts.data(),
-                     d.vertexType, d.shaderType);
+
+    PerFrame& f = frames_[frame_index_];
+    ensure_render_pass(f);
+
+    // Bind pipeline for current state (set by game before CBuffCall).
+    if (pso_key_dirty_ || !(current_pso_key_ == last_bound_pso_key_)) {
+        VkPipeline pipeline = ensure_pipeline(current_pso_key_);
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        last_bound_pso_key_ = current_pso_key_;
+        pso_key_dirty_ = false;
+    }
+    vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+
+    // Bind texture.
+    VkDescriptorSet ds = VK_NULL_HANDLE;
+    bool textured_active = false;
+    {
+        std::lock_guard lk(textures_mutex_);
+        int tex = (bound_texture_ > 0 &&
+                   size_t(bound_texture_) < textures_.size() &&
+                   textures_[bound_texture_].ready)
+                      ? bound_texture_ : default_texture_;
+        ds = textures_[tex].desc_set;
+        textured_active = (tex != default_texture_);
+    }
+    if (ds) {
+        vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_layout_, 0, 1, &ds, 0, nullptr);
+    }
+
+    // Build push constants ONCE for the entire CBuffCall (same MVP for
+    // all draws in the display list — the game sets the matrix before
+    // calling CBuffCall, not per-draw).
+    const glm::mat4& mv = modelview_stack_.back();
+    struct VertPC {
+        glm::mat4 mvp;
+        glm::vec4 nm_col0, nm_col1, nm_col2;
+        glm::vec4 chunk_offset_lit;
+        glm::vec4 light0_dir, light1_dir, light_diffuse, light_ambient;
+    } vpc{};
+    static_assert(sizeof(VertPC) == 192);
+    vpc.mvp = projection_stack_.back() * mv;
+    constexpr float Z_BIAS_EPSILON = 6e-5f;
+    vpc.mvp[3][2] += depth_bias_constant_ * Z_BIAS_EPSILON;
+    depth_bias_constant_ = 0.0f;
+    depth_bias_slope_    = 0.0f;
+    glm::mat3 nm(mv);
+    const glm::mat4& tm = texture_stack_.back();
+    vpc.nm_col0 = glm::vec4(nm[0], tm[0][0]);
+    vpc.nm_col1 = glm::vec4(nm[1], tm[1][1]);
+    vpc.nm_col2 = glm::vec4(nm[2], tm[3][0]);
+    vpc.chunk_offset_lit = glm::vec4(chunk_offset_[0], chunk_offset_[1],
+                                     chunk_offset_[2],
+                                     lighting_enabled_ ? 1.0f : 0.0f);
+    vpc.light0_dir = glm::vec4(light0_dir_eye_, tm[3][1]);
+    vpc.light1_dir = glm::vec4(light1_dir_eye_, mv[3][0]);
+    vpc.light_diffuse = glm::vec4(light_diffuse_, mv[3][1]);
+    vpc.light_ambient = glm::vec4(light_ambient_, mv[3][2]);
+    vkCmdPushConstants(f.cmd, pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
+                       0, sizeof(vpc), &vpc);
+
+    struct FragPC {
+        uint32_t flags;
+        float    alpha_ref;
+        float    inv_gamma;
+        uint32_t pad;
+        float    state_colour[4];
+        float    fog_params[4];
+        float    fog_colour[4];
+    } pc{};
+    pc.flags = ((textured_active && texture_enabled_) ? 1u : 0u) |
+               (alpha_test_enabled_ ? 2u : 0u);
+    pc.alpha_ref = alpha_ref_;
+    pc.inv_gamma = inv_gamma_;
+    pc.state_colour[0] = state_colour_[0];
+    pc.state_colour[1] = state_colour_[1];
+    pc.state_colour[2] = state_colour_[2];
+    pc.state_colour[3] = state_colour_[3];
+    if (fog_enabled_) {
+        switch (fog_mode_) {
+            case rp::FogMode::linear:         pc.fog_params[0] = 1.0f; break;
+            case rp::FogMode::exponential:    pc.fog_params[0] = 2.0f; break;
+            case rp::FogMode::exponential_sq: pc.fog_params[0] = 3.0f; break;
+            default:                          pc.fog_params[0] = 0.0f; break;
+        }
+    }
+    pc.fog_params[1] = fog_start_;
+    pc.fog_params[2] = fog_end_;
+    pc.fog_params[3] = fog_density_;
+    pc.fog_colour[0] = fog_colour_[0];
+    pc.fog_colour[1] = fog_colour_[1];
+    pc.fog_colour[2] = fog_colour_[2];
+    pc.fog_colour[3] = fog_colour_[3];
+    vkCmdPushConstants(f.cmd, pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+                       192, sizeof(pc), &pc);
+
+    // Issue each sub-draw from the persistent buffer.
+    for (auto& sd : draws) {
+        VkDeviceSize off = VkDeviceSize(sd.vertex_offset);
+        vkCmdBindVertexBuffers(f.cmd, 0, 1, &vb, &off);
+
+        VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        switch (sd.prim_type) {
+            case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
+            case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP; break;
+            case 0x0004: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
+            case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+            case 0x0006: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
+        }
+        vkCmdSetPrimitiveTopology(f.cmd, topo);
+        vkCmdDraw(f.cmd, sd.vertex_count, 1, 0, 0);
+        ++stat_draws_total_;
+        if (textured_active) ++stat_draws_textured_;
     }
     return true;
 }
