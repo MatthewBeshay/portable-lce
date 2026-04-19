@@ -1,5 +1,6 @@
 #include "Tesselator.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 

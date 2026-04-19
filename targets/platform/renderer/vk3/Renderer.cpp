@@ -1210,7 +1210,7 @@ int Renderer::CBuffCreate(int n) {
 void Renderer::CBuffDeleteAll() {
     std::lock_guard lk(cbuf_mu_);
     for (auto& cb : cbufs_)
-        if (cb.vb) frame().deletions.push_buffer(dev_.allocator(), cb.vb, cb.alloc);
+        if (cb.vb) vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
     cbufs_.clear();
     next_cbuf_ = 1;
     t_rec.id = -1; t_rec.draws.clear();
@@ -1224,7 +1224,9 @@ void Renderer::CBuffClear(int index) {
     auto& cb = cbufs_[index];
     cb.draws.clear(); cb.gpu_draws.clear();
     if (cb.vb) {
-        frame().deletions.push_buffer(dev_.allocator(), cb.vb, cb.alloc);
+        // Destroy immediately — CBuffClear is called from worker threads
+        // where frame().deletions is not safe to access.
+        vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
         cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr; cb.vb_size = 0;
     }
     cb.valid = cb.uploaded = false;
