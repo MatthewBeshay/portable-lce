@@ -480,14 +480,11 @@ void Chunk::rebuild() {
 
                             RenderPath.CBuffStart(lists + currentLayer);
                             RenderPath.StateSetDepthMask(true);            // 4J added
-#if defined(PLCE_VK_GPU_CHUNKS)
-                            // Vulkan TerrainRenderer expects the 32-byte
-                            // standard format; the compact 16-byte format
-                            // would need a custom unpack in terrain.vert.
+                            // Vulkan R8G8B8A8_UNORM needs 32-byte standard
+                            // format. Compact 16-byte format packs color
+                            // with ARGB bit extraction that doesn't match
+                            // RGBA vertex packing.
                             t->useCompactVertices(false);
-#else
-                            t->useCompactVertices(true);  // 4J added
-#endif
                             t->begin();
                             t->offset((float)(-this->x), (float)(-this->y),
                                       (float)(-this->z));

@@ -1255,6 +1255,24 @@ void Renderer::cbuf_upload(CBuff& cb) {
     std::vector<std::byte> combined;
     cb.gpu_draws.clear();
 
+    // CP-DRAW: dump first CBuffDraw's first 3 vertex colors (no filter)
+    {
+        static int s_cd = 0;
+        if (s_cd < 3 && !cb.draws.empty()) {
+            auto& d0 = cb.draws[0];
+            uint32_t nverts = uint32_t(d0.verts.size()) / kStride;
+            if (nverts >= 1) {
+                auto* v = reinterpret_cast<const uint8_t*>(d0.verts.data());
+                std::fprintf(stderr, "[CP-DRW] draws=%zu verts=%u v0_col=[%02x,%02x,%02x,%02x]",
+                             cb.draws.size(), nverts, v[20], v[21], v[22], v[23]);
+                if (nverts >= 2)
+                    std::fprintf(stderr, " v1_col=[%02x,%02x,%02x,%02x]", v[52], v[53], v[54], v[55]);
+                std::fprintf(stderr, "\n");
+                ++s_cd;
+            }
+        }
+    }
+
     for (auto& d : cb.draws) {
         const void* src = d.verts.data();
         int vert_count;
@@ -1305,6 +1323,20 @@ void Renderer::cbuf_upload(CBuff& cb) {
         }
     }
     if (combined.empty()) { cb.uploaded = false; return; }
+
+    // CP-UPLOAD: dump first non-zero color from combined buffer before GPU upload
+    {
+        static int s_cpu = 0;
+        uint32_t vc = uint32_t(combined.size()) / kStride;
+        for (uint32_t i = 0; i < vc && s_cpu < 2; ++i) {
+            auto* c = reinterpret_cast<const uint8_t*>(combined.data()) + i * kStride + 20;
+            if (c[0] != 0 && c[0] != 0xff) {
+                std::fprintf(stderr, "[CP-UPL] vert %u color=[%02x,%02x,%02x,%02x]\n",
+                             i, c[0], c[1], c[2], c[3]);
+                ++s_cpu;
+            }
+        }
+    }
 
     uint32_t needed = uint32_t(combined.size());
     if (cb.vb && cb.vb_size < needed) {
