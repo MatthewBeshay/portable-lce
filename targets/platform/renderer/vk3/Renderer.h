@@ -303,6 +303,12 @@ private:
     int next_cbuf_ = 1;
     mutable std::mutex cbuf_mu_;
 
+    // Thread-safe deferred buffer destruction. Worker threads push here
+    // instead of accessing frame().deletions (which is main-thread only).
+    struct PendingDestroy { VkBuffer buf; VmaAllocation alloc; };
+    std::vector<PendingDestroy> pending_destroys_;
+    std::mutex pending_mu_;
+
     // Framebuffer info
     rp::FrameFramebuffer fb_{};
     SDL_Window* window_ = nullptr;

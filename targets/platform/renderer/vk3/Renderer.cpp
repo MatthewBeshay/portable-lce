@@ -329,6 +329,9 @@ Renderer::Renderer(SDL_Window* window)
 
 Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
+    for (auto& pd : pending_destroys_)
+        vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
+    pending_destroys_.clear();
     for (auto& cb : cbufs_)
         if (cb.vb) vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
     if (upload_pool_) vkDestroyCommandPool(dev_.handle(), upload_pool_, nullptr);
@@ -390,6 +393,15 @@ void Renderer::StartFrame() {
     }
 
     vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
+
+    // Flush deferred buffer destructions (from worker thread CBuffClear).
+    // Safe now because the fence wait guarantees the GPU is done.
+    {
+        std::lock_guard lk(pending_mu_);
+        for (auto& pd : pending_destroys_)
+            vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
+        pending_destroys_.clear();
+    }
 
     VkResult acq = vkAcquireNextImageKHR(dev_.handle(), swap_.handle(),
                                           UINT64_MAX, f.sem_acquired,
@@ -1319,8 +1331,9 @@ int Renderer::CBuffCreate(int n) {
 
 void Renderer::CBuffDeleteAll() {
     std::lock_guard lk(cbuf_mu_);
-    for (auto& cb : cbufs_)
-        if (cb.vb) vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
+    { std::lock_guard lk2(pending_mu_);
+      for (auto& cb : cbufs_)
+          if (cb.vb) pending_destroys_.push_back({cb.vb, cb.alloc}); }
     cbufs_.clear();
     next_cbuf_ = 1;
     t_rec.id = -1; t_rec.draws.clear();
@@ -1334,9 +1347,10 @@ void Renderer::CBuffClear(int index) {
     auto& cb = cbufs_[index];
     cb.draws.clear(); cb.gpu_draws.clear();
     if (cb.vb) {
-        // Destroy immediately — CBuffClear is called from worker threads
-        // where frame().deletions is not safe to access.
-        vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
+        // Defer destruction — CBuffClear is called from worker threads.
+        // The GPU may still be reading this buffer from a previous frame.
+        { std::lock_guard lk2(pending_mu_);
+          pending_destroys_.push_back({cb.vb, cb.alloc}); }
         cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr; cb.vb_size = 0;
     }
     cb.valid = cb.uploaded = false;
