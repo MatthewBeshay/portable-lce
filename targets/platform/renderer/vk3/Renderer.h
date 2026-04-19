@@ -275,8 +275,13 @@ private:
     };
     std::vector<TexSlot> textures_;
     int default_tex_ = 0;
+    int default_lm_  = 0;
     int bound_tex_   = 0;
     int lightmap_tex_ = 0;
+    SamplerKey lm_sampler_key_{VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                               VK_SAMPLER_MIPMAP_MODE_NEAREST,
+                               VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                               VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE};
     uint32_t next_material_id_ = 0;
     mutable std::mutex tex_mu_;
 
@@ -313,6 +318,7 @@ private:
     void begin_pass();
     void end_pass();
     int  ensure_default_texture();
+    int  ensure_default_lightmap();
     void upload_texture(int idx, int w, int h, const void* pixels);
     void update_tex_descriptor(TexSlot& t);
     void cbuf_upload(CBuff& cb);

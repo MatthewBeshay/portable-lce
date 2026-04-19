@@ -22,13 +22,14 @@ layout(push_constant) uniform PC {
     vec4 fog_colour;        // 224
     float alpha_ref;        // 240
     float inv_gamma;        // 244
-    uint flags;             // 248  bit0=textured, bit1=alpha_test
-    uint _pad;              // 252
+    uint flags;             // 248  bit0=textured, bit1=alpha_test, bit2=lightmap
+    uint global_lm_packed;  // 252  low16=u, high16=v (global lightmap coords)
 } pc;
 
 layout(location = 0) out vec2  v_uv;
 layout(location = 1) out vec4  v_color;
 layout(location = 2) out float v_fog_factor;
+layout(location = 3) out vec2  v_uv1;       // lightmap UV
 
 void main() {
     vec3 world = a_pos + pc.chunk_lit.xyz;
@@ -41,14 +42,21 @@ void main() {
     vec2 tex_offset = vec2(pc.nm2.w, pc.l0.w);
     v_uv = a_uv * tex_scale + tex_offset;
 
-    // Vertex colour — game packs as (R<<24|G<<16|B<<8|A).
-    // Little-endian memory: [A,B,G,R]. R8G8B8A8_UNORM reads bytes as
-    // (R,G,B,A) = (A,B,G,R). The .abgr swizzle restores correct RGBA.
-    // Sentinel: all-zero = use state_colour (base tint).
-    // Vertex colour — Tesselator packs as (r<<24|g<<16|b<<8|a) = ARGB uint32.
-    // On little-endian memory: [a,b,g,r]. R8G8B8A8_UNORM reads (a,b,g,r).
-    // .abgr swizzle extracts (r,g,b,a) = correct RGBA.
-    // Sentinel: all-zero vertex color means "use state_colour instead".
+    // Lightmap UV — raw int16 coords divided by 256 for 0-1 range.
+    // Sentinel: a_lm_raw.x <= -500 means use global lightmap fallback.
+    {
+        vec2 lm;
+        if (a_lm_raw.x <= -500) {
+            lm = vec2(float(pc.global_lm_packed & 0xFFFFu),
+                       float(pc.global_lm_packed >> 16u));
+        } else {
+            lm = vec2(a_lm_raw);
+        }
+        v_uv1 = lm / 256.0;
+    }
+
+    // Vertex colour — RGBA packing, no swizzle needed.
+    // Sentinel: RGB all zero = use state_colour (base tint).
     bool sentinel = all(equal(a_color.rgb, vec3(0.0)));
     vec4 col = sentinel ? pc.state_colour : a_color;
 
