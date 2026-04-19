@@ -1574,15 +1574,11 @@ void LevelRenderer::renderAdvancedClouds(float alpha) {
     FrustumData* pFrustumData = Frustum::getFrustum();
     for (int pass = 0; pass < 2; pass++) {
         if (pass == 0) {
-            // 4J - changed to use blend rather than color mask to avoid writing
-            // to frame buffer, to work with our command buffers
-            RenderPath.StateSetBlendFunc(rp::BlendFactor::zero, rp::BlendFactor::one);
-            //				RenderPath.StateSetWriteEnable(false, false, false, false);
+            // Depth-only pass: disable color writes instead of blend hack
+            RenderPath.StateSetWriteEnable(false, false, false, false);
         } else {
-            // 4J - changed to use blend rather than color mask to avoid writing
-            // to frame buffer, to work with our command buffers
+            RenderPath.StateSetWriteEnable(true, true, true, true);
             RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-            //				RenderPath.StateSetWriteEnable(true, true, true, true);
         }
         for (int xPos = -radius + 1; xPos <= radius; xPos++) {
             for (int zPos = -radius + 1; zPos <= radius; zPos++) {

@@ -1438,10 +1438,12 @@ void GameRenderer::renderLevel(float a, int64_t until) {
                 (void)0;
             }
 
-            RenderPath.StateSetBlendFunc(rp::BlendFactor::zero, rp::BlendFactor::one);
+            // Depth-only pass: disable color writes instead of blend hack
+            RenderPath.StateSetWriteEnable(false, false, false, false);
             int visibleWaterChunks =
                 levelRenderer->render(cameraEntity, 1, a, updateChunks);
 
+            RenderPath.StateSetWriteEnable(true, true, true, true);
             RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha,
                                                rp::BlendFactor::one_minus_src_alpha);
 

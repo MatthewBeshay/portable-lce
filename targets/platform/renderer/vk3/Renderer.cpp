@@ -416,6 +416,10 @@ void Renderer::StartFrame() {
 
     f.begin(dev_.handle());
 
+    // Reset pipeline state to safe defaults each frame.
+    // Prevents stale blend/depth state from a previous frame's draw
+    // leaking into the next frame's terrain draws (causes flashing).
+    pso_key_ = PsoKey{};
     pso_dirty_    = true;
     pass_active_  = false;
     frame_active_ = true;
@@ -1347,8 +1351,6 @@ void Renderer::CBuffClear(int index) {
     auto& cb = cbufs_[index];
     cb.draws.clear(); cb.gpu_draws.clear();
     if (cb.vb) {
-        // Defer destruction — CBuffClear is called from worker threads.
-        // The GPU may still be reading this buffer from a previous frame.
         { std::lock_guard lk2(pending_mu_);
           pending_destroys_.push_back({cb.vb, cb.alloc}); }
         cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr; cb.vb_size = 0;
