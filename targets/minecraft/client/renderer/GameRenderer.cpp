@@ -1357,6 +1357,7 @@ void GameRenderer::renderLevel(float a, int64_t until) {
 
         setupFog(0, a);
         RenderPath.StateSetFogEnable(true);
+        RenderPath.StateSetBlendEnable(false);  // ensure opaque terrain has no blend
         mc->textures->bindTexture(
             &TextureAtlas::LOCATION_BLOCKS);  // 4J was "/terrain.png"
         Lighting::turnOff();
