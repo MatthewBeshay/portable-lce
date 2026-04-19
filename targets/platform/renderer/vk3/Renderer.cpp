@@ -1395,6 +1395,7 @@ draw:
 
     PushConstants pc{};
     fill_push_constants(&pc, textured);
+
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);

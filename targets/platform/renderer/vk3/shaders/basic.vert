@@ -49,7 +49,7 @@ void main() {
     // On little-endian memory: [a,b,g,r]. R8G8B8A8_UNORM reads (a,b,g,r).
     // .abgr swizzle extracts (r,g,b,a) = correct RGBA.
     // Sentinel: all-zero vertex color means "use state_colour instead".
-    bool sentinel = all(equal(a_color, vec4(0.0)));
+    bool sentinel = all(equal(a_color.rgb, vec3(0.0)));
     vec4 col = sentinel ? pc.state_colour : a_color;
 
     // Per-vertex directional lighting (2 lights + ambient)

@@ -1,5 +1,6 @@
 #include "Tesselator.h"
 
+#include <cstdio>
 #include <vector>
 
 #include "minecraft/client/MemoryTracker.h"
