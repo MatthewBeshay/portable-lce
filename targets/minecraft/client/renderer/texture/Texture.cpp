@@ -285,8 +285,9 @@ void Texture::transferFromBuffer(const std::vector<int>& buffer) {
     // 	int byteRemapRGBA[] = { 3, 0, 1, 2 };
     // 	int byteRemapBGRA[] = { 3, 2, 1, 0 };
     // #else
-    int byteRemapRGBA[] = {0, 1, 2, 3};
-    int byteRemapBGRA[] = {2, 1, 0, 3};
+    // ARGB int → [R,G,B,A] bytes for VK_FORMAT_R8G8B8A8_UNORM
+    int byteRemapRGBA[] = {3, 0, 1, 2};
+    int byteRemapBGRA[] = {3, 2, 1, 0};
     // #endif
     int* byteRemap = ((format == TFMT_BGRA) ? byteRemapBGRA : byteRemapRGBA);
 

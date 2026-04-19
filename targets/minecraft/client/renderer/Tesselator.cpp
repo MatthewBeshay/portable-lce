@@ -235,8 +235,8 @@ void Tesselator::color(int r, int g, int b, int a) {
     if (a < 0) a = 0;
 
     hasColor = true;
-    // 4J - removed little-endian option
-    col = (r << 24) | (g << 16) | (b << 8) | (a);
+    // Pack RGBA: LE bytes = [R,G,B,A] matching VK_FORMAT_R8G8B8A8_UNORM.
+    col = r | (g << 8) | (b << 16) | (a << 24);
 }
 
 void Tesselator::color(std::uint8_t r, std::uint8_t g, std::uint8_t b) {

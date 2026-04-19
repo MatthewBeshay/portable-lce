@@ -73,9 +73,10 @@ void GuiComponent::fill(int x0, int y0, int x1, int y1, int col) {
     RenderPath.StateSetBlendEnable(false);
 }
 
+// Pack RGBA: LE bytes = [R,G,B,A] matching VK_FORMAT_R8G8B8A8_UNORM.
 static uint32_t pack_color(float r, float g, float b, float a) {
-    return (uint32_t(r * 255) << 24) | (uint32_t(g * 255) << 16) |
-           (uint32_t(b * 255) << 8) | uint32_t(a * 255);
+    return uint32_t(r * 255) | (uint32_t(g * 255) << 8) |
+           (uint32_t(b * 255) << 16) | (uint32_t(a * 255) << 24);
 }
 
 void GuiComponent::fillGradient(int x0, int y0, int x1, int y1, int col1,
