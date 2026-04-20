@@ -90,9 +90,14 @@ private:
         // the persistent staging ring. Destroyed in complete_upload.
         VkBuffer        staging_buf   = VK_NULL_HANDLE;
         VmaAllocation   staging_alloc = nullptr;
-        // Ring path: monotonic byte counter at which the upload's reserved
-        // range ends. complete_upload advances staging_ring_tail_ to this
-        // value. Zero when the one-shot fallback was used.
+        // Ring path: monotonic byte counters for the range reserved by
+        // this upload. complete_upload uses the MIN of ring_begin across
+        // all still-pending uploads to advance staging_ring_tail_ — so
+        // tail can never pass a reservation whose GPU copy is still in
+        // flight, even if fences signal in a different order than
+        // reservations were made. ring_end == 0 means this upload took
+        // the one-shot fallback.
+        VkDeviceSize    ring_begin    = 0;
         VkDeviceSize    ring_end      = 0;
         int             texture_idx   = -1;
     };
@@ -103,10 +108,13 @@ private:
 
     // Reservation returned by ring_reserve: the in-buffer offset to
     // memcpy into / reference from vkCmdCopyBufferToImage, plus the
-    // monotonic end counter used to advance the tail on completion.
+    // monotonic begin/end counters used to track the reservation so
+    // complete_upload can clamp tail advancement to the oldest still-
+    // in-flight begin.
     struct RingReservation {
-        VkDeviceSize offset;      // byte offset inside staging_ring_buf_
-        VkDeviceSize end_counter; // store in PendingUpload::ring_end
+        VkDeviceSize offset;        // byte offset inside staging_ring_buf_
+        VkDeviceSize begin_counter; // store in PendingUpload::ring_begin
+        VkDeviceSize end_counter;   // store in PendingUpload::ring_end
     };
 
     /// Reserve a contiguous byte range inside the staging ring for a single

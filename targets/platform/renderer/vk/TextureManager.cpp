@@ -99,8 +99,9 @@ TextureManager::ring_reserve(VkDeviceSize bytes) {
         off = 0;
     }
 
+    const VkDeviceSize begin_counter = staging_ring_head_;
     staging_ring_head_ += aligned;
-    return RingReservation{off, staging_ring_head_};
+    return RingReservation{off, begin_counter, staging_ring_head_};
 }
 
 // ===================================================================
@@ -140,13 +141,24 @@ void TextureManager::complete_upload(PendingUpload& pu) {
         // One-shot fallback path — destroy the private staging buffer.
         vmaDestroyBuffer(allocator_, pu.staging_buf, pu.staging_alloc);
     } else if (pu.ring_end != 0) {
-        // Ring path — advance the tail. poll_uploads / wait_for_upload call
-        // complete_upload in fence-signal order which matches submit order
-        // on the single graphics queue, so ring_end is always monotonically
-        // non-decreasing here.
+        // Ring path — advance the tail. pu is still live in
+        // pending_uploads_ at this point (poll_uploads / wait_for_upload
+        // erase it only after complete_upload returns), so scan every
+        // OTHER entry and clamp tail to the minimum ring_begin among
+        // them. This ensures the tail never passes the start of a
+        // reservation whose GPU copy is still in flight — the fence
+        // signal order on the graphics queue can differ from the
+        // reservation order if two workers submit between their own
+        // ring_reserve and submit2 calls.
+        VkDeviceSize new_tail = staging_ring_head_;
+        for (const auto& other : pending_uploads_) {
+            if (&other == &pu) continue;
+            if (other.ring_end == 0) continue;  // one-shot fallback entry
+            if (other.ring_begin < new_tail) new_tail = other.ring_begin;
+        }
         std::lock_guard lk(staging_ring_mutex_);
-        if (pu.ring_end > staging_ring_tail_)
-            staging_ring_tail_ = pu.ring_end;
+        if (new_tail > staging_ring_tail_)
+            staging_ring_tail_ = new_tail;
     }
 
     {
@@ -353,6 +365,7 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     std::byte*    src_map       = nullptr;
     VkBuffer      src_buf       = VK_NULL_HANDLE;
     VkDeviceSize  src_offset    = 0;
+    VkDeviceSize  ring_begin    = 0;
     VkDeviceSize  ring_end      = 0;
     VkBuffer      oneshot_buf   = VK_NULL_HANDLE;
     VmaAllocation oneshot_alloc = nullptr;
@@ -360,6 +373,7 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         src_map    = staging_ring_map_ + res->offset;
         src_buf    = staging_ring_.handle();
         src_offset = res->offset;
+        ring_begin = res->begin_counter;
         ring_end   = res->end_counter;
     } else {
         VkBufferCreateInfo stg_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -428,7 +442,8 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     check(dev_->submit2(1, &sub, fence), "tex update submit");
 
     std::lock_guard lk(texture_mutex_);
-    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc, ring_end, idx});
+    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc,
+                                ring_begin, ring_end, idx});
     textures_[idx].ready = false;
 }
 
@@ -536,6 +551,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     std::byte*    src_map       = nullptr;
     VkBuffer      src_buf       = VK_NULL_HANDLE;
     VkDeviceSize  src_offset    = 0;
+    VkDeviceSize  ring_begin    = 0;
     VkDeviceSize  ring_end      = 0;
     VkBuffer      oneshot_buf   = VK_NULL_HANDLE;
     VmaAllocation oneshot_alloc = nullptr;
@@ -543,6 +559,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         src_map    = staging_ring_map_ + res->offset;
         src_buf    = staging_ring_.handle();
         src_offset = res->offset;
+        ring_begin = res->begin_counter;
         ring_end   = res->end_counter;
     } else {
         VkBufferCreateInfo stg_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -661,7 +678,8 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     check(dev_->submit2(1, &sub, fence), "texture upload submit");
 
     std::lock_guard lk(texture_mutex_);
-    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc, ring_end, idx});
+    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc,
+                                ring_begin, ring_end, idx});
 }
 
 namespace {
