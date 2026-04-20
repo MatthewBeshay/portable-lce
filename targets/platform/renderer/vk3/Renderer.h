@@ -272,6 +272,7 @@ private:
         bool            ready = false;
         SamplerKey      sampler_key{};
         bool            sampler_dirty = false;
+        int             bound_lm = -1;  // lightmap index last written to desc binding 1
     };
     std::vector<TextureSlot> textures_;
     int default_tex_ = 0;
@@ -325,6 +326,9 @@ private:
     void update_tex_descriptor(TextureSlot& t);
     void display_list_upload(DisplayList& cb);
     void fill_push_constants(void* out, bool textured, const glm::vec4* tint = nullptr);
+
+    struct BoundTexResult { VkDescriptorSet ds; bool textured; bool lm_active; };
+    BoundTexResult bind_textures(VkCommandBuffer cmd);
 };
 
 }  // namespace plce::vk3

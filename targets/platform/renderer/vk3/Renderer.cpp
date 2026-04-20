@@ -734,6 +734,47 @@ void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* ti
 }
 
 // ===================================================================
+// TEXTURE BINDING HELPER
+// ===================================================================
+
+Renderer::BoundTexResult Renderer::bind_textures(VkCommandBuffer cmd) {
+    VkDescriptorSet ds = VK_NULL_HANDLE;
+    bool textured = false;
+    bool lm_active = false;
+    {
+        std::lock_guard lk(texture_mutex_);
+        int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
+                   textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
+        auto& ts = textures_[tex];
+        if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
+        ds = ts.desc_set;
+        textured = (tex != default_tex_);
+        // Update lightmap binding only when the bound lightmap actually changes.
+        // bound_lm is invalidated (-1) whenever update_tex_descriptor or
+        // upload_texture overwrites the descriptor set's binding 1.
+        if (ds && lightmap_tex_ > 0 && size_t(lightmap_tex_) < textures_.size() &&
+            textures_[lightmap_tex_].ready) {
+            if (ts.bound_lm != lightmap_tex_) {
+                auto& lm = textures_[lightmap_tex_];
+                VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
+                VkDescriptorImageInfo lm_dii{lm_sampler, lm.view,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                wd.dstSet = ds; wd.dstBinding = 1; wd.descriptorCount = 1;
+                wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                wd.pImageInfo = &lm_dii;
+                vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
+                ts.bound_lm = lightmap_tex_;
+            }
+            lm_active = true;
+        }
+    }
+    if (ds) vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                     pipeline_layout_, 0, 1, &ds, 0, nullptr);
+    return {ds, textured, lm_active};
+}
+
+// ===================================================================
 // DRAW
 // ===================================================================
 
@@ -812,35 +853,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     // Dynamic depth bias
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
-    // Texture
-    VkDescriptorSet ds = VK_NULL_HANDLE;
-    bool textured = false;
-    bool lm_active = false;
-    {
-        std::lock_guard lk(texture_mutex_);
-        int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
-                   textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-        auto& ts = textures_[tex];
-        if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
-        ds = ts.desc_set;
-        textured = (tex != default_tex_);
-        // Bind lightmap if active
-        if (ds && lightmap_tex_ > 0 && size_t(lightmap_tex_) < textures_.size() &&
-            textures_[lightmap_tex_].ready) {
-            auto& lm = textures_[lightmap_tex_];
-            VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
-            VkDescriptorImageInfo lm_dii{lm_sampler, lm.view,
-                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            wd.dstSet = ds; wd.dstBinding = 1; wd.descriptorCount = 1;
-            wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            wd.pImageInfo = &lm_dii;
-            vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
-            lm_active = true;
-        }
-    }
-    if (ds) vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                     pipeline_layout_, 0, 1, &ds, 0, nullptr);
+    auto [ds, textured, lm_active] = bind_textures(f.cmd);
 
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
 
@@ -1121,6 +1134,8 @@ void Renderer::update_tex_descriptor(TextureSlot& t) {
         n = 2;
     }
     vkUpdateDescriptorSets(dev_.handle(), n, writes, 0, nullptr);
+    // Binding 1 was overwritten with default lightmap — invalidate cache
+    t.bound_lm = -1;
 }
 
 void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
@@ -1194,6 +1209,7 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
         vkUpdateDescriptorSets(dev_.handle(), n, writes, 0, nullptr);
     }
     t.sampler_dirty = false;
+    t.bound_lm = -1;  // binding 1 was overwritten with default lightmap
 
     // Stage + copy via upload pool
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
@@ -1430,39 +1446,27 @@ void Renderer::display_list_upload(DisplayList& cb) {
     if (combined.empty()) { cb.uploaded = false; return; }
 
     uint32_t needed = uint32_t(combined.size());
-    if (cb.vb && cb.vb_size < needed) {
+
+    // Always allocate a new host-visible buffer to avoid data races with
+    // the GPU reading the previous frame's data. Old buffer is deferred-
+    // destroyed after the GPU is done. Direct memcpy eliminates staging
+    // buffer, command buffer submission, and vkQueueWaitIdle entirely.
+    if (cb.vb)
         frame().deletions.push_buffer(dev_.allocator(), cb.vb, cb.alloc);
-        cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr;
-    }
-    if (!cb.vb) {
-        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bi.size = needed;
-        bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        VmaAllocationCreateInfo ai{}; ai.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &cb.vb, &cb.alloc, nullptr), "display list vb");
-        cb.vb_size = needed;
-    }
 
-    if (needed > kStagingSize) { cb.uploaded = false; return; }
-    std::memcpy(staging_mapped_, combined.data(), needed);
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size  = needed;
+    bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    VmaAllocationCreateInfo ai{};
+    ai.usage = VMA_MEMORY_USAGE_AUTO;
+    ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+               VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo info{};
+    check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &cb.vb, &cb.alloc, &info),
+          "display list vb");
+    cb.vb_size = needed;
 
-    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "display list cmd");
-    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bbi);
-    VkBufferCopy rgn{0, 0, needed};
-    vkCmdCopyBuffer(cmd, staging_buf_, cb.vb, 1, &rgn);
-    vkEndCommandBuffer(cmd);
-    VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    csi.commandBuffer = cmd;
-    VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-    vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
-    vkQueueWaitIdle(dev_.queue());
-    vkResetCommandBuffer(cmd, 0);
+    std::memcpy(info.pMappedData, combined.data(), needed);
     cb.uploaded = true;
 }
 
@@ -1491,34 +1495,7 @@ bool Renderer::CBuffCall(int index, bool) {
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
-    VkDescriptorSet ds = VK_NULL_HANDLE;
-    bool textured = false;
-    bool lm_active = false;
-    {
-        std::lock_guard lk(texture_mutex_);
-        int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
-                   textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-        auto& ts = textures_[tex];
-        if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
-        ds = ts.desc_set;
-        textured = (tex != default_tex_);
-        // Bind lightmap if active
-        if (ds && lightmap_tex_ > 0 && size_t(lightmap_tex_) < textures_.size() &&
-            textures_[lightmap_tex_].ready) {
-            auto& lm = textures_[lightmap_tex_];
-            VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
-            VkDescriptorImageInfo lm_dii{lm_sampler, lm.view,
-                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            wd.dstSet = ds; wd.dstBinding = 1; wd.descriptorCount = 1;
-            wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            wd.pImageInfo = &lm_dii;
-            vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
-            lm_active = true;
-        }
-    }
-    if (ds) vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                     pipeline_layout_, 0, 1, &ds, 0, nullptr);
+    auto [ds, textured, lm_active] = bind_textures(f.cmd);
 
     PushConstants pc{};
     fill_push_constants(&pc, textured);
@@ -1596,29 +1573,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     }
     vkCmdSetPrimitiveTopology(f.cmd, topo);
 
-    VkDescriptorSet ds = VK_NULL_HANDLE; bool textured = false; bool lm_active = false;
-    { std::lock_guard lk(texture_mutex_);
-      int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
-                 textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-      auto& ts = textures_[tex];
-      if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
-      ds = ts.desc_set; textured = (tex != default_tex_);
-      // Bind lightmap if active
-      if (ds && lightmap_tex_ > 0 && size_t(lightmap_tex_) < textures_.size() &&
-          textures_[lightmap_tex_].ready) {
-          auto& lm = textures_[lightmap_tex_];
-          VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
-          VkDescriptorImageInfo lm_dii{lm_sampler, lm.view,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-          VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-          wd.dstSet = ds; wd.dstBinding = 1; wd.descriptorCount = 1;
-          wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-          wd.pImageInfo = &lm_dii;
-          vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
-          lm_active = true;
-      } }
-    if (ds) vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                     pipeline_layout_, 0, 1, &ds, 0, nullptr);
+    auto [ds, textured, lm_active] = bind_textures(f.cmd);
 
     VkDeviceSize off = tvb.offset;
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
