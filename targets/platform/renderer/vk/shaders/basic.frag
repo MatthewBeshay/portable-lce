@@ -1,12 +1,18 @@
 #version 450
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(location = 0) in vec2  v_uv;
 layout(location = 1) in vec4  v_color;
 layout(location = 2) in float v_fog_factor;
 layout(location = 3) in vec2  v_uv1;       // lightmap UV
 
-layout(set = 0, binding = 0) uniform sampler2D u_tex;
-layout(set = 0, binding = 1) uniform sampler2D u_lm;   // lightmap (1x1 white fallback when unused)
+// Bindless descriptor set:
+//   binding 0: sampled image array (per texture slot)
+//   binding 1: immutable sampler for diffuse (nearest, mip-linear, repeat)
+//   binding 2: immutable sampler for lightmap (linear, nearest-mip, clamp)
+layout(set = 0, binding = 0) uniform texture2D u_images[];
+layout(set = 0, binding = 1) uniform sampler   u_diffuse_sampler;
+layout(set = 0, binding = 2) uniform sampler   u_lightmap_sampler;
 
 // Same push constant block as vertex shader (shared range).
 layout(push_constant) uniform PC {
@@ -19,29 +25,39 @@ layout(push_constant) uniform PC {
     vec4 fog_colour;
     float alpha_ref;
     float inv_gamma;
-    uint flags;             // bit0=textured, bit1=alpha_test, bit2=lightmap
+    // flags packs:
+    //   [0]     textured
+    //   [1]     alpha_test
+    //   [2]     lm_active
+    //   [4:15]  tex_id    (12 bits — sampled image slot for diffuse)
+    //   [16:27] lm_tex_id (12 bits — sampled image slot for lightmap)
+    uint flags;
     uint global_lm_packed;
 } pc;
 
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    vec4 tex = ((pc.flags & 1u) != 0u) ? texture(u_tex, v_uv) : vec4(1.0);
+    uint tex_id    = (pc.flags >> 4u)  & 0xFFFu;
+    uint lm_tex_id = (pc.flags >> 16u) & 0xFFFu;
+
+    vec4 tex;
+    if ((pc.flags & 1u) != 0u) {
+        tex = texture(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv);
+    } else {
+        tex = vec4(1.0);
+    }
     vec4 c = tex * v_color;
 
-    // Alpha test
     if ((pc.flags & 2u) != 0u && c.a < pc.alpha_ref)
         discard;
 
-    // Lightmap modulation (bit 2)
     if ((pc.flags & 4u) != 0u)
-        c.rgb *= texture(u_lm, v_uv1).rgb;
+        c.rgb *= texture(sampler2D(u_images[nonuniformEXT(lm_tex_id)], u_lightmap_sampler), v_uv1).rgb;
 
-    // Fog (factor computed per-vertex)
     if (pc.fog_params.x > 0.5)
         c.rgb = mix(pc.fog_colour.rgb, c.rgb, v_fog_factor);
 
-    // Gamma correction
     c.rgb = pow(c.rgb, vec3(pc.inv_gamma));
 
     out_color = c;

@@ -107,10 +107,21 @@ found:
 
     std::array dev_exts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
+    // Vulkan 1.2 features — descriptor indexing for bindless textures.
+    vkhpp::PhysicalDeviceVulkan12Features v12;
+    v12.descriptorIndexing                                    = VK_TRUE;
+    v12.runtimeDescriptorArray                                = VK_TRUE;
+    v12.shaderSampledImageArrayNonUniformIndexing             = VK_TRUE;
+    v12.descriptorBindingSampledImageUpdateAfterBind          = VK_TRUE;
+    v12.descriptorBindingPartiallyBound                       = VK_TRUE;
+    v12.descriptorBindingVariableDescriptorCount              = VK_TRUE;
+    v12.descriptorBindingUpdateUnusedWhilePending             = VK_TRUE;
+
     // Vulkan 1.3 features
     vkhpp::PhysicalDeviceVulkan13Features v13;
     v13.dynamicRendering = VK_TRUE;
     v13.synchronization2 = VK_TRUE;
+    v13.pNext            = &v12;
 
     // Extended dynamic state (for topology, depth bias, etc.)
     vkhpp::PhysicalDeviceExtendedDynamicStateFeaturesEXT eds;

@@ -59,39 +59,101 @@ Renderer::Renderer(SDL_Window* window)
     for (auto& f : frames_)
         f.create(dev_.handle(), dev_.allocator(), dev_.queue_family());
 
-    // Descriptor set layout: two combined image samplers (diffuse + lightmap)
+    // Immutable samplers — diffuse uses nearest+mipmap+repeat (Minecraft default),
+    // lightmap uses linear+clamp. These are baked into the descriptor set layout
+    // so no descriptor updates are needed for the sampler side.
     {
-        VkDescriptorSetLayoutBinding bindings[2]{};
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sci.magFilter    = VK_FILTER_NEAREST;
+        sci.minFilter    = VK_FILTER_NEAREST;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sci.maxLod       = VK_LOD_CLAMP_NONE;
+        check(vkCreateSampler(dev_.handle(), &sci, nullptr, &sampler_diffuse_), "diffuse sampler");
+
+        sci.magFilter    = VK_FILTER_LINEAR;
+        sci.minFilter    = VK_FILTER_LINEAR;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        check(vkCreateSampler(dev_.handle(), &sci, nullptr, &sampler_lightmap_), "lightmap sampler");
+    }
+
+    // Bindless descriptor set layout: SAMPLED_IMAGE[kMaxTextures] + 2 immutable samplers.
+    {
+        VkSampler immutable[2] = {sampler_diffuse_, sampler_lightmap_};
+        VkDescriptorSetLayoutBinding bindings[3]{};
         bindings[0].binding         = 0;
-        bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[0].descriptorCount = 1;
+        bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[0].descriptorCount = TextureManager::kMaxTextures;
         bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
         bindings[1].binding         = 1;
-        bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].pImmutableSamplers = &immutable[0];
+        bindings[2].binding         = 2;
+        bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].pImmutableSamplers = &immutable[1];
+
+        // Binding flags: image array is update-after-bind + partially bound so
+        // slots can be written while the set is in use without invalidating
+        // still-active frames; sampler bindings have no flags (immutable).
+        VkDescriptorBindingFlags flags[3] = {
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+            VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT,
+            0, 0
+        };
+        VkDescriptorSetLayoutBindingFlagsCreateInfo bf{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        bf.bindingCount  = 3;
+        bf.pBindingFlags = flags;
+
         VkDescriptorSetLayoutCreateInfo ci{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 2;
+        ci.pNext        = &bf;
+        ci.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        ci.bindingCount = 3;
         ci.pBindings    = bindings;
         check(vkCreateDescriptorSetLayout(dev_.handle(), &ci, nullptr,
-                                          &tex_set_layout_),
-              "desc layout");
+                                          &bindless_set_layout_),
+              "bindless desc layout");
     }
 
-    // Descriptor pool
+    // Descriptor pool for the one bindless set.
     {
-        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192};
+        VkDescriptorPoolSize ps[2]{};
+        ps[0].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        ps[0].descriptorCount = TextureManager::kMaxTextures;
+        ps[1].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
+        ps[1].descriptorCount = 2;
         VkDescriptorPoolCreateInfo ci{
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        ci.maxSets       = 4096;
-        ci.poolSizeCount = 1;
-        ci.pPoolSizes    = &ps;
-        check(vkCreateDescriptorPool(dev_.handle(), &ci, nullptr, &tex_pool_),
-              "desc pool");
+        ci.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        ci.maxSets       = 1;
+        ci.poolSizeCount = 2;
+        ci.pPoolSizes    = ps;
+        check(vkCreateDescriptorPool(dev_.handle(), &ci, nullptr, &bindless_pool_),
+              "bindless desc pool");
     }
 
-    // Pipeline layout: single shared push constant range (256 bytes)
+    // Allocate the one bindless set.
+    {
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool     = bindless_pool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts        = &bindless_set_layout_;
+        check(vkAllocateDescriptorSets(dev_.handle(), &ai, &bindless_set_),
+              "bindless desc set");
+    }
+
+    // Pipeline layout: one bindless descriptor set + 256-byte push constant range.
     {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -100,7 +162,7 @@ Renderer::Renderer(SDL_Window* window)
         VkPipelineLayoutCreateInfo ci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         ci.setLayoutCount         = 1;
-        ci.pSetLayouts            = &tex_set_layout_;
+        ci.pSetLayouts            = &bindless_set_layout_;
         ci.pushConstantRangeCount = 1;
         ci.pPushConstantRanges    = &pc;
         check(vkCreatePipelineLayout(dev_.handle(), &ci, nullptr,
@@ -185,7 +247,7 @@ Renderer::Renderer(SDL_Window* window)
     }
 
     tex_mgr_.init(dev_.handle(), dev_.allocator(), dev_.queue(), dev_.queue_family(),
-                  tex_set_layout_, tex_pool_);
+                  bindless_set_);
     dl_mgr_.init();
 
     {
@@ -214,8 +276,10 @@ Renderer::~Renderer() {
     if (quad_ib_) vmaDestroyBuffer(dev_.allocator(), quad_ib_, quad_ib_alloc_);
     pipelines_.destroy();
     if (pipeline_layout_) vkDestroyPipelineLayout(dev_.handle(), pipeline_layout_, nullptr);
-    if (tex_pool_)       vkDestroyDescriptorPool(dev_.handle(), tex_pool_, nullptr);
-    if (tex_set_layout_) vkDestroyDescriptorSetLayout(dev_.handle(), tex_set_layout_, nullptr);
+    if (bindless_pool_)        vkDestroyDescriptorPool(dev_.handle(), bindless_pool_, nullptr);
+    if (bindless_set_layout_)  vkDestroyDescriptorSetLayout(dev_.handle(), bindless_set_layout_, nullptr);
+    if (sampler_lightmap_)     vkDestroySampler(dev_.handle(), sampler_lightmap_, nullptr);
+    if (sampler_diffuse_)      vkDestroySampler(dev_.handle(), sampler_diffuse_, nullptr);
     for (auto& f : frames_) f.destroy(dev_.handle(), dev_.allocator());
     swap_.destroy(dev_);
 }
@@ -379,6 +443,11 @@ void Renderer::begin_pass() {
     VkRect2D sc_r{{0,0}, swap_.extent()};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc_r);
+
+    // Bind the bindless descriptor set once per frame. Every draw reads from
+    // it via texture id packed into the flags push constant.
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline_layout_, 0, 1, &bindless_set_, 0, nullptr);
 }
 
 void Renderer::end_pass() {
@@ -548,7 +617,9 @@ void Renderer::UpdateGamma(unsigned short g) {
 // PUSH CONSTANTS HELPER
 // ===================================================================
 
-void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* tint) {
+void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
+                                    uint32_t tex_id, uint32_t lm_tex_id,
+                                    const glm::vec4* tint) {
     PushConstants& pc = *static_cast<PushConstants*>(out);
     const auto& mv = mv_stack_.top();
     pc.mvp = proj_stack_.top() * mv;
@@ -591,8 +662,19 @@ void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* ti
                               fog_colour_[2], fog_colour_[3]);
     pc.alpha_ref  = alpha_ref_;
     pc.inv_gamma  = inv_gamma_;
-    pc.flags      = ((textured && texture_enabled_) ? 1u : 0u) |
-                    (alpha_test_enabled_ ? 2u : 0u);
+    // flags bit layout:
+    //   [0]     textured       (diffuse sample enabled)
+    //   [1]     alpha_test
+    //   [2]     lm_active      (lightmap modulation enabled)
+    //   [4:15]  tex_id         (12 bits — slot in bindless sampled image array)
+    //   [16:27] lm_tex_id      (12 bits — lightmap slot)
+    uint32_t flags = 0;
+    if (textured && texture_enabled_) flags |= 1u;
+    if (alpha_test_enabled_)          flags |= 2u;
+    if (lm_active)                    flags |= 4u;
+    flags |= (tex_id    & 0xFFFu) << 4u;
+    flags |= (lm_tex_id & 0xFFFu) << 16u;
+    pc.flags = flags;
     pc.global_lm_packed = uint32_t(global_lm_uv_[0]) | (uint32_t(global_lm_uv_[1]) << 16);
 }
 
@@ -677,13 +759,15 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     // Dynamic depth bias
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
-    auto [ds, textured, lm_active] = tex_mgr_.bind_textures(f.cmd, pipeline_layout_);
+    bool textured  = false;
+    bool lm_active = false;
+    const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
+    const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
 
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
 
     PushConstants pc{};
-    fill_push_constants(&pc, textured);
-    if (lm_active) pc.flags |= 4u;
+    fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
@@ -785,11 +869,13 @@ bool Renderer::CBuffCall(int index, bool) {
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
-    auto [ds, textured, lm_active] = tex_mgr_.bind_textures(f.cmd, pipeline_layout_);
+    bool textured  = false;
+    bool lm_active = false;
+    const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
+    const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
 
     PushConstants pc{};
-    fill_push_constants(&pc, textured);
-    if (lm_active) pc.flags |= 4u;
+    fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
 
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -885,7 +971,10 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     }
     vkCmdSetPrimitiveTopology(f.cmd, topo);
 
-    auto [ds, textured, lm_active] = tex_mgr_.bind_textures(f.cmd, pipeline_layout_);
+    bool textured  = false;
+    bool lm_active = false;
+    const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
+    const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
 
     VkDeviceSize off = tvb.offset;
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
@@ -893,8 +982,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     PushConstants pc{};
     glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],
                    dc.tint_color[2], dc.tint_color[3]);
-    fill_push_constants(&pc, textured, &tint);
-    if (lm_active) pc.flags |= 4u;
+    fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id, &tint);
     vkCmdPushConstants(f.cmd, pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);

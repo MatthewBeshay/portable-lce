@@ -176,8 +176,13 @@ private:
 
     // -- Pipeline layout + descriptors --
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout tex_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool tex_pool_ = VK_NULL_HANDLE;
+    // Bindless descriptor set: SAMPLED_IMAGE[kMaxTextures] at binding 0,
+    // two immutable samplers at bindings 1 (diffuse) and 2 (lightmap).
+    VkDescriptorSetLayout bindless_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool      bindless_pool_       = VK_NULL_HANDLE;
+    VkDescriptorSet       bindless_set_        = VK_NULL_HANDLE;
+    VkSampler             sampler_diffuse_     = VK_NULL_HANDLE;
+    VkSampler             sampler_lightmap_    = VK_NULL_HANDLE;
 
     // Quad index buffer (GL_QUADS -> 2 triangles)
     VkBuffer      quad_ib_       = VK_NULL_HANDLE;
@@ -256,7 +261,9 @@ private:
     void ensure_pass();
     void begin_pass();
     void end_pass();
-    void fill_push_constants(void* out, bool textured, const glm::vec4* tint = nullptr);
+    void fill_push_constants(void* out, bool textured, bool lm_active,
+                             uint32_t tex_id, uint32_t lm_tex_id,
+                             const glm::vec4* tint = nullptr);
 };
 
 }  // namespace plce::vk
