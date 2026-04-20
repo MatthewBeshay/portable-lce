@@ -199,6 +199,7 @@ private:
     bool     frame_active_  = false;
     bool     pass_active_   = false;
     bool     should_close_  = false;
+    bool     transient_overflow_warned_ = false;
 
     // -- Render state tracking --
     PipelineKey   pso_key_{};

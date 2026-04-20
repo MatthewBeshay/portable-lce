@@ -123,7 +123,8 @@ VkPipeline PipelineCache::create(const PipelineKey& key) {
     VkPipelineRasterizationStateCreateInfo rs{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rs.polygonMode    = VK_POLYGON_MODE_FILL;
-    rs.cullMode       = VK_CULL_MODE_NONE;  // TODO: debug — disable culling
+    // Y-flip reverses winding, so game "back" faces are Vulkan "front" faces.
+    rs.cullMode       = key.cull_back ? VK_CULL_MODE_FRONT_BIT : VK_CULL_MODE_NONE;
     rs.frontFace      = VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth      = 1.0f;
     rs.depthBiasEnable = VK_TRUE;  // dynamic depth bias via vkCmdSetDepthBias

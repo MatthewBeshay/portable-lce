@@ -7,6 +7,8 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <cassert>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
@@ -90,6 +92,14 @@ struct alignas(16) PushConstants {
     uint32_t  global_lm_packed; // 252
 };
 static_assert(sizeof(PushConstants) == 256);
+static_assert(offsetof(PushConstants, mvp) == 0);
+static_assert(offsetof(PushConstants, fog_params) == 192);
+static_assert(offsetof(PushConstants, state_colour) == 208);
+static_assert(offsetof(PushConstants, fog_colour) == 224);
+static_assert(offsetof(PushConstants, alpha_ref) == 240);
+static_assert(offsetof(PushConstants, inv_gamma) == 244);
+static_assert(offsetof(PushConstants, flags) == 248);
+static_assert(offsetof(PushConstants, global_lm_packed) == 252);
 
 // Expand compact 16-byte vertex format to 32-byte world_standard.
 std::vector<std::byte> expand_compact(const void* data, int& count) {
@@ -427,6 +437,7 @@ void Renderer::StartFrame() {
     pso_dirty_    = true;
     pass_active_  = false;
     frame_active_ = true;
+    transient_overflow_warned_ = false;
 }
 
 void Renderer::Present() {
@@ -621,7 +632,11 @@ void Renderer::MatrixOrthogonal(float l, float r, float b, float t, float zn, fl
     stack().back() = stack().back() * glm::ortho(l, r, b, t, zn, zf);
 }
 void Renderer::MatrixPush() { auto& s = stack(); s.push_back(s.back()); }
-void Renderer::MatrixPop()  { auto& s = stack(); if (s.size() > 1) s.pop_back(); }
+void Renderer::MatrixPop() {
+    auto& s = stack();
+    assert(s.size() > 1 && "Matrix stack underflow");
+    if (s.size() > 1) s.pop_back();
+}
 void Renderer::MatrixMult(float* m) {
     glm::mat4 mat; std::memcpy(&mat[0][0], m, 64);
     stack().back() = stack().back() * mat;
@@ -836,7 +851,13 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     constexpr VkDeviceSize stride = 32;
     VkDeviceSize bytes = VkDeviceSize(count) * stride;
     void* dst = f.alloc_transient(bytes);
-    if (!dst) return;
+    if (!dst) {
+        if (!transient_overflow_warned_) {
+            std::fprintf(stderr, "[vk3] transient VB full, skipping draw\n");
+            transient_overflow_warned_ = true;
+        }
+        return;
+    }
     std::memcpy(dst, vdata, bytes);
     VkDeviceSize off = f.transient_pos() - bytes;
 

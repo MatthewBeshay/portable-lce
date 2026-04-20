@@ -13,31 +13,48 @@ namespace plce::vk3 {
 /// Not thread-safe — must only be accessed from the thread that owns the frame.
 class DeletionQueue {
 public:
-    DeletionQueue() = default;
+    void push(std::function<void()>&& fn) {
+        entries_.push_back({Tag::generic, {}, {}, {}, std::move(fn)});
+    }
+
+    void push_buffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation a) {
+        entries_.push_back({Tag::buffer, alloc, {.buffer = buf}, a, {}});
+    }
+
+    void push_image(VmaAllocator alloc, VkImage img, VmaAllocation a) {
+        entries_.push_back({Tag::image, alloc, {.image = img}, a, {}});
+    }
+
+    void flush() noexcept {
+        for (auto& e : entries_) {
+            switch (e.tag) {
+                case Tag::buffer:  vmaDestroyBuffer(e.alloc, e.handle.buffer, e.vma_alloc); break;
+                case Tag::image:   vmaDestroyImage(e.alloc, e.handle.image, e.vma_alloc); break;
+                case Tag::generic: if (e.fn) e.fn(); break;
+            }
+        }
+        entries_.clear();
+    }
+
     ~DeletionQueue() noexcept { flush(); }
 
+    DeletionQueue() = default;
     DeletionQueue(const DeletionQueue&) = delete;
     DeletionQueue& operator=(const DeletionQueue&) = delete;
     DeletionQueue(DeletionQueue&&) noexcept = default;
     DeletionQueue& operator=(DeletionQueue&&) noexcept = default;
 
-    void push(std::function<void()>&& fn) { queue_.push_back(std::move(fn)); }
-
-    void push_buffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation a) {
-        push([=]() { vmaDestroyBuffer(alloc, buf, a); });
-    }
-
-    void push_image(VmaAllocator alloc, VkImage img, VmaAllocation a) {
-        push([=]() { vmaDestroyImage(alloc, img, a); });
-    }
-
-    void flush() noexcept {
-        for (auto& fn : queue_) fn();
-        queue_.clear();
-    }
-
 private:
-    std::vector<std::function<void()>> queue_;
+    enum class Tag : uint8_t { buffer, image, generic };
+    union Handle { VkBuffer buffer; VkImage image; };
+    struct Entry {
+        Tag           tag;
+        VmaAllocator  alloc    = nullptr;
+        Handle        handle   = {};
+        VmaAllocation vma_alloc = nullptr;
+        std::function<void()> fn;  // only used for Tag::generic
+    };
+    std::vector<Entry> entries_;
 };
 
 }  // namespace plce::vk3
