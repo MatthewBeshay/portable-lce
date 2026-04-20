@@ -391,18 +391,20 @@ void TextureManager::set_param(int param, int value) {
             break;
 
         case GL_TEXTURE_WRAP_S:
-            t.sampler_key.wrap_s = (value == GL_CLAMP_TO_EDGE)
-                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        case GL_TEXTURE_WRAP_T: {
+            VkSamplerAddressMode mode;
+            if (value == GL_CLAMP_TO_EDGE)     mode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            else if (value == 0x2901 /*GL_REPEAT*/) mode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            else {
+                std::fprintf(stderr, "[vk] TextureSetParam: unsupported WRAP value 0x%x, using REPEAT\n",
+                             unsigned(value));
+                mode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            }
+            if (param == GL_TEXTURE_WRAP_S) t.sampler_key.wrap_s = mode;
+            else                            t.sampler_key.wrap_t = mode;
             t.sampler_dirty = true;
             break;
-
-        case GL_TEXTURE_WRAP_T:
-            t.sampler_key.wrap_t = (value == GL_CLAMP_TO_EDGE)
-                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            t.sampler_dirty = true;
-            break;
+        }
     }
 }
 

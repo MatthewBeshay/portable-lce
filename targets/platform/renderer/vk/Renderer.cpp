@@ -10,6 +10,7 @@
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 #include <stdexcept>
+#include <string>
 
 #include "VkCheck.h"
 #include "VertexFormats.h"
@@ -21,21 +22,36 @@
 namespace plce::vk {
 
 namespace {
-constexpr const char* kPipelineCachePath = "pipeline_cache.bin";
+// Returns the pipeline cache path — user app-data dir if SDL can give us one,
+// otherwise current working directory as a last-resort fallback.
+std::string pipeline_cache_path() {
+    char* base = SDL_GetPrefPath("plce", "vk");
+    std::string out;
+    if (base) { out = std::string(base) + "pipeline_cache.bin"; SDL_free(base); }
+    else       out = "pipeline_cache.bin";
+    return out;
+}
 }
 
 // ===================================================================
 // LIFECYCLE
 // ===================================================================
 
-Renderer::Renderer(SDL_Window* window)
-    : dev_({window,
-#ifdef NDEBUG
-            false
+namespace {
+// Validation layers default to debug-on / release-off, but PLCE_VK_VALIDATE=1
+// forces them on so users can collect validation logs from Release builds.
+bool want_validation() {
+#ifndef NDEBUG
+    return true;
 #else
-            true
+    const char* v = std::getenv("PLCE_VK_VALIDATE");
+    return v && v[0] == '1';
 #endif
-           }),
+}
+}
+
+Renderer::Renderer(SDL_Window* window)
+    : dev_({window, want_validation()}),
       window_(window) {
 #ifdef ENABLE_VSYNC
     swap_.create(dev_, 0, 0, VK_PRESENT_MODE_FIFO_KHR);
@@ -109,7 +125,7 @@ Renderer::Renderer(SDL_Window* window)
         pc.vert_compact_spv  = kBasicCompactVertSpv;
         pc.vert_compact_size = sizeof(kBasicCompactVertSpv);
         pipelines_.init(pc);
-        pipelines_.load_cache(kPipelineCachePath);
+        pipelines_.load_cache(pipeline_cache_path().c_str());
         pipelines_.warm_up();
     }
 
@@ -187,7 +203,7 @@ Renderer::Renderer(SDL_Window* window)
 
 Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
-    pipelines_.save_cache(kPipelineCachePath);
+    pipelines_.save_cache(pipeline_cache_path().c_str());
     for (auto& pd : pending_destroys_)
         vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
     pending_destroys_.clear();
