@@ -98,44 +98,41 @@ DisplayListManager::Snapshot DisplayListManager::prepare(int index,
 
 void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
                                  VmaAllocator allocator) {
-    constexpr uint32_t kStride = 32;
+    constexpr uint32_t kStdStride     = 32;
+    constexpr uint32_t kCompactStride = 16;
     std::vector<std::byte> combined;
     cb.gpu_draws.clear();
 
     for (auto& d : cb.draws) {
-        const void* src = d.verts.data();
-        int vert_count;
-        std::vector<std::byte> expanded_storage;
-
         if (d.vertexType == 1) {
-            vert_count = int(d.verts.size() / 16);
-            expanded_storage = expand_compact(src, vert_count);
-            src = expanded_storage.data();
-            // expand_compact already triangulates quads
+            // Compact 16-byte quads — stored natively; the vertex shader
+            // decodes them and the GPU triangulates via quad_ib_.
+            int vert_count = int(d.verts.size() / kCompactStride);
+            if (vert_count == 0 || vert_count % 4 != 0) continue;
             uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(),
-                            static_cast<const std::byte*>(src),
-                            static_cast<const std::byte*>(src) + size_t(vert_count) * kStride);
-            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), 0x0004});
+            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
+            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), 0x0007, /*compact=*/true});
             continue;
         }
 
-        vert_count = int(d.verts.size() / kStride);
+        int vert_count = int(d.verts.size() / kStdStride);
         if (vert_count == 0) continue;
 
         if (d.primType == 0x0007) {
-            // Quads -> triangles
+            // Quads (32-byte) — still triangulated on CPU for now. Migrating
+            // this to GPU triangulation is a separate change, since the
+            // existing vertex offsets downstream assume triangle lists.
             if (vert_count % 4 != 0) continue;
             uint32_t quads = vert_count / 4;
             uint32_t byte_off = uint32_t(combined.size());
             for (uint32_t q = 0; q < quads; ++q) {
-                const std::byte* b = d.verts.data() + q * 4 * kStride;
+                const std::byte* b = d.verts.data() + q * 4 * kStdStride;
                 auto push = [&](uint32_t i) {
-                    combined.insert(combined.end(), b + i*kStride, b + (i+1)*kStride);
+                    combined.insert(combined.end(), b + i*kStdStride, b + (i+1)*kStdStride);
                 };
                 push(0); push(1); push(2); push(0); push(2); push(3);
             }
-            cb.gpu_draws.push_back({byte_off, quads * 6, 0x0004});
+            cb.gpu_draws.push_back({byte_off, quads * 6, 0x0004, /*compact=*/false});
         } else if (d.primType == 0x0006) {
             // Fan -> triangles
             if (vert_count < 3) continue;
@@ -144,11 +141,11 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
             if (fan_count == 0) continue;
             uint32_t byte_off = uint32_t(combined.size());
             combined.insert(combined.end(), fan_data.begin(), fan_data.end());
-            cb.gpu_draws.push_back({byte_off, uint32_t(fan_count), 0x0004});
+            cb.gpu_draws.push_back({byte_off, uint32_t(fan_count), 0x0004, /*compact=*/false});
         } else {
             uint32_t byte_off = uint32_t(combined.size());
             combined.insert(combined.end(), d.verts.begin(), d.verts.end());
-            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), d.primType});
+            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), d.primType, /*compact=*/false});
         }
     }
     if (combined.empty()) { cb.uploaded = false; return; }

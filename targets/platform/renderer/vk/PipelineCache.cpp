@@ -22,6 +22,8 @@ void PipelineCache::init(const Config& cfg) {
     cfg_ = cfg;
     vert_mod_ = make_module(cfg.device, cfg.vert_spv, cfg.vert_size);
     frag_mod_ = make_module(cfg.device, cfg.frag_spv, cfg.frag_size);
+    if (cfg.vert_compact_spv && cfg.vert_compact_size > 0)
+        vert_compact_mod_ = make_module(cfg.device, cfg.vert_compact_spv, cfg.vert_compact_size);
 
     VkPipelineCacheCreateInfo pcci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     check(vkCreatePipelineCache(cfg.device, &pcci, nullptr, &vk_cache_), "pipeline cache");
@@ -35,9 +37,10 @@ void PipelineCache::destroy() {
         vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
         vk_cache_ = VK_NULL_HANDLE;
     }
-    if (frag_mod_) vkDestroyShaderModule(cfg_.device, frag_mod_, nullptr);
-    if (vert_mod_) vkDestroyShaderModule(cfg_.device, vert_mod_, nullptr);
-    vert_mod_ = frag_mod_ = VK_NULL_HANDLE;
+    if (frag_mod_)         vkDestroyShaderModule(cfg_.device, frag_mod_, nullptr);
+    if (vert_compact_mod_) vkDestroyShaderModule(cfg_.device, vert_compact_mod_, nullptr);
+    if (vert_mod_)         vkDestroyShaderModule(cfg_.device, vert_mod_, nullptr);
+    vert_mod_ = vert_compact_mod_ = frag_mod_ = VK_NULL_HANDLE;
 }
 
 VkPipeline PipelineCache::get(const PipelineKey& key) {
@@ -69,6 +72,16 @@ void PipelineCache::warm_up() {
     lines_key.set_lines(true);
     get(lines_key);
 
+    if (vert_compact_mod_) {
+        PipelineKey compact_opaque{};
+        compact_opaque.set_compact(true);
+        get(compact_opaque);
+
+        PipelineKey compact_cull = compact_opaque;
+        compact_cull.set_cull_back(true);
+        get(compact_cull);
+    }
+
     std::fprintf(stderr, "[vk] warmed %zu pipelines\n", cache_.size());
 }
 
@@ -77,28 +90,42 @@ VkPipeline PipelineCache::create(const PipelineKey& key) {
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vert_mod_;
+    stages[0].module = key.compact() ? vert_compact_mod_ : vert_mod_;
     stages[0].pName  = "main";
     stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = frag_mod_;
     stages[1].pName  = "main";
 
-    // Vertex input: 32-byte WorldStandardVertex
-    VkVertexInputBindingDescription binding{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[5]{
+    // Vertex input: 32-byte WorldStandardVertex (default) or 16-byte compact.
+    // The compact layout feeds 2x R16G16B16A16_SINT attributes that the vertex
+    // shader decodes into pos/uv/color on the fly.
+    VkVertexInputBindingDescription binding_standard{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs_standard[5]{
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},   // pos
         {1, 0, VK_FORMAT_R32G32_SFLOAT,    12},  // uv
         {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20},  // color
         {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24},  // normal
         {4, 0, VK_FORMAT_R16G16_SINT,      28},  // lightmap UVs
     };
+    VkVertexInputBindingDescription binding_compact{0, 16, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs_compact[2]{
+        {0, 0, VK_FORMAT_R16G16B16A16_SINT, 0},  // (pos.x, pos.y, pos.z, color 5-6-5)
+        {1, 0, VK_FORMAT_R16G16B16A16_SINT, 8},  // (uv.x, uv.y, lm.u, lm.v)
+    };
+
     VkPipelineVertexInputStateCreateInfo vi{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount   = 1;
-    vi.pVertexBindingDescriptions      = &binding;
-    vi.vertexAttributeDescriptionCount = 5;
-    vi.pVertexAttributeDescriptions    = attrs;
+    vi.vertexBindingDescriptionCount = 1;
+    if (key.compact()) {
+        vi.pVertexBindingDescriptions      = &binding_compact;
+        vi.vertexAttributeDescriptionCount = 2;
+        vi.pVertexAttributeDescriptions    = attrs_compact;
+    } else {
+        vi.pVertexBindingDescriptions      = &binding_standard;
+        vi.vertexAttributeDescriptionCount = 5;
+        vi.pVertexAttributeDescriptions    = attrs_standard;
+    }
 
     // Input assembly — topology is dynamic
     VkPipelineInputAssemblyStateCreateInfo ia{

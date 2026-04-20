@@ -33,6 +33,8 @@ if(PLCE_RENDERER STREQUAL "vulkan")
         vk/shaders/basic.vert kBasicVertSpv)
     plce_compile_shader(plce_platform_renderer_vk
         vk/shaders/basic.frag kBasicFragSpv)
+    plce_compile_shader(plce_platform_renderer_vk
+        vk/shaders/basic_compact.vert kBasicCompactVertSpv)
 
     add_library(plce_platform_renderer ALIAS plce_platform_renderer_vk)
     return()

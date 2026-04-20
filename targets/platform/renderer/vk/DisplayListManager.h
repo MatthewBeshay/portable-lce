@@ -20,9 +20,10 @@ struct DisplayListDraw {
 };
 
 struct DisplayListSubDraw {
-    uint32_t vertex_offset = 0;
-    uint32_t vertex_count  = 0;
-    int      prim_type     = 0;
+    uint32_t vertex_offset = 0;   // bytes from start of DisplayList::vb
+    uint32_t vertex_count  = 0;   // vertices at the subdraw's native stride
+    int      prim_type     = 0;   // GL primitive type (0x0001 lines ... 0x0007 quads)
+    bool     compact       = false;  // 16-byte packed vertices when true, else 32-byte
 };
 
 struct DisplayList {

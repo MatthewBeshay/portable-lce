@@ -14,8 +14,9 @@
 #include "VkCheck.h"
 #include "VertexFormats.h"
 
-#include "vk/shaders/basic.vert.spv.h"  // kBasicVertSpv
-#include "vk/shaders/basic.frag.spv.h"  // kBasicFragSpv
+#include "vk/shaders/basic.vert.spv.h"          // kBasicVertSpv
+#include "vk/shaders/basic.frag.spv.h"          // kBasicFragSpv
+#include "vk/shaders/basic_compact.vert.spv.h"  // kBasicCompactVertSpv
 
 namespace plce::vk {
 
@@ -101,10 +102,12 @@ Renderer::Renderer(SDL_Window* window)
         pc.layout       = pipeline_layout_;
         pc.color_format = swap_.format();
         pc.depth_format = swap_.depth_format();
-        pc.vert_spv     = kBasicVertSpv;
-        pc.vert_size    = sizeof(kBasicVertSpv);
-        pc.frag_spv     = kBasicFragSpv;
-        pc.frag_size    = sizeof(kBasicFragSpv);
+        pc.vert_spv          = kBasicVertSpv;
+        pc.vert_size         = sizeof(kBasicVertSpv);
+        pc.frag_spv          = kBasicFragSpv;
+        pc.frag_size         = sizeof(kBasicFragSpv);
+        pc.vert_compact_spv  = kBasicCompactVertSpv;
+        pc.vert_compact_size = sizeof(kBasicCompactVertSpv);
         pipelines_.init(pc);
         pipelines_.load_cache(kPipelineCachePath);
         pipelines_.warm_up();
@@ -595,18 +598,15 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     if (!frame_active_) return;
     ensure_pass();
 
-    // Expand compact format (vType==1) to world_standard 32-byte
+    // Compact (vType==1) vertices are decoded in the vertex shader; we feed
+    // them to the GPU at their native 16-byte stride and triangulate the
+    // quads via the precomputed quad_ib_. Non-compact vertices go through
+    // the 32-byte WorldStandardVertex path (triangle fan is still expanded
+    // on CPU since it's uncommon and the compact format never uses it).
+    const bool is_compact = (vType == 1);
     const void* vdata = data;
-    std::vector<std::byte> expanded;
-    if (vType == 1) {
-        expanded = expand_compact(data, count);
-        vdata = expanded.data();
-        primType = 0x0004;  // already triangulated
-    }
-
-    // Convert triangle fans to triangle list on CPU
     std::vector<std::byte> fan_expanded;
-    if (primType == 0x0006) {
+    if (!is_compact && primType == 0x0006) {
         fan_expanded = fan_to_list(vdata, count);
         if (count == 0) return;
         vdata = fan_expanded.data();
@@ -615,19 +615,25 @@ void Renderer::DrawVertices(int primType, int count, void* data,
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     bool is_quads = false, is_lines = false;
-    switch (primType) {
-        case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;      is_lines = true; break;
-        case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;     is_lines = true; break;
-        case 0x0004: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  break;
-        case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
-        case 0x0007: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  is_quads = true; break;
-        default: return;
+    if (is_compact) {
+        // Compact format is always quads from chunk meshing.
+        is_quads = true;
+    } else {
+        switch (primType) {
+            case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;      is_lines = true; break;
+            case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;     is_lines = true; break;
+            case 0x0004: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  break;
+            case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+            case 0x0007: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  is_quads = true; break;
+            default: return;
+        }
     }
     if (is_quads && (count % 4) != 0) return;
-    if (pso_key_.lines() != is_lines) { pso_key_.set_lines(is_lines); pso_dirty_ = true; }
+    if (pso_key_.lines()   != is_lines)   { pso_key_.set_lines(is_lines);     pso_dirty_ = true; }
+    if (pso_key_.compact() != is_compact) { pso_key_.set_compact(is_compact); pso_dirty_ = true; }
 
     auto& f = frame();
-    constexpr VkDeviceSize stride = 32;
+    const VkDeviceSize stride = is_compact ? 16 : 32;
     VkDeviceSize bytes = VkDeviceSize(count) * stride;
     void* dst = f.alloc_transient(bytes);
     if (!dst) {
@@ -753,11 +759,6 @@ bool Renderer::CBuffCall(int index, bool) {
     auto& f = frame();
     ensure_pass();
 
-    if (pso_dirty_ || !(pso_key_ == last_bound_pso_)) {
-        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          pipelines_.get(pso_key_));
-        last_bound_pso_ = pso_key_; pso_dirty_ = false;
-    }
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
@@ -772,16 +773,38 @@ bool Renderer::CBuffCall(int index, bool) {
                        0, 256, &pc);
 
     for (auto& sd : draws) {
+        // Pipeline may change between subdraws when a display list mixes
+        // compact (16-byte) and standard (32-byte) vertex formats.
+        if (pso_key_.compact() != sd.compact) {
+            pso_key_.set_compact(sd.compact);
+            pso_dirty_ = true;
+        }
+        if (pso_dirty_ || !(pso_key_ == last_bound_pso_)) {
+            vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipelines_.get(pso_key_));
+            last_bound_pso_ = pso_key_;
+            pso_dirty_ = false;
+        }
+
         VkDeviceSize off = sd.vertex_offset;
         vkCmdBindVertexBuffers(f.cmd, 0, 1, &vb, &off);
-        VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        switch (sd.prim_type) {
-            case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
-            case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP; break;
-            case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+
+        if (sd.compact && sd.prim_type == 0x0007) {
+            // Compact quads — GPU triangulation via quad_ib_.
+            vkCmdSetPrimitiveTopology(f.cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            uint32_t qc = std::min(sd.vertex_count / 4, kMaxQuads);
+            vkCmdBindIndexBuffer(f.cmd, quad_ib_, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(f.cmd, qc * 6, 1, 0, 0, 0);
+        } else {
+            VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            switch (sd.prim_type) {
+                case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
+                case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP; break;
+                case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+            }
+            vkCmdSetPrimitiveTopology(f.cmd, topo);
+            vkCmdDraw(f.cmd, sd.vertex_count, 1, 0, 0);
         }
-        vkCmdSetPrimitiveTopology(f.cmd, topo);
-        vkCmdDraw(f.cmd, sd.vertex_count, 1, 0, 0);
     }
 
     depth_bias_constant_ = 0;

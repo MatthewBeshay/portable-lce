@@ -21,6 +21,7 @@ struct PipelineKey {
     //   [2]    blend_enable
     //   [3]    cull_back
     //   [4]    lines
+    //   [5]    compact  — 16-byte packed vertex format (decoded in shader)
     //   [8:15] depth_func   (VkCompareOp, 8 bits reserved)
     //   [16:23] blend_src   (VkBlendFactor)
     //   [24:31] blend_dst   (VkBlendFactor)
@@ -31,6 +32,7 @@ struct PipelineKey {
         kBlendEnableShift = 2,  kBlendEnableMask = 1ull << 2,
         kCullBackShift    = 3,  kCullBackMask    = 1ull << 3,
         kLinesShift       = 4,  kLinesMask       = 1ull << 4,
+        kCompactShift     = 5,  kCompactMask     = 1ull << 5,
         kDepthFuncShift   = 8,  kDepthFuncMask   = 0xFFull << 8,
         kBlendSrcShift    = 16, kBlendSrcMask    = 0xFFull << 16,
         kBlendDstShift    = 24, kBlendDstMask    = 0xFFull << 24,
@@ -42,6 +44,7 @@ struct PipelineKey {
     constexpr bool blend_enable() const { return bits & kBlendEnableMask; }
     constexpr bool cull_back()    const { return bits & kCullBackMask; }
     constexpr bool lines()        const { return bits & kLinesMask; }
+    constexpr bool compact()      const { return bits & kCompactMask; }
     constexpr uint8_t depth_func() const { return uint8_t((bits & kDepthFuncMask) >> kDepthFuncShift); }
     constexpr uint8_t blend_src()  const { return uint8_t((bits & kBlendSrcMask) >> kBlendSrcShift); }
     constexpr uint8_t blend_dst()  const { return uint8_t((bits & kBlendDstMask) >> kBlendDstShift); }
@@ -52,6 +55,7 @@ struct PipelineKey {
     void set_blend_enable(bool v) { bits = (bits & ~kBlendEnableMask) | (uint64_t(v) << kBlendEnableShift); }
     void set_cull_back(bool v)    { bits = (bits & ~kCullBackMask)    | (uint64_t(v) << kCullBackShift); }
     void set_lines(bool v)        { bits = (bits & ~kLinesMask)       | (uint64_t(v) << kLinesShift); }
+    void set_compact(bool v)      { bits = (bits & ~kCompactMask)     | (uint64_t(v) << kCompactShift); }
     void set_depth_func(uint8_t v){ bits = (bits & ~kDepthFuncMask)   | (uint64_t(v) << kDepthFuncShift); }
     void set_blend_src(uint8_t v) { bits = (bits & ~kBlendSrcMask)    | (uint64_t(v) << kBlendSrcShift); }
     void set_blend_dst(uint8_t v) { bits = (bits & ~kBlendDstMask)    | (uint64_t(v) << kBlendDstShift); }
@@ -79,14 +83,16 @@ struct PipelineKeyHash {
 class PipelineCache {
 public:
     struct Config {
-        VkDevice         device       = VK_NULL_HANDLE;
-        VkPipelineLayout layout       = VK_NULL_HANDLE;
-        VkFormat         color_format = VK_FORMAT_UNDEFINED;
-        VkFormat         depth_format = VK_FORMAT_UNDEFINED;
-        const uint32_t*  vert_spv     = nullptr;
-        size_t           vert_size    = 0;
-        const uint32_t*  frag_spv     = nullptr;
-        size_t           frag_size    = 0;
+        VkDevice         device                  = VK_NULL_HANDLE;
+        VkPipelineLayout layout                  = VK_NULL_HANDLE;
+        VkFormat         color_format            = VK_FORMAT_UNDEFINED;
+        VkFormat         depth_format            = VK_FORMAT_UNDEFINED;
+        const uint32_t*  vert_spv                = nullptr;
+        size_t           vert_size               = 0;
+        const uint32_t*  frag_spv                = nullptr;
+        size_t           frag_size               = 0;
+        const uint32_t*  vert_compact_spv        = nullptr;
+        size_t           vert_compact_size       = 0;
     };
 
     void init(const Config& cfg);
@@ -105,8 +111,9 @@ private:
     VkPipeline create(const PipelineKey& key);
 
     Config cfg_{};
-    VkShaderModule vert_mod_ = VK_NULL_HANDLE;
-    VkShaderModule frag_mod_ = VK_NULL_HANDLE;
+    VkShaderModule vert_mod_         = VK_NULL_HANDLE;
+    VkShaderModule vert_compact_mod_ = VK_NULL_HANDLE;
+    VkShaderModule frag_mod_         = VK_NULL_HANDLE;
     VkPipelineCache vk_cache_ = VK_NULL_HANDLE;
     std::unordered_map<PipelineKey, VkPipeline, PipelineKeyHash> cache_;
 };
