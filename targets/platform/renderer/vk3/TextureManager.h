@@ -64,6 +64,10 @@ public:
 
     BoundTexResult bind_textures(VkCommandBuffer cmd, VkPipelineLayout layout);
 
+    /// Poll pending upload fences, mark completed textures ready, free staging.
+    /// Called once per frame from Renderer::StartFrame.
+    void poll_uploads();
+
     int load_texture_data(const char* fn, void* info, int** out);
     int load_texture_data(uint8_t* data, uint32_t bytes, void* info, int** out);
 
@@ -73,11 +77,26 @@ public:
     int lightmap_tex() const { return lightmap_tex_; }
 
 private:
+    /// Tracks an in-flight texture upload until its fence signals.
+    struct PendingUpload {
+        VkFence         fence         = VK_NULL_HANDLE;
+        VkCommandBuffer cmd           = VK_NULL_HANDLE;
+        VkBuffer        staging_buf   = VK_NULL_HANDLE;
+        VmaAllocation   staging_alloc = nullptr;
+        int             texture_idx   = -1;
+    };
+
     VkSampler get_or_create_sampler(const SamplerKey& key);
     void update_tex_descriptor(TextureSlot& t);
     void upload_texture(int idx, int w, int h, const void* pixels);
     int ensure_default_texture();
     int ensure_default_lightmap();
+
+    VkFence acquire_fence();
+    void    release_fence(VkFence);
+    void    complete_upload(PendingUpload& pu);
+    void    wait_for_upload(int texture_idx);
+    void    wait_all_uploads();
 
     VkDevice      device_       = VK_NULL_HANDLE;
     VmaAllocator  allocator_    = nullptr;
@@ -85,12 +104,12 @@ private:
     VkDescriptorSetLayout tex_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool      tex_pool_       = VK_NULL_HANDLE;
 
-    // Staging for texture uploads
-    VkBuffer      staging_buf_    = VK_NULL_HANDLE;
-    VmaAllocation staging_alloc_  = nullptr;
-    std::byte*    staging_mapped_ = nullptr;
-    static constexpr VkDeviceSize kStagingSize = 16ull * 1024 * 1024;
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
+    static constexpr VkDeviceSize kMaxUploadBytes = 64ull * 1024 * 1024;
+
+    // Async upload tracking
+    std::vector<PendingUpload> pending_uploads_;
+    std::vector<VkFence>       fence_pool_;  // recycled fences
 
     // Sampler cache
     std::unordered_map<SamplerKey, VkSampler, SamplerKeyHash> sampler_cache_;

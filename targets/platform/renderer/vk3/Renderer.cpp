@@ -210,6 +210,9 @@ void Renderer::StartFrame() {
 
     vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
 
+    // Poll async texture uploads and mark completed ones ready.
+    tex_mgr_.poll_uploads();
+
     // Flush deferred buffer destructions (from worker thread CBuffClear).
     // Safe now because the fence wait guarantees the GPU is done.
     {
