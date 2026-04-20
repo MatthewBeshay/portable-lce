@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "VmaResources.h"
+
 namespace plce::vk {
 
 class Device;
@@ -30,7 +32,7 @@ public:
     VkFormat       format()       const { return format_; }
     VkExtent2D     extent()       const { return extent_; }
     VkFormat       depth_format() const { return kDepthFormat; }
-    VkImage        depth_image()  const { return depth_image_; }
+    VkImage        depth_image()  const { return depth_image_.handle(); }
     VkImageView    depth_view()   const { return depth_view_; }
 
     VkImage     image(uint32_t i) const { return images_[i]; }
@@ -49,9 +51,8 @@ private:
     std::vector<VkImageView> views_;
 
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
-    VkImage       depth_image_ = VK_NULL_HANDLE;
-    VmaAllocation depth_alloc_ = nullptr;
-    VkImageView   depth_view_  = VK_NULL_HANDLE;
+    VmaImage    depth_image_;
+    VkImageView depth_view_ = VK_NULL_HANDLE;
 };
 
 }  // namespace plce::vk

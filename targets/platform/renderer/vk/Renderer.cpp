@@ -216,8 +216,11 @@ Renderer::Renderer(SDL_Window* window)
                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VmaAllocationCreateInfo ai{};
         ai.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &quad_ib_,
-                              &quad_ib_alloc_, nullptr), "quad ib");
+        VkBuffer      quad_ib_raw   = VK_NULL_HANDLE;
+        VmaAllocation quad_ib_alloc = nullptr;
+        check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &quad_ib_raw,
+                              &quad_ib_alloc, nullptr), "quad ib");
+        quad_ib_ = VmaBuffer(dev_.allocator(), quad_ib_raw, quad_ib_alloc);
 
         VkBuffer stg = VK_NULL_HANDLE; VmaAllocation sa = nullptr;
         VmaAllocationInfo si{};
@@ -242,7 +245,7 @@ Renderer::Renderer(SDL_Window* window)
         bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cmd, &bbi);
         VkBufferCopy rgn{0, 0, bytes};
-        vkCmdCopyBuffer(cmd, stg, quad_ib_, 1, &rgn);
+        vkCmdCopyBuffer(cmd, stg, quad_ib_.handle(), 1, &rgn);
         vkEndCommandBuffer(cmd);
         VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
         csi.commandBuffer = cmd;
@@ -287,7 +290,7 @@ Renderer::~Renderer() {
         vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
     pending_destroys_.clear();
     tex_mgr_.destroy(dev_.handle(), dev_.allocator());
-    if (quad_ib_) vmaDestroyBuffer(dev_.allocator(), quad_ib_, quad_ib_alloc_);
+    quad_ib_.reset();
     pipelines_.destroy();
     if (pipeline_layout_) vkDestroyPipelineLayout(dev_.handle(), pipeline_layout_, nullptr);
     if (bindless_pool_)        vkDestroyDescriptorPool(dev_.handle(), bindless_pool_, nullptr);
@@ -786,7 +789,8 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
 
-    vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
+    VkBuffer transient_buf = f.transient_vb();
+    vkCmdBindVertexBuffers(f.cmd, 0, 1, &transient_buf, &off);
 
     PushConstants pc{};
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
@@ -801,7 +805,7 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
                 "vk::Renderer::DrawVertices: quad count exceeds kMaxQuads=16384 "
                 "(raise the quad index buffer allocation if the game needs more)");
         }
-        vkCmdBindIndexBuffer(f.cmd, quad_ib_, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindIndexBuffer(f.cmd, quad_ib_.handle(), 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(f.cmd, qc * 6, 1, 0, 0, 0);
     } else {
         vkCmdDraw(f.cmd, uint32_t(count), 1, 0, 0);
@@ -925,7 +929,7 @@ bool Renderer::CBuffCall(int index, bool) {
             // Compact quads — GPU triangulation via quad_ib_.
             vkCmdSetPrimitiveTopology(f.cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
             uint32_t qc = std::min(sd.vertex_count / 4, kMaxQuads);
-            vkCmdBindIndexBuffer(f.cmd, quad_ib_, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindIndexBuffer(f.cmd, quad_ib_.handle(), 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(f.cmd, qc * 6, 1, 0, 0, 0);
         } else {
             VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -1000,7 +1004,8 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
 
     VkDeviceSize off = tvb.offset;
-    vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
+    VkBuffer transient_buf = f.transient_vb();
+    vkCmdBindVertexBuffers(f.cmd, 0, 1, &transient_buf, &off);
 
     PushConstants pc{};
     glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],

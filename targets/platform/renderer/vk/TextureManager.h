@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "DeletionQueue.h"
+#include "VmaResources.h"
 #include "platform/renderer/IRenderPath.h"  // rp::LoadedImage
 
 namespace plce::vk {
@@ -148,11 +149,10 @@ private:
     static constexpr VkDeviceSize kStagingRingSize = 32ull * 1024 * 1024;
     static constexpr VkDeviceSize kStagingRingAlign = 64;  // conservative
 
-    VkBuffer       staging_ring_buf_   = VK_NULL_HANDLE;
-    VmaAllocation  staging_ring_alloc_ = nullptr;
-    std::byte*     staging_ring_map_   = nullptr;
-    VkDeviceSize   staging_ring_head_  = 0;
-    VkDeviceSize   staging_ring_tail_  = 0;
+    VmaBuffer      staging_ring_;
+    std::byte*     staging_ring_map_  = nullptr;
+    VkDeviceSize   staging_ring_head_ = 0;
+    VkDeviceSize   staging_ring_tail_ = 0;
     mutable std::mutex staging_ring_mutex_;
 
     std::vector<PendingUpload> pending_uploads_;

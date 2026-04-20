@@ -39,9 +39,13 @@ void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
     ring_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo ring_info{};
-    check(vmaCreateBuffer(allocator_, &ring_bi, &ring_ai, &staging_ring_buf_,
-                          &staging_ring_alloc_, &ring_info),
+    VkBuffer      ring_buf   = VK_NULL_HANDLE;
+    VmaAllocation ring_alloc = nullptr;
+    check(vmaCreateBuffer(allocator_, &ring_bi, &ring_ai, &ring_buf,
+                          &ring_alloc, &ring_info),
           "staging ring");
+    staging_ring_     = VmaBuffer(allocator_, ring_buf, ring_alloc,
+                                  ring_info.pMappedData);
     staging_ring_map_ = static_cast<std::byte*>(ring_info.pMappedData);
 
     default_tex_ = ensure_default_texture();
@@ -52,12 +56,8 @@ void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
 void TextureManager::destroy(VkDevice device, VmaAllocator allocator) {
     wait_all_uploads();
 
-    if (staging_ring_buf_) {
-        vmaDestroyBuffer(allocator, staging_ring_buf_, staging_ring_alloc_);
-        staging_ring_buf_   = VK_NULL_HANDLE;
-        staging_ring_alloc_ = nullptr;
-        staging_ring_map_   = nullptr;
-    }
+    staging_ring_.reset();
+    staging_ring_map_ = nullptr;
 
     if (upload_pool_) vkDestroyCommandPool(device, upload_pool_, nullptr);
     for (VkFence f : fence_pool_) vkDestroyFence(device, f, nullptr);
@@ -358,7 +358,7 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     VmaAllocation oneshot_alloc = nullptr;
     if (res) {
         src_map    = staging_ring_map_ + res->offset;
-        src_buf    = staging_ring_buf_;
+        src_buf    = staging_ring_.handle();
         src_offset = res->offset;
         ring_end   = res->end_counter;
     } else {
@@ -541,7 +541,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     VmaAllocation oneshot_alloc = nullptr;
     if (res) {
         src_map    = staging_ring_map_ + res->offset;
-        src_buf    = staging_ring_buf_;
+        src_buf    = staging_ring_.handle();
         src_offset = res->offset;
         ring_end   = res->end_counter;
     } else {

@@ -17,6 +17,7 @@
 #include "PipelineCache.h"
 #include "Swapchain.h"
 #include "TextureManager.h"
+#include "VmaResources.h"
 
 struct SDL_Window;
 
@@ -185,8 +186,7 @@ private:
     VkSampler             sampler_lightmap_    = VK_NULL_HANDLE;
 
     // Quad index buffer (GL_QUADS -> 2 triangles)
-    VkBuffer      quad_ib_       = VK_NULL_HANDLE;
-    VmaAllocation quad_ib_alloc_ = nullptr;
+    VmaBuffer quad_ib_;
     static constexpr uint32_t kMaxQuads = 16384;
 
     // -- Per-frame state --

@@ -7,9 +7,7 @@
 namespace plce::vk {
 
 void FrameContext::recreate_transient(VmaAllocator alloc, VkDeviceSize new_size) {
-    if (transient_vb) vmaDestroyBuffer(alloc, transient_vb, transient_alloc);
-    transient_vb = VK_NULL_HANDLE;
-    transient_alloc = nullptr;
+    transient.reset();
     transient_mapped_ = nullptr;
 
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -20,9 +18,10 @@ void FrameContext::recreate_transient(VmaAllocator alloc, VkDeviceSize new_size)
     vai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo info{};
-    check(vmaCreateBuffer(alloc, &bci, &vai, &transient_vb,
-                          &transient_alloc, &info),
-          "transient vb");
+    VkBuffer      buf   = VK_NULL_HANDLE;
+    VmaAllocation a     = nullptr;
+    check(vmaCreateBuffer(alloc, &bci, &vai, &buf, &a, &info), "transient vb");
+    transient = VmaBuffer(alloc, buf, a, info.pMappedData);
     transient_mapped_ = static_cast<std::byte*>(info.pMappedData);
     transient_size_ = new_size;
 }
@@ -62,9 +61,9 @@ void FrameContext::reset_acquire_semaphore(VkDevice dev) {
     check(vkCreateSemaphore(dev, &sci, nullptr, &sem_acquired), "sem acq (reset)");
 }
 
-void FrameContext::destroy(VkDevice dev, VmaAllocator alloc) {
+void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
     deletions.flush();
-    if (transient_vb) vmaDestroyBuffer(alloc, transient_vb, transient_alloc);
+    transient.reset();
     if (fence)        vkDestroyFence(dev, fence, nullptr);
     if (sem_done)     vkDestroySemaphore(dev, sem_done, nullptr);
     if (sem_acquired) vkDestroySemaphore(dev, sem_acquired, nullptr);

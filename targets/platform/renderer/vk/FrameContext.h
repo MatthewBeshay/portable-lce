@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "DeletionQueue.h"
+#include "VmaResources.h"
 
 namespace plce::vk {
 
@@ -64,9 +65,10 @@ public:
     VkSemaphore     sem_acquired = VK_NULL_HANDLE;
     VkSemaphore     sem_done     = VK_NULL_HANDLE;
     VkFence         fence        = VK_NULL_HANDLE;
-    VkBuffer        transient_vb = VK_NULL_HANDLE;
-    VmaAllocation   transient_alloc = nullptr;
+    VmaBuffer       transient;   // host-visible, persistently mapped
     DeletionQueue   deletions;
+
+    VkBuffer transient_vb() const { return transient.handle(); }
 
     FrameContext() = default;
     FrameContext(const FrameContext&) = delete;

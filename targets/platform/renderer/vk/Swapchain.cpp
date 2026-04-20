@@ -131,12 +131,14 @@ void Swapchain::create_depth(const Device& dev) {
 
     VmaAllocationCreateInfo ai{};
     ai.usage = VMA_MEMORY_USAGE_AUTO;
-    check(vmaCreateImage(dev.allocator(), &ici, &ai, &depth_image_,
-                         &depth_alloc_, nullptr),
+    VkImage       img   = VK_NULL_HANDLE;
+    VmaAllocation alloc = nullptr;
+    check(vmaCreateImage(dev.allocator(), &ici, &ai, &img, &alloc, nullptr),
           "depth image");
+    depth_image_ = VmaImage(dev.allocator(), img, alloc);
 
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vi.image    = depth_image_;
+    vi.image    = depth_image_.handle();
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format   = kDepthFormat;
     vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
@@ -145,11 +147,9 @@ void Swapchain::create_depth(const Device& dev) {
 }
 
 void Swapchain::destroy_depth(const Device& dev) {
-    if (depth_view_)  vkDestroyImageView(dev.handle(), depth_view_, nullptr);
-    if (depth_image_) vmaDestroyImage(dev.allocator(), depth_image_, depth_alloc_);
-    depth_view_  = VK_NULL_HANDLE;
-    depth_image_ = VK_NULL_HANDLE;
-    depth_alloc_ = nullptr;
+    if (depth_view_) vkDestroyImageView(dev.handle(), depth_view_, nullptr);
+    depth_view_ = VK_NULL_HANDLE;
+    depth_image_.reset();
 }
 
 }  // namespace plce::vk
