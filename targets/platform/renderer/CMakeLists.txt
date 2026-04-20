@@ -6,6 +6,8 @@ if(PLCE_RENDERER STREQUAL "vulkan")
         vk3/FrameContext.cpp
         vk3/PipelineCache.cpp
         vk3/Swapchain.cpp
+        vk3/TextureManager.cpp
+        vk3/DisplayListManager.cpp
         vk3/Renderer.cpp
         vk3/vma_impl.cpp
         RenderPathGlobals.cpp

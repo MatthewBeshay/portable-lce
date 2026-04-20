@@ -1,18 +1,7 @@
 #include "FrameContext.h"
-
-#include <stdexcept>
+#include "VkCheck.h"
 
 namespace plce::vk3 {
-
-namespace {
-void check(VkResult r, const char* msg) {
-    if (r != VK_SUCCESS) {
-        char buf[128];
-        std::snprintf(buf, sizeof buf, "%s: VkResult=%d", msg, int(r));
-        throw std::runtime_error(buf);
-    }
-}
-}  // namespace
 
 void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family) {
     // Command pool + primary command buffer

@@ -1,21 +1,11 @@
 #include "Swapchain.h"
 #include "Device.h"
+#include "VkCheck.h"
 
 #include <algorithm>
 #include <cstdio>
-#include <stdexcept>
 
 namespace plce::vk3 {
-
-namespace {
-void check(VkResult r, const char* msg) {
-    if (r != VK_SUCCESS) {
-        char buf[128];
-        std::snprintf(buf, sizeof buf, "%s: VkResult=%d", msg, int(r));
-        throw std::runtime_error(buf);
-    }
-}
-}  // namespace
 
 void Swapchain::create(const Device& dev, uint32_t w, uint32_t h) {
     VkSurfaceCapabilitiesKHR caps;

@@ -3,9 +3,6 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -14,153 +11,13 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <stdexcept>
 
-#include "platform/PlatformTypes.h"
+#include "VkCheck.h"
+#include "VertexFormats.h"
+
 #include "vk3/shaders/basic.vert.spv.h"  // kBasicVertSpv
 #include "vk3/shaders/basic.frag.spv.h"  // kBasicFragSpv
 
 namespace plce::vk3 {
-
-namespace {
-
-void check(VkResult r, const char* w) {
-    if (r != VK_SUCCESS) {
-        char b[128]; std::snprintf(b, sizeof b, "%s: %d", w, int(r));
-        throw std::runtime_error(b);
-    }
-}
-
-uint8_t blend_to_vk(rp::BlendFactor f) {
-    using BF = rp::BlendFactor;
-    switch (f) {
-        case BF::zero:                     return VK_BLEND_FACTOR_ZERO;
-        case BF::one:                      return VK_BLEND_FACTOR_ONE;
-        case BF::src_color:                return VK_BLEND_FACTOR_SRC_COLOR;
-        case BF::one_minus_src_color:      return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-        case BF::src_alpha:                return VK_BLEND_FACTOR_SRC_ALPHA;
-        case BF::one_minus_src_alpha:      return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        case BF::dst_color:                return VK_BLEND_FACTOR_DST_COLOR;
-        case BF::one_minus_dst_color:      return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-        case BF::dst_alpha:                return VK_BLEND_FACTOR_DST_ALPHA;
-        case BF::one_minus_dst_alpha:      return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-        case BF::constant_alpha:           return VK_BLEND_FACTOR_CONSTANT_ALPHA;
-        case BF::one_minus_constant_alpha: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
-    }
-    return VK_BLEND_FACTOR_ONE;
-}
-
-uint8_t depth_to_vk(rp::DepthTest f) {
-    using DT = rp::DepthTest;
-    switch (f) {
-        case DT::off:           return VK_COMPARE_OP_ALWAYS;
-        case DT::less:          return VK_COMPARE_OP_LESS;
-        case DT::less_equal:    return VK_COMPARE_OP_LESS_OR_EQUAL;
-        case DT::equal:         return VK_COMPARE_OP_EQUAL;
-        case DT::greater:       return VK_COMPARE_OP_GREATER;
-        case DT::greater_equal: return VK_COMPARE_OP_GREATER_OR_EQUAL;
-        case DT::always:        return VK_COMPARE_OP_ALWAYS;
-    }
-    return VK_COMPARE_OP_LESS_OR_EQUAL;
-}
-
-int* stb_to_argb(unsigned char* px, int w, int h) {
-    int* out = new int[w * h];
-    for (int i = 0; i < w * h; ++i) {
-        unsigned char r = px[i*4], g = px[i*4+1], b = px[i*4+2], a = px[i*4+3];
-        out[i] = (a << 24) | (r << 16) | (g << 8) | b;
-    }
-    return out;
-}
-
-// Push constant block -- matches the GLSL layout in basic.vert / basic.frag.
-// Single 256-byte range shared by both vertex and fragment stages.
-struct alignas(16) PushConstants {
-    glm::mat4 mvp;              // 0
-    glm::vec4 nm0;              // 64   mat3(mv)[0].xyz, tex_scale_x
-    glm::vec4 nm1;              // 80   mat3(mv)[1].xyz, tex_scale_y
-    glm::vec4 nm2;              // 96   mat3(mv)[2].xyz, tex_offset_x
-    glm::vec4 chunk_lit;        // 112  chunk_offset.xyz, lighting_enabled
-    glm::vec4 l0;               // 128  light0_dir.xyz, tex_offset_y
-    glm::vec4 l1;               // 144  light1_dir.xyz, mv_translation.x
-    glm::vec4 ldiff;            // 160  light_diffuse.xyz, mv_translation.y
-    glm::vec4 lamb;             // 176  light_ambient.xyz, mv_translation.z
-    glm::vec4 fog_params;       // 192  mode, start, end, density
-    glm::vec4 state_colour;     // 208
-    glm::vec4 fog_colour;       // 224
-    float     alpha_ref;        // 240
-    float     inv_gamma;        // 244
-    uint32_t  flags;            // 248  bit0=textured, bit1=alpha_test, bit2=lightmap
-    uint32_t  global_lm_packed; // 252
-};
-static_assert(sizeof(PushConstants) == 256);
-static_assert(offsetof(PushConstants, mvp) == 0);
-static_assert(offsetof(PushConstants, fog_params) == 192);
-static_assert(offsetof(PushConstants, state_colour) == 208);
-static_assert(offsetof(PushConstants, fog_colour) == 224);
-static_assert(offsetof(PushConstants, alpha_ref) == 240);
-static_assert(offsetof(PushConstants, inv_gamma) == 244);
-static_assert(offsetof(PushConstants, flags) == 248);
-static_assert(offsetof(PushConstants, global_lm_packed) == 252);
-
-// Expand compact 16-byte vertex format to 32-byte world_standard.
-std::vector<std::byte> expand_compact(const void* data, int& count) {
-    constexpr uint32_t kStride = 32;
-    int quads = count / 4;
-    int tri_verts = quads * 6;
-    std::vector<std::byte> out(size_t(tri_verts) * kStride);
-    const int16_t* src = static_cast<const int16_t*>(data);
-    for (int q = 0; q < quads; ++q) {
-        std::byte expanded[4 * kStride];
-        for (int v = 0; v < 4; ++v) {
-            const int16_t* sv = src + q * 4 * 8 + v * 8;
-            auto* dst = expanded + v * kStride;
-            auto* dstF = reinterpret_cast<float*>(dst);
-            dstF[0] = sv[0] / 1024.0f;
-            dstF[1] = sv[1] / 1024.0f;
-            dstF[2] = sv[2] / 1024.0f;
-            dstF[3] = sv[4] / 8192.0f;
-            dstF[4] = sv[5] / 8192.0f;
-            uint16_t packed = uint16_t(int(sv[3]) + 32768);
-            dst[20] = std::byte(uint8_t((packed & 0x1F) * 255 / 31));
-            dst[21] = std::byte(uint8_t(((packed >> 5) & 0x3F) * 255 / 63));
-            dst[22] = std::byte(uint8_t(((packed >> 11) & 0x1F) * 255 / 31));
-            dst[23] = std::byte(255);
-            dst[24] = std::byte(0); dst[25] = std::byte(127);
-            dst[26] = std::byte(0); dst[27] = std::byte(0);
-            auto* dstS = reinterpret_cast<int16_t*>(dst + 28);
-            dstS[0] = sv[6]; dstS[1] = sv[7];
-        }
-        auto put = [&](int ti, int vi) {
-            std::memcpy(out.data() + (q * 6 + ti) * kStride,
-                        expanded + vi * kStride, kStride);
-        };
-        put(0,0); put(1,1); put(2,2); put(3,0); put(4,2); put(5,3);
-    }
-    count = tri_verts;
-    return out;
-}
-
-// Convert triangle fan to triangle list on CPU.
-std::vector<std::byte> fan_to_list(const void* data, int& count) {
-    constexpr uint32_t kStride = 32;
-    if (count < 3) { count = 0; return {}; }
-    int tri_count = count - 2;
-    int tri_verts = tri_count * 3;
-    std::vector<std::byte> out(size_t(tri_verts) * kStride);
-    const std::byte* src = static_cast<const std::byte*>(data);
-    for (int i = 0; i < tri_count; ++i) {
-        std::memcpy(out.data() + (i * 3 + 0) * kStride, src, kStride);
-        std::memcpy(out.data() + (i * 3 + 1) * kStride, src + (i + 1) * kStride, kStride);
-        std::memcpy(out.data() + (i * 3 + 2) * kStride, src + (i + 2) * kStride, kStride);
-    }
-    count = tri_verts;
-    return out;
-}
-
-// Thread-local display list recording state
-struct RecState { int id = -1; std::vector<Renderer::DisplayListDraw> draws; };
-thread_local RecState t_rec;
-
-}  // namespace
 
 // ===================================================================
 // LIFECYCLE
@@ -175,9 +32,6 @@ Renderer::Renderer(SDL_Window* window)
 #endif
            }),
       window_(window) {
-    textures_.reserve(256);
-    display_lists_.reserve(4096);
-
     swap_.create(dev_, 0, 0);
 
     for (auto& f : frames_)
@@ -301,29 +155,9 @@ Renderer::Renderer(SDL_Window* window)
         vkDestroyCommandPool(dev_.handle(), pool, nullptr);
     }
 
-    // Staging buffer + upload pool for textures
-    {
-        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bi.size = kStagingSize; bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_AUTO;
-        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                   VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VmaAllocationInfo info{};
-        check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &staging_buf_,
-                              &staging_alloc_, &info), "staging buf");
-        staging_mapped_ = static_cast<std::byte*>(info.pMappedData);
-
-        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
-                    VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pci.queueFamilyIndex = dev_.queue_family();
-        check(vkCreateCommandPool(dev_.handle(), &pci, nullptr, &upload_pool_), "upload pool");
-    }
-
-    default_tex_ = ensure_default_texture();
-    default_lm_  = ensure_default_lightmap();
-    bound_tex_   = default_tex_;
+    tex_mgr_.init(dev_.handle(), dev_.allocator(), dev_.queue(), dev_.queue_family(),
+                  tex_set_layout_, tex_pool_);
+    dl_mgr_.init();
 
     {
         int w, h;
@@ -346,46 +180,14 @@ Renderer::~Renderer() {
     for (auto& pd : pending_destroys_)
         vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
     pending_destroys_.clear();
-    for (auto& cb : display_lists_)
-        if (cb.vb) vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
-    if (upload_pool_) vkDestroyCommandPool(dev_.handle(), upload_pool_, nullptr);
-    if (staging_buf_) vmaDestroyBuffer(dev_.allocator(), staging_buf_, staging_alloc_);
+    tex_mgr_.destroy(dev_.handle(), dev_.allocator());
     if (quad_ib_) vmaDestroyBuffer(dev_.allocator(), quad_ib_, quad_ib_alloc_);
     pipelines_.destroy();
     if (pipeline_layout_) vkDestroyPipelineLayout(dev_.handle(), pipeline_layout_, nullptr);
-    for (auto& t : textures_) {
-        if (t.view)  vkDestroyImageView(dev_.handle(), t.view, nullptr);
-        if (t.image) vmaDestroyImage(dev_.allocator(), t.image, t.alloc);
-    }
-    for (auto& [k, s] : sampler_cache_)
-        vkDestroySampler(dev_.handle(), s, nullptr);
     if (tex_pool_)       vkDestroyDescriptorPool(dev_.handle(), tex_pool_, nullptr);
     if (tex_set_layout_) vkDestroyDescriptorSetLayout(dev_.handle(), tex_set_layout_, nullptr);
     for (auto& f : frames_) f.destroy(dev_.handle(), dev_.allocator());
     swap_.destroy(dev_);
-}
-
-// ===================================================================
-// SAMPLER CACHE
-// ===================================================================
-
-VkSampler Renderer::get_or_create_sampler(const SamplerKey& key) {
-    auto it = sampler_cache_.find(key);
-    if (it != sampler_cache_.end()) return it->second;
-
-    VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    ci.magFilter    = key.mag_filter;
-    ci.minFilter    = key.min_filter;
-    ci.mipmapMode   = key.mip_mode;
-    ci.addressModeU = key.wrap_s;
-    ci.addressModeV = key.wrap_t;
-    ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    ci.maxLod       = VK_LOD_CLAMP_NONE;
-
-    VkSampler sampler = VK_NULL_HANDLE;
-    check(vkCreateSampler(dev_.handle(), &ci, nullptr, &sampler), "sampler");
-    sampler_cache_.emplace(key, sampler);
-    return sampler;
 }
 
 // ===================================================================
@@ -749,47 +551,6 @@ void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* ti
 }
 
 // ===================================================================
-// TEXTURE BINDING HELPER
-// ===================================================================
-
-Renderer::BoundTexResult Renderer::bind_textures(VkCommandBuffer cmd) {
-    VkDescriptorSet ds = VK_NULL_HANDLE;
-    bool textured = false;
-    bool lm_active = false;
-    {
-        std::lock_guard lk(texture_mutex_);
-        int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
-                   textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
-        auto& ts = textures_[tex];
-        if (ts.sampler_dirty) { update_tex_descriptor(ts); ts.sampler_dirty = false; }
-        ds = ts.desc_set;
-        textured = (tex != default_tex_);
-        // Update lightmap binding only when the bound lightmap actually changes.
-        // bound_lm is invalidated (-1) whenever update_tex_descriptor or
-        // upload_texture overwrites the descriptor set's binding 1.
-        if (ds && lightmap_tex_ > 0 && size_t(lightmap_tex_) < textures_.size() &&
-            textures_[lightmap_tex_].ready) {
-            if (ts.bound_lm != lightmap_tex_) {
-                auto& lm = textures_[lightmap_tex_];
-                VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
-                VkDescriptorImageInfo lm_dii{lm_sampler, lm.view,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                wd.dstSet = ds; wd.dstBinding = 1; wd.descriptorCount = 1;
-                wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                wd.pImageInfo = &lm_dii;
-                vkUpdateDescriptorSets(dev_.handle(), 1, &wd, 0, nullptr);
-                ts.bound_lm = lightmap_tex_;
-            }
-            lm_active = true;
-        }
-    }
-    if (ds) vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                     pipeline_layout_, 0, 1, &ds, 0, nullptr);
-    return {ds, textured, lm_active};
-}
-
-// ===================================================================
 // DRAW
 // ===================================================================
 
@@ -800,16 +561,10 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     // CBuff recording must be checked BEFORE frame_active_ — worker
     // threads rebuild chunks between frames when frame_active_ is false.
     // Recording just copies to CPU memory, no GPU state needed.
-    if (t_rec.id >= 0) {
+    if (dl_mgr_.is_recording()) {
         constexpr uint32_t kStd = 32;
-        DisplayListDraw d;
-        d.primType = primType;
-        d.vertexType = vType;
-        d.shaderType = 0;
         size_t bytes = (vType == 1) ? size_t(count) * 16 : size_t(count) * kStd;
-        d.verts.resize(bytes);
-        std::memcpy(d.verts.data(), data, bytes);
-        t_rec.draws.push_back(std::move(d));
+        dl_mgr_.record_draw(primType, vType, data, bytes);
         return;
     }
 
@@ -874,7 +629,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     // Dynamic depth bias
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
-    auto [ds, textured, lm_active] = bind_textures(f.cmd);
+    auto [ds, textured, lm_active] = tex_mgr_.bind_textures(f.cmd, pipeline_layout_);
 
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);
 
@@ -940,570 +695,37 @@ void Renderer::pop_debug_event() {
 }
 
 // ===================================================================
-// TEXTURES
+// TEXTURES (delegated to TextureManager)
 // ===================================================================
 
-int Renderer::TextureCreate() {
-    std::lock_guard lk(texture_mutex_);
-    textures_.emplace_back();
-    return int(textures_.size()) - 1;
-}
-
-void Renderer::TextureFree(int idx) {
-    std::lock_guard lk(texture_mutex_);
-    if (idx <= 0 || size_t(idx) >= textures_.size()) return;
-    if (idx == default_tex_) return;
-    auto& t = textures_[idx];
-    if (t.view || t.image) {
-        auto view = t.view; auto img = t.image; auto alloc = t.alloc;
-        auto dev = dev_.handle(); auto vma = dev_.allocator();
-        frame().deletions.push([=]() {
-            if (view) vkDestroyImageView(dev, view, nullptr);
-            if (img)  vmaDestroyImage(vma, img, alloc);
-        });
-    }
-    t = {};
-}
-
-void Renderer::TextureBind(int idx) {
-    std::lock_guard lk(texture_mutex_);
-    if (idx < 0) { bound_tex_ = default_tex_; return; }
-    if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1);
-    bound_tex_ = idx;
-}
-
-void Renderer::TextureData(int w, int h, void* data, int level, int) {
-    if (level != 0 || !data) return;
-    int idx;
-    { std::lock_guard lk(texture_mutex_); idx = bound_tex_; if (idx <= 0) return;
-      if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1); }
-
-    upload_texture(idx, w, h, data);
-}
-
-void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int level) {
-    if (level != 0 || !data) return;
-    int idx;
-    { std::lock_guard lk(texture_mutex_); idx = bound_tex_; if (idx <= 0 || size_t(idx) >= textures_.size()) return; }
-    auto& t = textures_[idx];
-    if (!t.ready) return;
-    if (xo == 0 && yo == 0 && uint32_t(w) == t.width && uint32_t(h) == t.height) {
-        // Full rewrite — use existing upload path
-        upload_texture(idx, w, h, data);
-    } else if (xo >= 0 && yo >= 0 && uint32_t(xo + w) <= t.width && uint32_t(yo + h) <= t.height) {
-        // Partial sub-region update
-        VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
-        if (bytes > kStagingSize) return;
-        std::memcpy(staging_mapped_, data, bytes);
-
-        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "tex update cmd");
-        VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bbi);
-
-        // Transition to TRANSFER_DST for the sub-region copy
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        b.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.image = t.image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &dep);
-
-        VkBufferImageCopy rgn{};
-        rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        rgn.imageOffset = {xo, yo, 0};
-        rgn.imageExtent = {uint32_t(w), uint32_t(h), 1};
-        vkCmdCopyBufferToImage(cmd, staging_buf_, t.image,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
-
-        // Transition back to SHADER_READ_ONLY
-        b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier2(cmd, &dep);
-
-        vkEndCommandBuffer(cmd);
-        VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-        csi.commandBuffer = cmd;
-        VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-        sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-        vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
-        vkQueueWaitIdle(dev_.queue());
-        vkResetCommandBuffer(cmd, 0);
-    }
-}
-
-void Renderer::TextureSetParam(int param, int value) {
-    std::lock_guard lk(texture_mutex_);
-    if (bound_tex_ <= 0 || size_t(bound_tex_) >= textures_.size()) return;
-    auto& t = textures_[bound_tex_];
-
-    constexpr int GL_TEXTURE_MIN_FILTER = 0x2801;
-    constexpr int GL_TEXTURE_MAG_FILTER = 0x2800;
-    constexpr int GL_TEXTURE_WRAP_S     = 0x2802;
-    constexpr int GL_TEXTURE_WRAP_T     = 0x2803;
-    constexpr int GL_NEAREST            = 0x2600;
-    constexpr int GL_LINEAR             = 0x2601;
-    constexpr int GL_NEAREST_MIPMAP_NEAREST = 0x2700;
-    constexpr int GL_LINEAR_MIPMAP_NEAREST  = 0x2701;
-    constexpr int GL_NEAREST_MIPMAP_LINEAR  = 0x2702;
-    constexpr int GL_LINEAR_MIPMAP_LINEAR   = 0x2703;
-    constexpr int GL_CLAMP_TO_EDGE = 0x812F;
-
-    switch (param) {
-        case GL_TEXTURE_MIN_FILTER:
-            switch (value) {
-                case GL_NEAREST:
-                    t.sampler_key.min_filter = VK_FILTER_NEAREST;
-                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-                    break;
-                case GL_LINEAR:
-                    t.sampler_key.min_filter = VK_FILTER_LINEAR;
-                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-                    break;
-                case GL_NEAREST_MIPMAP_NEAREST:
-                    t.sampler_key.min_filter = VK_FILTER_NEAREST;
-                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-                    break;
-                case GL_LINEAR_MIPMAP_NEAREST:
-                    t.sampler_key.min_filter = VK_FILTER_LINEAR;
-                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-                    break;
-                case GL_NEAREST_MIPMAP_LINEAR:
-                    t.sampler_key.min_filter = VK_FILTER_NEAREST;
-                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-                    break;
-                case GL_LINEAR_MIPMAP_LINEAR:
-                    t.sampler_key.min_filter = VK_FILTER_LINEAR;
-                    t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-                    break;
-            }
-            t.sampler_dirty = true;
-            break;
-
-        case GL_TEXTURE_MAG_FILTER:
-            t.sampler_key.mag_filter = (value == GL_NEAREST)
-                ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-            t.sampler_dirty = true;
-            break;
-
-        case GL_TEXTURE_WRAP_S:
-            t.sampler_key.wrap_s = (value == GL_CLAMP_TO_EDGE)
-                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            t.sampler_dirty = true;
-            break;
-
-        case GL_TEXTURE_WRAP_T:
-            t.sampler_key.wrap_t = (value == GL_CLAMP_TO_EDGE)
-                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            t.sampler_dirty = true;
-            break;
-    }
-}
-
-int Renderer::ensure_default_texture() {
-    int idx = TextureCreate();
-    uint32_t pixel = 0xFFFFFFFF;
-    { std::lock_guard lk(texture_mutex_); bound_tex_ = idx; }
-    upload_texture(idx, 1, 1, &pixel);
-    return idx;
-}
-
-int Renderer::ensure_default_lightmap() {
-    int idx = TextureCreate();
-    uint32_t pixel = 0xFFFFFFFF;
-    { std::lock_guard lk(texture_mutex_); bound_tex_ = idx; }
-    upload_texture(idx, 1, 1, &pixel);
-    return idx;
-}
-
-void Renderer::update_tex_descriptor(TextureSlot& t) {
-    if (!t.desc_set || !t.view) return;
-    VkSampler sampler = get_or_create_sampler(t.sampler_key);
-    VkDescriptorImageInfo dii{sampler, t.view,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[2]{};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = t.desc_set; writes[0].dstBinding = 0; writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].pImageInfo = &dii;
-    uint32_t n = 1;
-    // Also write binding 1 with default lightmap fallback
-    VkDescriptorImageInfo lm_dii{};
-    if (default_lm_ > 0 && size_t(default_lm_) < textures_.size() && textures_[default_lm_].view) {
-        auto& lm = textures_[default_lm_];
-        VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
-        lm_dii = {lm_sampler, lm.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = t.desc_set; writes[1].dstBinding = 1; writes[1].descriptorCount = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].pImageInfo = &lm_dii;
-        n = 2;
-    }
-    vkUpdateDescriptorSets(dev_.handle(), n, writes, 0, nullptr);
-    // Binding 1 was overwritten with default lightmap — invalidate cache
-    t.bound_lm = -1;
-}
-
-void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
-    auto& t = textures_[idx];
-    bool reuse = t.ready && t.width == uint32_t(w) && t.height == uint32_t(h);
-    if (t.ready && !reuse) {
-        auto view = t.view; auto img = t.image; auto alloc = t.alloc;
-        auto dev = dev_.handle(); auto vma = dev_.allocator();
-        frame().deletions.push([=]() {
-            if (view) vkDestroyImageView(dev, view, nullptr);
-            if (img)  vmaDestroyImage(vma, img, alloc);
-        });
-        VkDescriptorSet keep = t.desc_set;
-        SamplerKey sk = t.sampler_key;
-        t = {}; t.desc_set = keep; t.sampler_key = sk;
-    }
-    t.width = w; t.height = h;
-
-    uint32_t mips = 1;
-    { uint32_t d = std::max(uint32_t(w), uint32_t(h)); while (d > 1) { d >>= 1; ++mips; } }
-
-    if (!reuse) {
-        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ici.imageType = VK_IMAGE_TYPE_2D;
-        ici.format    = VK_FORMAT_R8G8B8A8_UNORM;
-        ici.extent    = {t.width, t.height, 1};
-        ici.mipLevels = mips; ici.arrayLayers = 1;
-        ici.samples   = VK_SAMPLE_COUNT_1_BIT;
-        ici.tiling    = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage     = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                        VK_IMAGE_USAGE_SAMPLED_BIT;
-        VmaAllocationCreateInfo ai{}; ai.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(dev_.allocator(), &ici, &ai, &t.image, &t.alloc, nullptr), "texture image");
-
-        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vci.image = t.image; vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
-        check(vkCreateImageView(dev_.handle(), &vci, nullptr, &t.view), "texture view");
-    }
-
-    if (!t.desc_set) {
-        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        dai.descriptorPool = tex_pool_; dai.descriptorSetCount = 1;
-        dai.pSetLayouts = &tex_set_layout_;
-        check(vkAllocateDescriptorSets(dev_.handle(), &dai, &t.desc_set), "texture desc set");
-    }
-    // Write descriptor with per-texture sampler (binding 0 = diffuse, binding 1 = lightmap fallback)
-    {
-        VkSampler sampler = get_or_create_sampler(t.sampler_key);
-        VkDescriptorImageInfo dii{sampler, t.view,
-                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[2]{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = t.desc_set; writes[0].dstBinding = 0; writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[0].pImageInfo = &dii;
-        uint32_t n = 1;
-        VkDescriptorImageInfo lm_dii{};
-        if (default_lm_ > 0 && size_t(default_lm_) < textures_.size() && textures_[default_lm_].view) {
-            auto& lm = textures_[default_lm_];
-            VkSampler lm_sampler = get_or_create_sampler(lm_sampler_key_);
-            lm_dii = {lm_sampler, lm.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet = t.desc_set; writes[1].dstBinding = 1; writes[1].descriptorCount = 1;
-            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[1].pImageInfo = &lm_dii;
-            n = 2;
-        }
-        vkUpdateDescriptorSets(dev_.handle(), n, writes, 0, nullptr);
-    }
-    t.sampler_dirty = false;
-    t.bound_lm = -1;  // binding 1 was overwritten with default lightmap
-
-    // Stage + copy via upload pool
-    VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
-    if (bytes > kStagingSize) return;
-
-    std::memcpy(staging_mapped_, pixels, bytes);
-
-    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "texture upload cmd");
-    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bbi);
-
-    // UNDEFINED -> TRANSFER_DST
-    {
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.image = t.image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
-        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &dep);
-    }
-    VkBufferImageCopy rgn{};
-    rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    rgn.imageExtent = {t.width, t.height, 1};
-    vkCmdCopyBufferToImage(cmd, staging_buf_, t.image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
-
-    // Mip generation
-    int32_t mw = w, mh = h;
-    for (uint32_t i = 1; i < mips; ++i) {
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT;
-        b.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        b.image = t.image;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i-1, 1, 0, 1};
-        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &dep);
-
-        int32_t nw = std::max(mw/2, 1), nh = std::max(mh/2, 1);
-        VkImageBlit blit{};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i-1, 0, 1};
-        blit.srcOffsets[1] = {mw, mh, 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
-        blit.dstOffsets[1] = {nw, nh, 1};
-        vkCmdBlitImage(cmd, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &blit, VK_FILTER_LINEAR);
-        mw = nw; mh = nh;
-    }
-
-    // All mips -> SHADER_READ_ONLY
-    {
-        VkImageMemoryBarrier2 ends[2]{}; uint32_t n = 0;
-        if (mips > 1) {
-            ends[n].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            ends[n].srcStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT;
-            ends[n].srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            ends[n].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            ends[n].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            ends[n].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            ends[n].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            ends[n].image = t.image;
-            ends[n].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips-1, 0, 1};
-            ++n;
-        }
-        ends[n].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        ends[n].srcStageMask = (mips>1) ? VK_PIPELINE_STAGE_2_BLIT_BIT : VK_PIPELINE_STAGE_2_COPY_BIT;
-        ends[n].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        ends[n].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        ends[n].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        ends[n].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        ends[n].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        ends[n].image = t.image;
-        ends[n].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mips-1, 1, 0, 1};
-        ++n;
-        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = n; dep.pImageMemoryBarriers = ends;
-        vkCmdPipelineBarrier2(cmd, &dep);
-    }
-    vkEndCommandBuffer(cmd);
-    VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    csi.commandBuffer = cmd;
-    VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-    vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
-    vkQueueWaitIdle(dev_.queue());
-    vkResetCommandBuffer(cmd, 0);
-    t.ready = true;
-}
-
-int Renderer::LoadTextureData(const char* fn, void* srcInfo, int** out) {
-    int w, h, c;
-    unsigned char* px = stbi_load(fn, &w, &h, &c, 4);
-    if (!px) return -1;
-    if (auto* i = static_cast<D3DXIMAGE_INFO*>(srcInfo)) { i->Width = w; i->Height = h; }
-    *out = stb_to_argb(px, w, h);
-    stbi_image_free(px);
-    return 0;
-}
-
-int Renderer::LoadTextureData(uint8_t* data, uint32_t bytes, void* srcInfo, int** out) {
-    int w, h, c;
-    unsigned char* px = stbi_load_from_memory(data, int(bytes), &w, &h, &c, 4);
-    if (!px) return -1;
-    if (auto* i = static_cast<D3DXIMAGE_INFO*>(srcInfo)) { i->Width = w; i->Height = h; }
-    *out = stb_to_argb(px, w, h);
-    stbi_image_free(px);
-    return 0;
-}
+int Renderer::TextureCreate() { return tex_mgr_.create(); }
+void Renderer::TextureFree(int idx) { tex_mgr_.free(idx, frame().deletions); }
+void Renderer::TextureBind(int idx) { tex_mgr_.bind(idx); }
+void Renderer::TextureData(int w, int h, void* data, int level, int) { tex_mgr_.data(w, h, data, level); }
+void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int lvl) { tex_mgr_.data_update(xo, yo, w, h, data, lvl); }
+void Renderer::TextureSetParam(int param, int value) { tex_mgr_.set_param(param, value); }
+int Renderer::LoadTextureData(const char* fn, void* info, int** out) { return tex_mgr_.load_texture_data(fn, info, out); }
+int Renderer::LoadTextureData(uint8_t* data, uint32_t bytes, void* info, int** out) { return tex_mgr_.load_texture_data(data, bytes, info, out); }
 
 // ===================================================================
-// CBUFF (DISPLAY LISTS)
+// CBUFF (DISPLAY LISTS — delegated to DisplayListManager)
 // ===================================================================
 
-int Renderer::CBuffCreate(int n) {
-    std::lock_guard lk(display_list_mutex_);
-    int first = next_display_list_;
-    int needed = n > 0 ? n : 1;
-    next_display_list_ += needed;
-    if (size_t(first + needed) > display_lists_.size()) display_lists_.resize(first + needed);
-    return first;
-}
-
-void Renderer::CBuffDeleteAll() {
-    std::lock_guard lk(display_list_mutex_);
-    { std::lock_guard lk2(pending_destroy_mutex_);
-      for (auto& cb : display_lists_)
-          if (cb.vb) pending_destroys_.push_back({cb.vb, cb.alloc}); }
-    display_lists_.clear();
-    next_display_list_ = 1;
-    t_rec.id = -1; t_rec.draws.clear();
-}
-
-void Renderer::CBuffStart(int index, bool) { t_rec.id = index; t_rec.draws.clear(); }
-
-void Renderer::CBuffClear(int index) {
-    std::lock_guard lk(display_list_mutex_);
-    if (index < 0 || size_t(index) >= display_lists_.size()) return;
-    auto& cb = display_lists_[index];
-    cb.draws.clear(); cb.gpu_draws.clear();
-    if (cb.vb) {
-        { std::lock_guard lk2(pending_destroy_mutex_);
-          pending_destroys_.push_back({cb.vb, cb.alloc}); }
-        cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr; cb.vb_size = 0;
-    }
-    cb.valid = cb.uploaded = false;
-}
-
-int Renderer::CBuffSize(int index) {
-    std::lock_guard lk(display_list_mutex_);
-    if (index < 0 || size_t(index) >= display_lists_.size()) return 0;
-    return display_lists_[index].valid ? 1 : 0;
-}
-
-void Renderer::CBuffEnd() {
-    int id = t_rec.id; t_rec.id = -1;
-    if (id < 0) return;
-    std::lock_guard lk(display_list_mutex_);
-    if (size_t(id) >= display_lists_.size()) display_lists_.resize(id + 1);
-    auto& cb = display_lists_[id];
-    cb.draws = std::move(t_rec.draws);
-    cb.valid = !cb.draws.empty();
-    cb.uploaded = false;
-    t_rec.draws.clear();
-}
-
-void Renderer::display_list_upload(DisplayList& cb) {
-    constexpr uint32_t kStride = 32;
-    std::vector<std::byte> combined;
-    cb.gpu_draws.clear();
-
-    for (auto& d : cb.draws) {
-        const void* src = d.verts.data();
-        int vert_count;
-        std::vector<std::byte> expanded_storage;
-
-        if (d.vertexType == 1) {
-            vert_count = int(d.verts.size() / 16);
-            expanded_storage = expand_compact(src, vert_count);
-            src = expanded_storage.data();
-            // expand_compact already triangulates quads
-            uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(),
-                            static_cast<const std::byte*>(src),
-                            static_cast<const std::byte*>(src) + size_t(vert_count) * kStride);
-            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), 0x0004});
-            continue;
-        }
-
-        vert_count = int(d.verts.size() / kStride);
-        if (vert_count == 0) continue;
-
-        if (d.primType == 0x0007) {
-            // Quads -> triangles
-            if (vert_count % 4 != 0) continue;
-            uint32_t quads = vert_count / 4;
-            uint32_t byte_off = uint32_t(combined.size());
-            for (uint32_t q = 0; q < quads; ++q) {
-                const std::byte* b = d.verts.data() + q * 4 * kStride;
-                auto push = [&](uint32_t i) {
-                    combined.insert(combined.end(), b + i*kStride, b + (i+1)*kStride);
-                };
-                push(0); push(1); push(2); push(0); push(2); push(3);
-            }
-            cb.gpu_draws.push_back({byte_off, quads * 6, 0x0004});
-        } else if (d.primType == 0x0006) {
-            // Fan -> triangles
-            if (vert_count < 3) continue;
-            int fan_count = vert_count;
-            auto fan_data = fan_to_list(d.verts.data(), fan_count);
-            if (fan_count == 0) continue;
-            uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(), fan_data.begin(), fan_data.end());
-            cb.gpu_draws.push_back({byte_off, uint32_t(fan_count), 0x0004});
-        } else {
-            uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
-            cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), d.primType});
-        }
-    }
-    if (combined.empty()) { cb.uploaded = false; return; }
-
-    uint32_t needed = uint32_t(combined.size());
-
-    // Always allocate a new host-visible buffer to avoid data races with
-    // the GPU reading the previous frame's data. Old buffer is deferred-
-    // destroyed after the GPU is done. Direct memcpy eliminates staging
-    // buffer, command buffer submission, and vkQueueWaitIdle entirely.
-    if (cb.vb)
-        frame().deletions.push_buffer(dev_.allocator(), cb.vb, cb.alloc);
-
-    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size  = needed;
-    bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    VmaAllocationCreateInfo ai{};
-    ai.usage = VMA_MEMORY_USAGE_AUTO;
-    ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-               VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    VmaAllocationInfo info{};
-    check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &cb.vb, &cb.alloc, &info),
-          "display list vb");
-    cb.vb_size = needed;
-
-    std::memcpy(info.pMappedData, combined.data(), needed);
-    cb.uploaded = true;
-}
+int Renderer::CBuffCreate(int n) { return dl_mgr_.create(n); }
+void Renderer::CBuffDeleteAll() { dl_mgr_.delete_all(pending_destroys_, pending_destroy_mutex_); }
+void Renderer::CBuffStart(int index, bool) { dl_mgr_.start(index); }
+void Renderer::CBuffClear(int index) { dl_mgr_.clear(index, pending_destroys_, pending_destroy_mutex_); }
+int Renderer::CBuffSize(int index) { return dl_mgr_.size(index); }
+void Renderer::CBuffEnd() { dl_mgr_.end(); }
 
 bool Renderer::CBuffCall(int index, bool) {
     if (index < 0 || !frame_active_) return false;
 
-    VkBuffer vb = VK_NULL_HANDLE;
-    std::vector<DisplayListSubDraw> draws;
-    {
-        std::lock_guard lk(display_list_mutex_);
-        if (size_t(index) >= display_lists_.size()) return false;
-        auto& cb = display_lists_[index];
-        if (!cb.valid || cb.draws.empty()) return false;
-        if (!cb.uploaded) { display_list_upload(cb); if (!cb.uploaded) return false; }
-        vb = cb.vb; draws = cb.gpu_draws;
-    }
+    auto* dl = dl_mgr_.prepare(index, frame().deletions, dev_.allocator());
+    if (!dl) return false;
+
+    VkBuffer vb = dl->vb;
+    auto draws = dl->gpu_draws;
 
     auto& f = frame();
     ensure_pass();
@@ -1516,7 +738,7 @@ bool Renderer::CBuffCall(int index, bool) {
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
-    auto [ds, textured, lm_active] = bind_textures(f.cmd);
+    auto [ds, textured, lm_active] = tex_mgr_.bind_textures(f.cmd, pipeline_layout_);
 
     PushConstants pc{};
     fill_push_constants(&pc, textured);
@@ -1594,7 +816,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     }
     vkCmdSetPrimitiveTopology(f.cmd, topo);
 
-    auto [ds, textured, lm_active] = bind_textures(f.cmd);
+    auto [ds, textured, lm_active] = tex_mgr_.bind_textures(f.cmd, pipeline_layout_);
 
     VkDeviceSize off = tvb.offset;
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.transient_vb, &off);

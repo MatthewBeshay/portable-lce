@@ -1,21 +1,13 @@
 #include "PipelineCache.h"
+#include "VkCheck.h"
 
 #include <cstdio>
 #include <cstdint>
-#include <stdexcept>
 #include <vector>
 
 namespace plce::vk3 {
 
 namespace {
-void check(VkResult r, const char* msg) {
-    if (r != VK_SUCCESS) {
-        char buf[128];
-        std::snprintf(buf, sizeof buf, "%s: VkResult=%d", msg, int(r));
-        throw std::runtime_error(buf);
-    }
-}
-
 VkShaderModule make_module(VkDevice dev, const uint32_t* code, size_t bytes) {
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = bytes;

@@ -7,15 +7,16 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
 #include <vector>
 
 #include "platform/renderer/IRenderPath.h"
 #include "Device.h"
 #include "DeletionQueue.h"
+#include "DisplayListManager.h"
 #include "FrameContext.h"
 #include "PipelineCache.h"
 #include "Swapchain.h"
+#include "TextureManager.h"
 
 struct SDL_Window;
 
@@ -25,13 +26,6 @@ namespace plce::vk3 {
 /// per-texture samplers, and fan-to-list CPU conversion.
 class Renderer final : public rp::IRenderPath {
 public:
-    struct DisplayListDraw {
-        int primType = 0;
-        int vertexType = 0;
-        int shaderType = 0;
-        std::vector<std::byte> verts;
-    };
-
     explicit Renderer(SDL_Window* window);
     ~Renderer() override;
 
@@ -113,7 +107,7 @@ public:
     [[nodiscard]] int TextureCreate() override;
     void TextureFree(int idx) override;
     void TextureBind(int idx) override;
-    void TextureBindVertex(int idx, bool) override { lightmap_tex_ = idx; }
+    void TextureBindVertex(int idx, bool) override { tex_mgr_.bind_vertex(idx); }
     void TextureSetTextureLevels(int) override {}
     void TextureData(int w, int h, void* data, int level, int format) override;
     void TextureDataUpdate(int xo, int yo, int w, int h, void* data, int lvl) override;
@@ -175,6 +169,8 @@ private:
     Swapchain  swap_;
     std::array<FrameContext, kFramesInFlight> frames_;
     PipelineCache pipelines_;
+    TextureManager tex_mgr_;
+    DisplayListManager dl_mgr_;
 
     // -- Pipeline layout + descriptors --
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
@@ -185,13 +181,6 @@ private:
     VkBuffer      quad_ib_       = VK_NULL_HANDLE;
     VmaAllocation quad_ib_alloc_ = nullptr;
     static constexpr uint32_t kMaxQuads = 16384;
-
-    // Staging for texture uploads
-    VkBuffer      staging_buf_    = VK_NULL_HANDLE;
-    VmaAllocation staging_alloc_  = nullptr;
-    std::byte*    staging_mapped_ = nullptr;
-    static constexpr VkDeviceSize kStagingSize = 16ull * 1024 * 1024;
-    VkCommandPool upload_pool_ = VK_NULL_HANDLE;
 
     // -- Per-frame state --
     uint32_t frame_idx_     = 0;
@@ -240,74 +229,10 @@ private:
     std::vector<glm::mat4> proj_stack_{glm::mat4(1)};
     std::vector<glm::mat4> tex_stack_{glm::mat4(1)};
 
-    // Per-texture sampler state
-    struct SamplerKey {
-        VkFilter     min_filter = VK_FILTER_NEAREST;
-        VkFilter     mag_filter = VK_FILTER_NEAREST;
-        VkSamplerMipmapMode mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        VkSamplerAddressMode wrap_s = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        VkSamplerAddressMode wrap_t = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        bool operator==(const SamplerKey&) const = default;
-    };
-    struct SamplerKeyHash {
-        size_t operator()(const SamplerKey& k) const noexcept {
-            size_t h = 0;
-            h ^= std::hash<int>{}(int(k.min_filter));
-            h ^= std::hash<int>{}(int(k.mag_filter)) << 4;
-            h ^= std::hash<int>{}(int(k.mip_mode)) << 8;
-            h ^= std::hash<int>{}(int(k.wrap_s)) << 12;
-            h ^= std::hash<int>{}(int(k.wrap_t)) << 16;
-            return h;
-        }
-    };
-    std::unordered_map<SamplerKey, VkSampler, SamplerKeyHash> sampler_cache_;
-    VkSampler get_or_create_sampler(const SamplerKey& key);
-
-    // Textures
-    struct TextureSlot {
-        VkImage         image    = VK_NULL_HANDLE;
-        VmaAllocation   alloc    = nullptr;
-        VkImageView     view     = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
-        uint32_t        width = 0, height = 0;
-        bool            ready = false;
-        SamplerKey      sampler_key{};
-        bool            sampler_dirty = false;
-        int             bound_lm = -1;  // lightmap index last written to desc binding 1
-    };
-    std::vector<TextureSlot> textures_;
-    int default_tex_ = 0;
-    int default_lm_  = 0;
-    int bound_tex_   = 0;
-    int lightmap_tex_ = 0;
-    SamplerKey lm_sampler_key_{VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-                               VK_SAMPLER_MIPMAP_MODE_NEAREST,
-                               VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                               VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE};
     uint32_t next_material_id_ = 0;
-    mutable std::mutex texture_mutex_;
-
-    // Display lists
-    struct DisplayListSubDraw {
-        uint32_t vertex_offset = 0;
-        uint32_t vertex_count  = 0;
-        int      prim_type     = 0;
-    };
-    struct DisplayList {
-        std::vector<DisplayListDraw> draws;
-        std::vector<DisplayListSubDraw> gpu_draws;
-        VkBuffer      vb = VK_NULL_HANDLE;
-        VmaAllocation alloc = nullptr;
-        uint32_t      vb_size = 0;
-        bool valid = false, uploaded = false;
-    };
-    std::vector<DisplayList> display_lists_;
-    int next_display_list_ = 1;
-    mutable std::mutex display_list_mutex_;
 
     // Thread-safe deferred buffer destruction. Worker threads push here
     // instead of accessing frame().deletions (which is main-thread only).
-    struct PendingDestroy { VkBuffer buf; VmaAllocation alloc; };
     std::vector<PendingDestroy> pending_destroys_;
     std::mutex pending_destroy_mutex_;
 
@@ -321,15 +246,7 @@ private:
     void ensure_pass();
     void begin_pass();
     void end_pass();
-    int  ensure_default_texture();
-    int  ensure_default_lightmap();
-    void upload_texture(int idx, int w, int h, const void* pixels);
-    void update_tex_descriptor(TextureSlot& t);
-    void display_list_upload(DisplayList& cb);
     void fill_push_constants(void* out, bool textured, const glm::vec4* tint = nullptr);
-
-    struct BoundTexResult { VkDescriptorSet ds; bool textured; bool lm_active; };
-    BoundTexResult bind_textures(VkCommandBuffer cmd);
 };
 
 }  // namespace plce::vk3
