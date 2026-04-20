@@ -8,7 +8,8 @@
 namespace plce::vk {
 
 void Swapchain::create(const Device& dev, uint32_t w, uint32_t h,
-                       VkPresentModeKHR preferred_mode) {
+                       VkPresentModeKHR preferred_mode,
+                       VkSwapchainKHR old_swapchain) {
     present_mode_ = preferred_mode;
 
     VkSurfaceCapabilitiesKHR caps;
@@ -66,6 +67,7 @@ void Swapchain::create(const Device& dev, uint32_t w, uint32_t h,
     }
     ci.presentMode      = mode;
     ci.clipped          = VK_TRUE;
+    ci.oldSwapchain     = old_swapchain;
     check(vkCreateSwapchainKHR(dev.handle(), &ci, nullptr, &swapchain_),
           "vkCreateSwapchainKHR");
 
@@ -98,9 +100,22 @@ void Swapchain::destroy(const Device& dev) {
 }
 
 void Swapchain::resize(const Device& dev, uint32_t w, uint32_t h) {
-    VkPresentModeKHR mode = present_mode_;
-    destroy(dev);
-    create(dev, w, h, mode);
+    // Hand the old swapchain to vkCreateSwapchainKHR so the driver can
+    // reuse image allocations and keep presenting until the new chain is
+    // ready (avoids the black frame that a raw destroy+create produces).
+    // Views, depth, and the old swapchain itself are destroyed *after* the
+    // new one is built.
+    VkSwapchainKHR   old_sc   = swapchain_;
+    VkPresentModeKHR mode     = present_mode_;
+    destroy_depth(dev);
+    for (auto v : views_) vkDestroyImageView(dev.handle(), v, nullptr);
+    views_.clear();
+    images_.clear();
+    swapchain_ = VK_NULL_HANDLE;
+
+    create(dev, w, h, mode, old_sc);
+
+    if (old_sc) vkDestroySwapchainKHR(dev.handle(), old_sc, nullptr);
 }
 
 void Swapchain::create_depth(const Device& dev) {

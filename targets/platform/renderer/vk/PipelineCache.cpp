@@ -1,6 +1,7 @@
 #include "PipelineCache.h"
 #include "VkCheck.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdint>
 #include <vector>
@@ -8,6 +9,7 @@
 namespace plce::vk {
 
 namespace {
+
 VkShaderModule make_module(VkDevice dev, const uint32_t* code, size_t bytes) {
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = bytes;
@@ -16,6 +18,124 @@ VkShaderModule make_module(VkDevice dev, const uint32_t* code, size_t bytes) {
     check(vkCreateShaderModule(dev, &ci, nullptr, &m), "shader module");
     return m;
 }
+
+// All per-pipeline state referenced by VkGraphicsPipelineCreateInfo through
+// pointers. Instances are populated by `populate()` and must stay in memory
+// until vkCreateGraphicsPipelines returns — that lets us batch several
+// pipelines into one driver call without copying vertex-input descriptions
+// or dynamic-state arrays into a separate scratch arena.
+struct PipelineBuild {
+    VkPipelineShaderStageCreateInfo           stages[2]{};
+    VkVertexInputBindingDescription           binding_standard{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription         attrs_standard[5]{
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},   // pos
+        {1, 0, VK_FORMAT_R32G32_SFLOAT,    12},  // uv
+        {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20},  // color
+        {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24},  // normal
+        {4, 0, VK_FORMAT_R16G16_SINT,      28},  // lightmap UVs
+    };
+    VkVertexInputBindingDescription           binding_compact{0, 16, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription         attrs_compact[2]{
+        {0, 0, VK_FORMAT_R16G16B16A16_SINT, 0},  // (pos.xyz, color 5-6-5)
+        {1, 0, VK_FORMAT_R16G16B16A16_SINT, 8},  // (uv.xy,   lm.uv)
+    };
+    VkPipelineVertexInputStateCreateInfo      vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo    ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    VkPipelineViewportStateCreateInfo         vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    VkPipelineRasterizationStateCreateInfo    rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    VkPipelineMultisampleStateCreateInfo      ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    VkPipelineDepthStencilStateCreateInfo     ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    VkPipelineColorBlendAttachmentState       att{};
+    VkPipelineColorBlendStateCreateInfo       cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    VkDynamicState                            dyn_states[5]{
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
+        VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+        VK_DYNAMIC_STATE_DEPTH_BIAS,
+    };
+    VkPipelineDynamicStateCreateInfo          dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    VkPipelineRenderingCreateInfo             prci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    VkGraphicsPipelineCreateInfo              gci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+};
+
+void populate(const PipelineCache::Config& cfg, const PipelineKey& key,
+              VkShaderModule vert_mod, VkShaderModule vert_compact_mod,
+              VkShaderModule frag_mod, PipelineBuild& b) {
+    b.stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    b.stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    b.stages[0].module = key.compact() ? vert_compact_mod : vert_mod;
+    b.stages[0].pName  = "main";
+    b.stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    b.stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    b.stages[1].module = frag_mod;
+    b.stages[1].pName  = "main";
+
+    b.vi.vertexBindingDescriptionCount = 1;
+    if (key.compact()) {
+        b.vi.pVertexBindingDescriptions      = &b.binding_compact;
+        b.vi.vertexAttributeDescriptionCount = 2;
+        b.vi.pVertexAttributeDescriptions    = b.attrs_compact;
+    } else {
+        b.vi.pVertexBindingDescriptions      = &b.binding_standard;
+        b.vi.vertexAttributeDescriptionCount = 5;
+        b.vi.pVertexAttributeDescriptions    = b.attrs_standard;
+    }
+
+    b.ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    b.vp.viewportCount = 1;
+    b.vp.scissorCount  = 1;
+
+    b.rs.polygonMode     = VK_POLYGON_MODE_FILL;
+    b.rs.cullMode        = key.cull_back() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    b.rs.frontFace       = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    b.rs.lineWidth       = 1.0f;
+    b.rs.depthBiasEnable = VK_TRUE;  // dynamic depth bias via vkCmdSetDepthBias
+
+    b.ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    b.ds.depthTestEnable  = key.depth_test()  ? VK_TRUE : VK_FALSE;
+    b.ds.depthWriteEnable = key.depth_write() ? VK_TRUE : VK_FALSE;
+    b.ds.depthCompareOp   = VkCompareOp(key.depth_func());
+
+    const uint8_t cmask = key.color_mask();
+    b.att.blendEnable         = key.blend_enable() ? VK_TRUE : VK_FALSE;
+    b.att.srcColorBlendFactor = VkBlendFactor(key.blend_src());
+    b.att.dstColorBlendFactor = VkBlendFactor(key.blend_dst());
+    b.att.colorBlendOp        = VK_BLEND_OP_ADD;
+    b.att.srcAlphaBlendFactor = VkBlendFactor(key.blend_src());
+    b.att.dstAlphaBlendFactor = VkBlendFactor(key.blend_dst());
+    b.att.alphaBlendOp        = VK_BLEND_OP_ADD;
+    b.att.colorWriteMask =
+        ((cmask & 0x1) ? VK_COLOR_COMPONENT_R_BIT : 0) |
+        ((cmask & 0x2) ? VK_COLOR_COMPONENT_G_BIT : 0) |
+        ((cmask & 0x4) ? VK_COLOR_COMPONENT_B_BIT : 0) |
+        ((cmask & 0x8) ? VK_COLOR_COMPONENT_A_BIT : 0);
+    b.cb.attachmentCount = 1;
+    b.cb.pAttachments    = &b.att;
+
+    b.dyn.dynamicStateCount = uint32_t(std::size(b.dyn_states));
+    b.dyn.pDynamicStates    = b.dyn_states;
+
+    b.prci.colorAttachmentCount    = 1;
+    b.prci.pColorAttachmentFormats = &cfg.color_format;
+    b.prci.depthAttachmentFormat   = cfg.depth_format;
+
+    b.gci.pNext               = &b.prci;
+    b.gci.stageCount          = 2;
+    b.gci.pStages             = b.stages;
+    b.gci.pVertexInputState   = &b.vi;
+    b.gci.pInputAssemblyState = &b.ia;
+    b.gci.pViewportState      = &b.vp;
+    b.gci.pRasterizationState = &b.rs;
+    b.gci.pMultisampleState   = &b.ms;
+    b.gci.pDepthStencilState  = &b.ds;
+    b.gci.pColorBlendState    = &b.cb;
+    b.gci.pDynamicState       = &b.dyn;
+    b.gci.layout              = cfg.layout;
+}
+
 }  // namespace
 
 void PipelineCache::init(const Config& cfg) {
@@ -52,174 +172,72 @@ VkPipeline PipelineCache::get(const PipelineKey& key) {
 }
 
 void PipelineCache::warm_up() {
-    PipelineKey opaque{};
-    get(opaque);
+    // Collect the warm-up keys so we can issue one batched
+    // vkCreateGraphicsPipelines call — lets drivers compile the variants
+    // in parallel instead of serializing six individual submissions.
+    std::vector<PipelineKey> keys;
+    keys.reserve(8);
 
-    PipelineKey opaque_cull = opaque;
-    opaque_cull.set_cull_back(true);
-    get(opaque_cull);
+    {
+        PipelineKey opaque{};
+        keys.push_back(opaque);
 
-    PipelineKey blend{};
-    blend.set_blend_enable(true);
-    blend.set_depth_write(false);
-    get(blend);
+        PipelineKey opaque_cull = opaque;
+        opaque_cull.set_cull_back(true);
+        keys.push_back(opaque_cull);
 
-    PipelineKey depth_off{};
-    depth_off.set_depth_test(false);
-    get(depth_off);
+        PipelineKey blend{};
+        blend.set_blend_enable(true);
+        blend.set_depth_write(false);
+        keys.push_back(blend);
 
-    PipelineKey lines_key{};
-    lines_key.set_lines(true);
-    get(lines_key);
+        PipelineKey depth_off{};
+        depth_off.set_depth_test(false);
+        keys.push_back(depth_off);
+    }
 
     if (vert_compact_mod_) {
         PipelineKey compact_opaque{};
         compact_opaque.set_compact(true);
-        get(compact_opaque);
+        keys.push_back(compact_opaque);
 
         PipelineKey compact_cull = compact_opaque;
         compact_cull.set_cull_back(true);
-        get(compact_cull);
+        keys.push_back(compact_cull);
     }
+
+    // Skip any keys already present (defensive — warm_up is expected to
+    // run exactly once, but re-entering it should not crash).
+    std::vector<PipelineKey> fresh;
+    fresh.reserve(keys.size());
+    for (const auto& k : keys)
+        if (cache_.find(k) == cache_.end()) fresh.push_back(k);
+    if (fresh.empty()) return;
+
+    std::vector<PipelineBuild> builds(fresh.size());
+    std::vector<VkGraphicsPipelineCreateInfo> cis(fresh.size());
+    for (size_t i = 0; i < fresh.size(); ++i) {
+        populate(cfg_, fresh[i], vert_mod_, vert_compact_mod_, frag_mod_, builds[i]);
+        cis[i] = builds[i].gci;
+    }
+
+    std::vector<VkPipeline> out(fresh.size(), VK_NULL_HANDLE);
+    check(vkCreateGraphicsPipelines(cfg_.device, vk_cache_,
+                                    uint32_t(cis.size()), cis.data(),
+                                    nullptr, out.data()),
+          "graphics pipelines (warm up)");
+    for (size_t i = 0; i < fresh.size(); ++i)
+        cache_.emplace(fresh[i], out[i]);
 
     std::fprintf(stderr, "[vk] warmed %zu pipelines\n", cache_.size());
 }
 
 VkPipeline PipelineCache::create(const PipelineKey& key) {
-    // Shader stages
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = key.compact() ? vert_compact_mod_ : vert_mod_;
-    stages[0].pName  = "main";
-    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = frag_mod_;
-    stages[1].pName  = "main";
-
-    // Vertex input: 32-byte WorldStandardVertex (default) or 16-byte compact.
-    // The compact layout feeds 2x R16G16B16A16_SINT attributes that the vertex
-    // shader decodes into pos/uv/color on the fly.
-    VkVertexInputBindingDescription binding_standard{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs_standard[5]{
-        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},   // pos
-        {1, 0, VK_FORMAT_R32G32_SFLOAT,    12},  // uv
-        {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20},  // color
-        {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24},  // normal
-        {4, 0, VK_FORMAT_R16G16_SINT,      28},  // lightmap UVs
-    };
-    VkVertexInputBindingDescription binding_compact{0, 16, VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs_compact[2]{
-        {0, 0, VK_FORMAT_R16G16B16A16_SINT, 0},  // (pos.x, pos.y, pos.z, color 5-6-5)
-        {1, 0, VK_FORMAT_R16G16B16A16_SINT, 8},  // (uv.x, uv.y, lm.u, lm.v)
-    };
-
-    VkPipelineVertexInputStateCreateInfo vi{
-        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount = 1;
-    if (key.compact()) {
-        vi.pVertexBindingDescriptions      = &binding_compact;
-        vi.vertexAttributeDescriptionCount = 2;
-        vi.pVertexAttributeDescriptions    = attrs_compact;
-    } else {
-        vi.pVertexBindingDescriptions      = &binding_standard;
-        vi.vertexAttributeDescriptionCount = 5;
-        vi.pVertexAttributeDescriptions    = attrs_standard;
-    }
-
-    // Input assembly — topology is dynamic
-    VkPipelineInputAssemblyStateCreateInfo ia{
-        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    // Viewport + scissor — dynamic
-    VkPipelineViewportStateCreateInfo vp{
-        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    vp.viewportCount = 1;
-    vp.scissorCount  = 1;
-
-    // Rasterization — canonical CCW front face with back-face culling.
-    // Y-flip is done via negative viewport height at bind time, which
-    // naturally reverses winding so this stays consistent with game geometry.
-    VkPipelineRasterizationStateCreateInfo rs{
-        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.polygonMode    = VK_POLYGON_MODE_FILL;
-    rs.cullMode       = key.cull_back() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
-    rs.frontFace      = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth      = 1.0f;
-    rs.depthBiasEnable = VK_TRUE;  // dynamic depth bias via vkCmdSetDepthBias
-
-    // Multisample
-    VkPipelineMultisampleStateCreateInfo ms{
-        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    // Depth/stencil
-    VkPipelineDepthStencilStateCreateInfo ds{
-        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    ds.depthTestEnable  = key.depth_test()  ? VK_TRUE : VK_FALSE;
-    ds.depthWriteEnable = key.depth_write() ? VK_TRUE : VK_FALSE;
-    ds.depthCompareOp   = VkCompareOp(key.depth_func());
-
-    // Blend
-    const uint8_t cmask = key.color_mask();
-    VkPipelineColorBlendAttachmentState att{};
-    att.blendEnable         = key.blend_enable() ? VK_TRUE : VK_FALSE;
-    att.srcColorBlendFactor = VkBlendFactor(key.blend_src());
-    att.dstColorBlendFactor = VkBlendFactor(key.blend_dst());
-    att.colorBlendOp        = VK_BLEND_OP_ADD;
-    att.srcAlphaBlendFactor = VkBlendFactor(key.blend_src());
-    att.dstAlphaBlendFactor = VkBlendFactor(key.blend_dst());
-    att.alphaBlendOp        = VK_BLEND_OP_ADD;
-    att.colorWriteMask =
-        ((cmask & 0x1) ? VK_COLOR_COMPONENT_R_BIT : 0) |
-        ((cmask & 0x2) ? VK_COLOR_COMPONENT_G_BIT : 0) |
-        ((cmask & 0x4) ? VK_COLOR_COMPONENT_B_BIT : 0) |
-        ((cmask & 0x8) ? VK_COLOR_COMPONENT_A_BIT : 0);
-
-    VkPipelineColorBlendStateCreateInfo cb{
-        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1;
-    cb.pAttachments    = &att;
-
-    // Dynamic state
-    VkDynamicState dyn_states[] = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
-        VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
-        VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-        VK_DYNAMIC_STATE_DEPTH_BIAS,
-    };
-    VkPipelineDynamicStateCreateInfo dyn{
-        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyn.dynamicStateCount = uint32_t(std::size(dyn_states));
-    dyn.pDynamicStates    = dyn_states;
-
-    // Dynamic rendering (no VkRenderPass)
-    VkPipelineRenderingCreateInfo prci{
-        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    prci.colorAttachmentCount    = 1;
-    prci.pColorAttachmentFormats = &cfg_.color_format;
-    prci.depthAttachmentFormat   = cfg_.depth_format;
-
-    // Assemble
-    VkGraphicsPipelineCreateInfo gci{
-        VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gci.pNext               = &prci;
-    gci.stageCount          = 2;
-    gci.pStages             = stages;
-    gci.pVertexInputState   = &vi;
-    gci.pInputAssemblyState = &ia;
-    gci.pViewportState      = &vp;
-    gci.pRasterizationState = &rs;
-    gci.pMultisampleState   = &ms;
-    gci.pDepthStencilState  = &ds;
-    gci.pColorBlendState    = &cb;
-    gci.pDynamicState       = &dyn;
-    gci.layout              = cfg_.layout;
+    PipelineBuild b;
+    populate(cfg_, key, vert_mod_, vert_compact_mod_, frag_mod_, b);
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    check(vkCreateGraphicsPipelines(cfg_.device, vk_cache_, 1, &gci,
+    check(vkCreateGraphicsPipelines(cfg_.device, vk_cache_, 1, &b.gci,
                                     nullptr, &pipeline),
           "graphics pipeline");
     return pipeline;

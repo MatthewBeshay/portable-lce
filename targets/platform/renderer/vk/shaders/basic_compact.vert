@@ -53,8 +53,8 @@ void main() {
         float((packed >> 11u) & 0x1Fu) / 31.0,
         1.0);
 
-    // The compact format has no per-vertex normal; expand_compact wrote a
-    // fixed (0, 127, 0, 0) SNORM — i.e. pointing +Y. Use +Y directly.
+    // The compact format has no per-vertex normal — use +Y so per-vertex
+    // lighting still produces a sensible top-lit result when enabled.
     vec3 raw_n = vec3(0.0, 1.0, 0.0);
 
     ivec2 a_lm_raw = a_packed1.zw;

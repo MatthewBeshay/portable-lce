@@ -53,6 +53,12 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
     recreate_transient(alloc, kInitialTransientSize);
 }
 
+void FrameContext::reset_acquire_semaphore(VkDevice dev) {
+    if (sem_acquired) vkDestroySemaphore(dev, sem_acquired, nullptr);
+    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    check(vkCreateSemaphore(dev, &sci, nullptr, &sem_acquired), "sem acq (reset)");
+}
+
 void FrameContext::destroy(VkDevice dev, VmaAllocator alloc) {
     deletions.flush();
     if (transient_vb) vmaDestroyBuffer(alloc, transient_vb, transient_alloc);

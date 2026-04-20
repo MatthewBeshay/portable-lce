@@ -75,7 +75,6 @@ void DisplayListManager::record_draw(int primType, int vertexType,
     DisplayListDraw d;
     d.primType = primType;
     d.vertexType = vertexType;
-    d.shaderType = 0;
     d.verts.resize(bytes);
     std::memcpy(d.verts.data(), data, bytes);
     t_rec.draws.push_back(std::move(d));

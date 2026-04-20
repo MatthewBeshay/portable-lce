@@ -60,26 +60,34 @@ Renderer::Renderer(SDL_Window* window)
         f.create(dev_.handle(), dev_.allocator(), dev_.queue_family());
 
     // Immutable samplers — diffuse uses nearest+mipmap+repeat (Minecraft default),
-    // lightmap uses linear+clamp. These are baked into the descriptor set layout
-    // so no descriptor updates are needed for the sampler side.
+    // lightmap uses linear+clamp with a single LOD. These are baked into the
+    // descriptor set layout so no descriptor updates are needed for the
+    // sampler side. Each sampler gets its own fully-initialised sci struct
+    // so that differences are explicit and fields don't silently inherit.
     {
-        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        sci.magFilter    = VK_FILTER_NEAREST;
-        sci.minFilter    = VK_FILTER_NEAREST;
-        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sci.maxLod       = VK_LOD_CLAMP_NONE;
-        check(vkCreateSampler(dev_.handle(), &sci, nullptr, &sampler_diffuse_), "diffuse sampler");
+        VkSamplerCreateInfo diffuse{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        diffuse.magFilter    = VK_FILTER_NEAREST;
+        diffuse.minFilter    = VK_FILTER_NEAREST;
+        diffuse.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        diffuse.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        diffuse.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        diffuse.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        diffuse.minLod       = 0.0f;
+        diffuse.maxLod       = VK_LOD_CLAMP_NONE;
+        check(vkCreateSampler(dev_.handle(), &diffuse, nullptr, &sampler_diffuse_),
+              "diffuse sampler");
 
-        sci.magFilter    = VK_FILTER_LINEAR;
-        sci.minFilter    = VK_FILTER_LINEAR;
-        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        check(vkCreateSampler(dev_.handle(), &sci, nullptr, &sampler_lightmap_), "lightmap sampler");
+        VkSamplerCreateInfo lightmap{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        lightmap.magFilter    = VK_FILTER_LINEAR;
+        lightmap.minFilter    = VK_FILTER_LINEAR;
+        lightmap.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        lightmap.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        lightmap.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        lightmap.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        lightmap.minLod       = 0.0f;
+        lightmap.maxLod       = 0.25f;  // lightmap is a single mip, clamp hard
+        check(vkCreateSampler(dev_.handle(), &lightmap, nullptr, &sampler_lightmap_),
+              "lightmap sampler");
     }
 
     // Bindless descriptor set layout: SAMPLED_IMAGE[kMaxTextures] + 2 immutable samplers.
@@ -248,6 +256,13 @@ Renderer::Renderer(SDL_Window* window)
 
     tex_mgr_.init(dev_, bindless_set_);
     dl_mgr_.init();
+
+#ifndef NDEBUG
+    fn_begin_label_ = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(dev_.handle(), "vkCmdBeginDebugUtilsLabelEXT"));
+    fn_end_label_ = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(dev_.handle(), "vkCmdEndDebugUtilsLabelEXT"));
+#endif
 
     {
         int w, h;
@@ -499,6 +514,13 @@ void Renderer::resize(uint32_t w, uint32_t h) {
     if (w == 0 || h == 0) return;
     for (auto& f : frames_)
         vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
+    // A VK_SUBOPTIMAL_KHR return from vkAcquireNextImageKHR leaves the
+    // acquire semaphore signaled even though we are discarding the image.
+    // Reusing a still-signaled semaphore in the next acquire is UB. After
+    // the fence wait above, no pending command buffer references these
+    // semaphores, so it is safe to destroy + recreate them here.
+    for (auto& f : frames_)
+        f.reset_acquire_semaphore(dev_.handle());
     swap_.resize(dev_, w, h);
     fb_.width = swap_.extent().width;
     fb_.height = swap_.extent().height;
@@ -684,8 +706,7 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
 // DRAW
 // ===================================================================
 
-void Renderer::DrawVertices(int primType, int count, void* data,
-                            int vType, int /*sType*/) {
+void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     if (count <= 0 || !data) return;
 
     // CBuff recording must be checked BEFORE frame_active_ — worker
@@ -717,14 +738,14 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     }
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    bool is_quads = false, is_lines = false;
+    bool is_quads = false;
     if (is_compact) {
         // Compact format is always quads from chunk meshing.
         is_quads = true;
     } else {
         switch (primType) {
-            case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;      is_lines = true; break;
-            case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;     is_lines = true; break;
+            case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;      break;
+            case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;     break;
             case 0x0004: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  break;
             case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
             case 0x0007: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  is_quads = true; break;
@@ -732,7 +753,6 @@ void Renderer::DrawVertices(int primType, int count, void* data,
         }
     }
     if (is_quads && (count % 4) != 0) return;
-    if (pso_key_.lines()   != is_lines)   { pso_key_.set_lines(is_lines);     pso_dirty_ = true; }
     if (pso_key_.compact() != is_compact) { pso_key_.set_compact(is_compact); pso_dirty_ = true; }
 
     auto& f = frame();
@@ -813,12 +833,10 @@ bool Renderer::IsHiDef() { return fb_.is_hi_def; }
 
 void Renderer::push_debug_event(const char* name) {
 #ifndef NDEBUG
-    auto fn = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
-        vkGetInstanceProcAddr(dev_.instance(), "vkCmdBeginDebugUtilsLabelEXT"));
-    if (fn && frame_active_) {
+    if (fn_begin_label_ && frame_active_) {
         VkDebugUtilsLabelEXT l{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
         l.pLabelName = name;
-        fn(frame().cmd, &l);
+        fn_begin_label_(frame().cmd, &l);
     }
 #else
     (void)name;
@@ -827,9 +845,7 @@ void Renderer::push_debug_event(const char* name) {
 
 void Renderer::pop_debug_event() {
 #ifndef NDEBUG
-    auto fn = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
-        vkGetInstanceProcAddr(dev_.instance(), "vkCmdEndDebugUtilsLabelEXT"));
-    if (fn && frame_active_) fn(frame().cmd);
+    if (fn_end_label_ && frame_active_) fn_end_label_(frame().cmd);
 #endif
 }
 

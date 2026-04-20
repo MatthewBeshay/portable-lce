@@ -62,7 +62,7 @@ public:
     [[nodiscard]] const float* MatrixGet(rp::MatrixStack stack) override;
 
     // -- Draw --
-    void DrawVertices(int primType, int count, void* data, int vType, int sType) override;
+    void DrawVertices(int primType, int count, void* data, int vType) override;
 
     // -- Resources --
     [[nodiscard]] rp::MeshHandle create_mesh(const rp::MeshDesc&) override { return rp::kInvalidMesh; }
@@ -254,6 +254,12 @@ private:
     // Framebuffer info
     rp::FrameFramebuffer fb_{};
     SDL_Window* window_ = nullptr;
+
+    // Cached VK_EXT_debug_utils entry points. Resolved once in the
+    // constructor; used from push_debug_event / pop_debug_event so the
+    // hot path doesn't call vkGetDeviceProcAddr per draw.
+    PFN_vkCmdBeginDebugUtilsLabelEXT fn_begin_label_ = nullptr;
+    PFN_vkCmdEndDebugUtilsLabelEXT   fn_end_label_   = nullptr;
 
     // -- Internal helpers --
     FrameContext& frame() { return frames_[frame_idx_]; }

@@ -117,23 +117,16 @@ found:
     v12.descriptorBindingVariableDescriptorCount              = VK_TRUE;
     v12.descriptorBindingUpdateUnusedWhilePending             = VK_TRUE;
 
-    // Vulkan 1.3 features
+    // Vulkan 1.3 features. Dynamic rendering + synchronization 2 are used
+    // throughout; extendedDynamicState (topology, depth bias, etc.) is core
+    // in 1.3 and does not need a separate feature chain. No wideLines /
+    // depthBiasClamp request: neither is driven by the renderer.
     vkhpp::PhysicalDeviceVulkan13Features v13;
     v13.dynamicRendering = VK_TRUE;
     v13.synchronization2 = VK_TRUE;
     v13.pNext            = &v12;
 
-    // Extended dynamic state (for topology, depth bias, etc.)
-    vkhpp::PhysicalDeviceExtendedDynamicStateFeaturesEXT eds;
-    eds.extendedDynamicState = VK_TRUE;
-    eds.pNext = &v13;
-
-    vkhpp::PhysicalDeviceFeatures feats;
-    auto supported = physical_.getFeatures();
-    feats.wideLines      = supported.wideLines;
-    feats.depthBiasClamp = supported.depthBiasClamp;
-
-    vkhpp::DeviceCreateInfo dci({}, qci, {}, dev_exts, &feats, &eds);
+    vkhpp::DeviceCreateInfo dci({}, qci, {}, dev_exts, nullptr, &v13);
     device_ = vkhpp::raii::Device(physical_, dci);
     queue_ = (*device_).getQueue(queue_family_, 0);
 

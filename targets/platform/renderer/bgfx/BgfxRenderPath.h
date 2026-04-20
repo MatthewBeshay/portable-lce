@@ -69,8 +69,8 @@ public:
     void MatrixMult(float* mat) override;
     [[nodiscard]] const float* MatrixGet(rp::MatrixStack stack) override;
 
-    void DrawVertices(int primitiveType, int count, void* data, int vertexType,
-                      int shaderType) override;
+    void DrawVertices(int primitiveType, int count, void* data,
+                      int vertexType) override;
 
     [[nodiscard]] int CBuffCreate(int count) override;
     void CBuffDelete(int first, int count) override;

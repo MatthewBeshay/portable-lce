@@ -11,8 +11,8 @@
 
 namespace {
 
-void submit_draw(int prim, int count, void* data, int vtype, int stype) {
-    RenderPath.DrawVertices(prim, count, data, vtype, stype);
+void submit_draw(int prim, int count, void* data, int vtype) {
+    RenderPath.DrawVertices(prim, count, data, vtype);
 }
 
 } // namespace
@@ -113,36 +113,20 @@ void Tesselator::end() {
             }
         }
         if (mode == 0x0007 && TRIANGLE_MODE) {
-            submit_draw(
-                0, vertices,
-                _array->data(),
-                useCompactFormat360
-                    ? 1
-                    : 0,
-                useProjectedTexturePixelShader
-                    ? 1
-                    : 0);
+            submit_draw(0, vertices, _array->data(),
+                        useCompactFormat360 ? 1 : 0);
         } else {
             int vertexCount = vertices;
             if (useCompactFormat360) {
-                submit_draw(
-                    mode, vertexCount,
-                    _array->data(), 1,
-                    0);
+                submit_draw(mode, vertexCount, _array->data(), 1);
+            } else if (useProjectedTexturePixelShader) {
+                // vType == 2 was the projected-texture shader path, now
+                // unwired in every backend. Submit as standard — the
+                // legacy shader selection bit used to ride on sType and
+                // was dropped along with it.
+                submit_draw(mode, vertexCount, _array->data(), 2);
             } else {
-                if (useProjectedTexturePixelShader) {
-                    submit_draw(
-                        mode, vertexCount,
-                        _array->data(),
-                        2,
-                        1);
-                } else {
-                    submit_draw(
-                        mode, vertexCount,
-                        _array->data(),
-                        0,
-                        0);
-                }
+                submit_draw(mode, vertexCount, _array->data(), 0);
             }
         }
         // 4jcraft: gldisableclientstate breaks gl compat, commenting those lead

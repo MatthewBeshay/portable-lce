@@ -223,6 +223,12 @@ void TextureManager::free(int idx, DeletionQueue& deletions) {
 void TextureManager::bind(int idx) {
     std::lock_guard lk(texture_mutex_);
     if (idx < 0) { bound_tex_ = default_tex_; return; }
+    if (uint32_t(idx) >= kMaxTextures) {
+        throw std::runtime_error(
+            "vk::TextureManager::bind: texture index exceeds bindless array "
+            "size (kMaxTextures=4096). Caller is binding an id that was never "
+            "issued by create().");
+    }
     if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1);
     bound_tex_ = idx;
 }
@@ -230,8 +236,17 @@ void TextureManager::bind(int idx) {
 void TextureManager::data(int w, int h, const void* pixels, int level) {
     if (level != 0 || !pixels) return;
     int idx;
-    { std::lock_guard lk(texture_mutex_); idx = bound_tex_; if (idx <= 0) return;
-      if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1); }
+    {
+        std::lock_guard lk(texture_mutex_);
+        idx = bound_tex_;
+        if (idx <= 0) return;
+        if (uint32_t(idx) >= kMaxTextures) {
+            throw std::runtime_error(
+                "vk::TextureManager::data: bound texture index exceeds "
+                "bindless array size (kMaxTextures=4096).");
+        }
+        if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1);
+    }
 
     upload_texture(idx, w, h, pixels);
 }

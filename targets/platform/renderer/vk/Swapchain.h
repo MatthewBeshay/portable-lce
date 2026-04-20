@@ -15,8 +15,14 @@ class Swapchain {
 public:
     /// Create the swapchain. `preferred_mode` is the desired present mode —
     /// FIFO is always available and used as fallback if unsupported.
+    /// `old_swapchain`, if non-null, is passed as
+    /// VkSwapchainCreateInfoKHR::oldSwapchain so the driver can reuse
+    /// image memory / internal state across a resize. The caller retains
+    /// ownership of the old handle and must destroy it after `create`
+    /// returns (resize() does this).
     void create(const Device& dev, uint32_t w, uint32_t h,
-                VkPresentModeKHR preferred_mode = VK_PRESENT_MODE_FIFO_KHR);
+                VkPresentModeKHR preferred_mode = VK_PRESENT_MODE_FIFO_KHR,
+                VkSwapchainKHR old_swapchain = VK_NULL_HANDLE);
     void destroy(const Device& dev);
     void resize(const Device& dev, uint32_t w, uint32_t h);
 

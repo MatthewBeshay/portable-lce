@@ -15,7 +15,6 @@ namespace plce::vk {
 struct DisplayListDraw {
     int primType = 0;
     int vertexType = 0;
-    int shaderType = 0;
     std::vector<std::byte> verts;
 };
 

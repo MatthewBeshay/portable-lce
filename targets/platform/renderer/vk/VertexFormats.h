@@ -77,44 +77,6 @@ inline uint8_t depth_to_vk(rp::DepthTest f) {
     return VK_COMPARE_OP_LESS_OR_EQUAL;
 }
 
-// Expand compact 16-byte vertex format to 32-byte world_standard.
-inline std::vector<std::byte> expand_compact(const void* data, int& count) {
-    constexpr uint32_t kStride = 32;
-    int quads = count / 4;
-    int tri_verts = quads * 6;
-    std::vector<std::byte> out(size_t(tri_verts) * kStride);
-    const int16_t* src = static_cast<const int16_t*>(data);
-    for (int q = 0; q < quads; ++q) {
-        std::byte expanded[4 * kStride];
-        for (int v = 0; v < 4; ++v) {
-            const int16_t* sv = src + q * 4 * 8 + v * 8;
-            auto* dst = expanded + v * kStride;
-            auto* dstF = reinterpret_cast<float*>(dst);
-            dstF[0] = sv[0] / 1024.0f;
-            dstF[1] = sv[1] / 1024.0f;
-            dstF[2] = sv[2] / 1024.0f;
-            dstF[3] = sv[4] / 8192.0f;
-            dstF[4] = sv[5] / 8192.0f;
-            uint16_t packed = uint16_t(int(sv[3]) + 32768);
-            dst[20] = std::byte(uint8_t((packed & 0x1F) * 255 / 31));
-            dst[21] = std::byte(uint8_t(((packed >> 5) & 0x3F) * 255 / 63));
-            dst[22] = std::byte(uint8_t(((packed >> 11) & 0x1F) * 255 / 31));
-            dst[23] = std::byte(255);
-            dst[24] = std::byte(0); dst[25] = std::byte(127);
-            dst[26] = std::byte(0); dst[27] = std::byte(0);
-            auto* dstS = reinterpret_cast<int16_t*>(dst + 28);
-            dstS[0] = sv[6]; dstS[1] = sv[7];
-        }
-        auto put = [&](int ti, int vi) {
-            std::memcpy(out.data() + (q * 6 + ti) * kStride,
-                        expanded + vi * kStride, kStride);
-        };
-        put(0,0); put(1,1); put(2,2); put(3,0); put(4,2); put(5,3);
-    }
-    count = tri_verts;
-    return out;
-}
-
 // Convert triangle fan to triangle list on CPU.
 inline std::vector<std::byte> fan_to_list(const void* data, int& count) {
     constexpr uint32_t kStride = 32;

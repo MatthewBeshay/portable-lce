@@ -510,7 +510,7 @@ void BgfxRenderPath::StateSetVertexTextureUV(float u, float v) {
 
 static int s_frameCount = 0;
 void BgfxRenderPath::DrawVertices(int primType, int count, void* data,
-                                  int vType, int) {
+                                  int vType) {
     if (count <= 0 || !data) return;
 
     uint32_t stride = vl_world_standard_.getStride();  // 32

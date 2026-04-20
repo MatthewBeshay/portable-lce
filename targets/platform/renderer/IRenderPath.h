@@ -472,9 +472,13 @@ public:
     virtual void MatrixMult(float* mat) = 0;
     [[nodiscard]] virtual const float* MatrixGet(MatrixStack stack) = 0;
 
-    // Draw
+    // Draw. `vertexType` is 0 = WorldStandardVertex (32 B), 1 = compact
+    // chunk format (16 B). The previous `shaderType` parameter was unused
+    // by every backend — when a projected-texture / alt shader path is
+    // genuinely needed, add a typed `ShaderPath` argument rather than
+    // reviving the silent int.
     virtual void DrawVertices(int primitiveType, int count, void* data,
-                              int vertexType, int shaderType) = 0;
+                              int vertexType) = 0;
 
     // Command buffers
     [[nodiscard]] virtual int CBuffCreate(int count) = 0;

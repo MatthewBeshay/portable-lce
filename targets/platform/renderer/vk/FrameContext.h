@@ -14,8 +14,13 @@ namespace plce::vk {
 /// and rotates between them.
 class FrameContext {
 public:
-    static constexpr VkDeviceSize kInitialTransientSize = 64ull * 1024 * 1024;  // 64 MB
-    static constexpr VkDeviceSize kMaxTransientSize     = 512ull * 1024 * 1024; // 512 MB safety ceiling
+    // Transient vertex buffer sizing. UI / entity / debug draws are the only
+    // users of the transient path (chunk meshes go through DisplayListManager),
+    // so the initial size starts small and grows geometrically on overflow.
+    // Upper bound is the point at which a single frame's transient draws have
+    // exceeded anything sensible and something upstream is leaking.
+    static constexpr VkDeviceSize kInitialTransientSize = 8ull  * 1024 * 1024;  // 8 MB
+    static constexpr VkDeviceSize kMaxTransientSize     = 64ull * 1024 * 1024;  // 64 MB ceiling
 
     void create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family);
     void destroy(VkDevice dev, VmaAllocator alloc);
@@ -26,6 +31,13 @@ public:
 
     /// End command buffer recording.
     void end_cmd() { vkEndCommandBuffer(cmd); }
+
+    /// Destroy and recreate sem_acquired. Used on swapchain recreation:
+    /// after a VK_SUBOPTIMAL_KHR return, vkAcquireNextImageKHR has already
+    /// signaled the semaphore, and calling acquire a second time with the
+    /// same (still-signaled) semaphore is undefined behaviour. Caller must
+    /// have waited on this frame's fence first.
+    void reset_acquire_semaphore(VkDevice dev);
 
     /// Bump-allocate from the transient vertex buffer.
     /// Returns nullptr if the allocation doesn't fit. When this happens, a
