@@ -146,8 +146,8 @@ std::vector<std::byte> fan_to_list(const void* data, int& count) {
     return out;
 }
 
-// Thread-local CBuff recording state
-struct RecState { int id = -1; std::vector<Renderer::CBuffDraw> draws; };
+// Thread-local display list recording state
+struct RecState { int id = -1; std::vector<Renderer::DisplayListDraw> draws; };
 thread_local RecState t_rec;
 
 }  // namespace
@@ -165,6 +165,8 @@ Renderer::Renderer(SDL_Window* window)
 #endif
            }),
       window_(window) {
+    textures_.reserve(256);
+    display_lists_.reserve(4096);
 
     swap_.create(dev_, 0, 0);
 
@@ -232,6 +234,7 @@ Renderer::Renderer(SDL_Window* window)
         pc.frag_spv     = kBasicFragSpv;
         pc.frag_size    = sizeof(kBasicFragSpv);
         pipelines_.init(pc);
+        pipelines_.load_cache("pipeline_cache.bin");
         pipelines_.warm_up();
     }
 
@@ -261,17 +264,17 @@ Renderer::Renderer(SDL_Window* window)
         sai.usage = VMA_MEMORY_USAGE_AUTO;
         sai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        vmaCreateBuffer(dev_.allocator(), &sci, &sai, &stg, &sa, &si);
+        check(vmaCreateBuffer(dev_.allocator(), &sci, &sai, &stg, &sa, &si), "quad ib staging");
         std::memcpy(si.pMappedData, indices.data(), bytes);
 
         VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
         pci.queueFamilyIndex = dev_.queue_family();
-        VkCommandPool pool; vkCreateCommandPool(dev_.handle(), &pci, nullptr, &pool);
+        VkCommandPool pool; check(vkCreateCommandPool(dev_.handle(), &pci, nullptr, &pool), "quad ib pool");
         VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         cai.commandPool = pool; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
-        VkCommandBuffer cmd; vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd);
+        VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "quad ib cmd");
         VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cmd, &bbi);
@@ -297,15 +300,15 @@ Renderer::Renderer(SDL_Window* window)
         ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo info{};
-        vmaCreateBuffer(dev_.allocator(), &bi, &ai, &staging_buf_,
-                        &staging_alloc_, &info);
+        check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &staging_buf_,
+                              &staging_alloc_, &info), "staging buf");
         staging_mapped_ = static_cast<std::byte*>(info.pMappedData);
 
         VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
                     VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         pci.queueFamilyIndex = dev_.queue_family();
-        vkCreateCommandPool(dev_.handle(), &pci, nullptr, &upload_pool_);
+        check(vkCreateCommandPool(dev_.handle(), &pci, nullptr, &upload_pool_), "upload pool");
     }
 
     default_tex_ = ensure_default_texture();
@@ -329,10 +332,11 @@ Renderer::Renderer(SDL_Window* window)
 
 Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
+    pipelines_.save_cache("pipeline_cache.bin");
     for (auto& pd : pending_destroys_)
         vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
     pending_destroys_.clear();
-    for (auto& cb : cbufs_)
+    for (auto& cb : display_lists_)
         if (cb.vb) vmaDestroyBuffer(dev_.allocator(), cb.vb, cb.alloc);
     if (upload_pool_) vkDestroyCommandPool(dev_.handle(), upload_pool_, nullptr);
     if (staging_buf_) vmaDestroyBuffer(dev_.allocator(), staging_buf_, staging_alloc_);
@@ -397,7 +401,7 @@ void Renderer::StartFrame() {
     // Flush deferred buffer destructions (from worker thread CBuffClear).
     // Safe now because the fence wait guarantees the GPU is done.
     {
-        std::lock_guard lk(pending_mu_);
+        std::lock_guard lk(pending_destroy_mutex_);
         for (auto& pd : pending_destroys_)
             vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
         pending_destroys_.clear();
@@ -419,7 +423,7 @@ void Renderer::StartFrame() {
     // Reset pipeline state to safe defaults each frame.
     // Prevents stale blend/depth state from a previous frame's draw
     // leaking into the next frame's terrain draws (causes flashing).
-    pso_key_ = PsoKey{};
+    pso_key_ = PipelineKey{};
     pso_dirty_    = true;
     pass_active_  = false;
     frame_active_ = true;
@@ -461,14 +465,6 @@ void Renderer::Present() {
 
     frame_active_ = false;
     frame_idx_ = (frame_idx_ + 1) % kFramesInFlight;
-    ++stat_frames_;
-    double now = double(SDL_GetTicks64()) / 1000.0;
-    if (stat_start_ == 0) stat_start_ = now;
-    if (now - stat_start_ >= 1.0) {
-        std::fprintf(stderr, "[vk3] fps=%u draws=%u\n", stat_frames_, stat_draws_);
-        stat_frames_ = stat_draws_ = 0;
-        stat_start_ = now;
-    }
 }
 
 void Renderer::ensure_pass() {
@@ -483,7 +479,9 @@ void Renderer::begin_pass() {
 
     VkImageMemoryBarrier2 bars[2]{};
     bars[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    bars[0].srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+    // No prior producer — oldLayout=UNDEFINED discards contents.
+    // srcStage/Access=NONE since nothing wrote this image yet this frame.
+    bars[0].srcStageMask  = VK_PIPELINE_STAGE_2_NONE;
     bars[0].dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     bars[0].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     bars[0].oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -492,7 +490,7 @@ void Renderer::begin_pass() {
     bars[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
     bars[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    bars[1].srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+    bars[1].srcStageMask  = VK_PIPELINE_STAGE_2_NONE;
     bars[1].dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
     bars[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     bars[1].oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -539,9 +537,10 @@ void Renderer::end_pass() {
     vkCmdEndRendering(f.cmd);
 
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    // Present consumes via semaphore, not a pipeline stage — dstStage=NONE.
     b.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    b.dstStageMask  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+    b.dstStageMask  = VK_PIPELINE_STAGE_2_NONE;
     b.oldLayout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     b.newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     b.image         = swap_.image(acquired_img_);
@@ -747,7 +746,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     // Recording just copies to CPU memory, no GPU state needed.
     if (t_rec.id >= 0) {
         constexpr uint32_t kStd = 32;
-        CBuffDraw d;
+        DisplayListDraw d;
         d.primType = primType;
         d.vertexType = vType;
         d.shaderType = 0;
@@ -818,7 +817,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     bool textured = false;
     bool lm_active = false;
     {
-        std::lock_guard lk(tex_mu_);
+        std::lock_guard lk(texture_mutex_);
         int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
                    textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
         auto& ts = textures_[tex];
@@ -863,7 +862,6 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     // Reset depth bias after draw
     depth_bias_constant_ = 0;
     depth_bias_slope_    = 0;
-    ++stat_draws_;
 }
 
 // ===================================================================
@@ -912,13 +910,13 @@ void Renderer::pop_debug_event() {
 // ===================================================================
 
 int Renderer::TextureCreate() {
-    std::lock_guard lk(tex_mu_);
+    std::lock_guard lk(texture_mutex_);
     textures_.emplace_back();
     return int(textures_.size()) - 1;
 }
 
 void Renderer::TextureFree(int idx) {
-    std::lock_guard lk(tex_mu_);
+    std::lock_guard lk(texture_mutex_);
     if (idx <= 0 || size_t(idx) >= textures_.size()) return;
     if (idx == default_tex_) return;
     auto& t = textures_[idx];
@@ -934,7 +932,7 @@ void Renderer::TextureFree(int idx) {
 }
 
 void Renderer::TextureBind(int idx) {
-    std::lock_guard lk(tex_mu_);
+    std::lock_guard lk(texture_mutex_);
     if (idx < 0) { bound_tex_ = default_tex_; return; }
     if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1);
     bound_tex_ = idx;
@@ -943,7 +941,7 @@ void Renderer::TextureBind(int idx) {
 void Renderer::TextureData(int w, int h, void* data, int level, int) {
     if (level != 0 || !data) return;
     int idx;
-    { std::lock_guard lk(tex_mu_); idx = bound_tex_; if (idx <= 0) return;
+    { std::lock_guard lk(texture_mutex_); idx = bound_tex_; if (idx <= 0) return;
       if (size_t(idx) >= textures_.size()) textures_.resize(idx + 1); }
 
     upload_texture(idx, w, h, data);
@@ -952,7 +950,7 @@ void Renderer::TextureData(int w, int h, void* data, int level, int) {
 void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int level) {
     if (level != 0 || !data) return;
     int idx;
-    { std::lock_guard lk(tex_mu_); idx = bound_tex_; if (idx <= 0 || size_t(idx) >= textures_.size()) return; }
+    { std::lock_guard lk(texture_mutex_); idx = bound_tex_; if (idx <= 0 || size_t(idx) >= textures_.size()) return; }
     auto& t = textures_[idx];
     if (!t.ready) return;
     if (xo == 0 && yo == 0 && uint32_t(w) == t.width && uint32_t(h) == t.height) {
@@ -967,7 +965,7 @@ void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int l
         VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
-        VkCommandBuffer cmd; vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd);
+        VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "tex update cmd");
         VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cmd, &bbi);
@@ -1014,7 +1012,7 @@ void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int l
 }
 
 void Renderer::TextureSetParam(int param, int value) {
-    std::lock_guard lk(tex_mu_);
+    std::lock_guard lk(texture_mutex_);
     if (bound_tex_ <= 0 || size_t(bound_tex_) >= textures_.size()) return;
     auto& t = textures_[bound_tex_];
 
@@ -1028,7 +1026,6 @@ void Renderer::TextureSetParam(int param, int value) {
     constexpr int GL_LINEAR_MIPMAP_NEAREST  = 0x2701;
     constexpr int GL_NEAREST_MIPMAP_LINEAR  = 0x2702;
     constexpr int GL_LINEAR_MIPMAP_LINEAR   = 0x2703;
-    constexpr int GL_REPEAT        = 0x2901;
     constexpr int GL_CLAMP_TO_EDGE = 0x812F;
 
     switch (param) {
@@ -1087,7 +1084,7 @@ void Renderer::TextureSetParam(int param, int value) {
 int Renderer::ensure_default_texture() {
     int idx = TextureCreate();
     uint32_t pixel = 0xFFFFFFFF;
-    { std::lock_guard lk(tex_mu_); bound_tex_ = idx; }
+    { std::lock_guard lk(texture_mutex_); bound_tex_ = idx; }
     upload_texture(idx, 1, 1, &pixel);
     return idx;
 }
@@ -1095,12 +1092,12 @@ int Renderer::ensure_default_texture() {
 int Renderer::ensure_default_lightmap() {
     int idx = TextureCreate();
     uint32_t pixel = 0xFFFFFFFF;
-    { std::lock_guard lk(tex_mu_); bound_tex_ = idx; }
+    { std::lock_guard lk(texture_mutex_); bound_tex_ = idx; }
     upload_texture(idx, 1, 1, &pixel);
     return idx;
 }
 
-void Renderer::update_tex_descriptor(TexSlot& t) {
+void Renderer::update_tex_descriptor(TextureSlot& t) {
     if (!t.desc_set || !t.view) return;
     VkSampler sampler = get_or_create_sampler(t.sampler_key);
     VkDescriptorImageInfo dii{sampler, t.view,
@@ -1157,20 +1154,20 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                         VK_IMAGE_USAGE_SAMPLED_BIT;
         VmaAllocationCreateInfo ai{}; ai.usage = VMA_MEMORY_USAGE_AUTO;
-        vmaCreateImage(dev_.allocator(), &ici, &ai, &t.image, &t.alloc, nullptr);
+        check(vmaCreateImage(dev_.allocator(), &ici, &ai, &t.image, &t.alloc, nullptr), "texture image");
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vci.image = t.image; vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = VK_FORMAT_R8G8B8A8_UNORM;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
-        vkCreateImageView(dev_.handle(), &vci, nullptr, &t.view);
+        check(vkCreateImageView(dev_.handle(), &vci, nullptr, &t.view), "texture view");
     }
 
     if (!t.desc_set) {
         VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         dai.descriptorPool = tex_pool_; dai.descriptorSetCount = 1;
         dai.pSetLayouts = &tex_set_layout_;
-        vkAllocateDescriptorSets(dev_.handle(), &dai, &t.desc_set);
+        check(vkAllocateDescriptorSets(dev_.handle(), &dai, &t.desc_set), "texture desc set");
     }
     // Write descriptor with per-texture sampler (binding 0 = diffuse, binding 1 = lightmap fallback)
     {
@@ -1207,7 +1204,7 @@ void Renderer::upload_texture(int idx, int w, int h, const void* pixels) {
     VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cai.commandBufferCount = 1;
-    VkCommandBuffer cmd; vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd);
+    VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "texture upload cmd");
     VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bbi);
@@ -1325,33 +1322,33 @@ int Renderer::LoadTextureData(uint8_t* data, uint32_t bytes, void* srcInfo, int*
 // ===================================================================
 
 int Renderer::CBuffCreate(int n) {
-    std::lock_guard lk(cbuf_mu_);
-    int first = next_cbuf_;
+    std::lock_guard lk(display_list_mutex_);
+    int first = next_display_list_;
     int needed = n > 0 ? n : 1;
-    next_cbuf_ += needed;
-    if (size_t(first + needed) > cbufs_.size()) cbufs_.resize(first + needed);
+    next_display_list_ += needed;
+    if (size_t(first + needed) > display_lists_.size()) display_lists_.resize(first + needed);
     return first;
 }
 
 void Renderer::CBuffDeleteAll() {
-    std::lock_guard lk(cbuf_mu_);
-    { std::lock_guard lk2(pending_mu_);
-      for (auto& cb : cbufs_)
+    std::lock_guard lk(display_list_mutex_);
+    { std::lock_guard lk2(pending_destroy_mutex_);
+      for (auto& cb : display_lists_)
           if (cb.vb) pending_destroys_.push_back({cb.vb, cb.alloc}); }
-    cbufs_.clear();
-    next_cbuf_ = 1;
+    display_lists_.clear();
+    next_display_list_ = 1;
     t_rec.id = -1; t_rec.draws.clear();
 }
 
 void Renderer::CBuffStart(int index, bool) { t_rec.id = index; t_rec.draws.clear(); }
 
 void Renderer::CBuffClear(int index) {
-    std::lock_guard lk(cbuf_mu_);
-    if (index < 0 || size_t(index) >= cbufs_.size()) return;
-    auto& cb = cbufs_[index];
+    std::lock_guard lk(display_list_mutex_);
+    if (index < 0 || size_t(index) >= display_lists_.size()) return;
+    auto& cb = display_lists_[index];
     cb.draws.clear(); cb.gpu_draws.clear();
     if (cb.vb) {
-        { std::lock_guard lk2(pending_mu_);
+        { std::lock_guard lk2(pending_destroy_mutex_);
           pending_destroys_.push_back({cb.vb, cb.alloc}); }
         cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr; cb.vb_size = 0;
     }
@@ -1359,45 +1356,27 @@ void Renderer::CBuffClear(int index) {
 }
 
 int Renderer::CBuffSize(int index) {
-    std::lock_guard lk(cbuf_mu_);
-    if (index < 0 || size_t(index) >= cbufs_.size()) return 0;
-    return cbufs_[index].valid ? 1 : 0;
+    std::lock_guard lk(display_list_mutex_);
+    if (index < 0 || size_t(index) >= display_lists_.size()) return 0;
+    return display_lists_[index].valid ? 1 : 0;
 }
 
 void Renderer::CBuffEnd() {
     int id = t_rec.id; t_rec.id = -1;
     if (id < 0) return;
-    std::lock_guard lk(cbuf_mu_);
-    if (size_t(id) >= cbufs_.size()) cbufs_.resize(id + 1);
-    auto& cb = cbufs_[id];
+    std::lock_guard lk(display_list_mutex_);
+    if (size_t(id) >= display_lists_.size()) display_lists_.resize(id + 1);
+    auto& cb = display_lists_[id];
     cb.draws = std::move(t_rec.draws);
     cb.valid = !cb.draws.empty();
     cb.uploaded = false;
     t_rec.draws.clear();
 }
 
-void Renderer::cbuf_upload(CBuff& cb) {
+void Renderer::display_list_upload(DisplayList& cb) {
     constexpr uint32_t kStride = 32;
     std::vector<std::byte> combined;
     cb.gpu_draws.clear();
-
-    // CP-DRAW: dump first CBuffDraw's first 3 vertex colors (no filter)
-    {
-        static int s_cd = 0;
-        if (s_cd < 3 && !cb.draws.empty()) {
-            auto& d0 = cb.draws[0];
-            uint32_t nverts = uint32_t(d0.verts.size()) / kStride;
-            if (nverts >= 1) {
-                auto* v = reinterpret_cast<const uint8_t*>(d0.verts.data());
-                std::fprintf(stderr, "[CP-DRW] draws=%zu verts=%u v0_col=[%02x,%02x,%02x,%02x]",
-                             cb.draws.size(), nverts, v[20], v[21], v[22], v[23]);
-                if (nverts >= 2)
-                    std::fprintf(stderr, " v1_col=[%02x,%02x,%02x,%02x]", v[52], v[53], v[54], v[55]);
-                std::fprintf(stderr, "\n");
-                ++s_cd;
-            }
-        }
-    }
 
     for (auto& d : cb.draws) {
         const void* src = d.verts.data();
@@ -1450,20 +1429,6 @@ void Renderer::cbuf_upload(CBuff& cb) {
     }
     if (combined.empty()) { cb.uploaded = false; return; }
 
-    // CP-UPLOAD: dump first non-zero color from combined buffer before GPU upload
-    {
-        static int s_cpu = 0;
-        uint32_t vc = uint32_t(combined.size()) / kStride;
-        for (uint32_t i = 0; i < vc && s_cpu < 2; ++i) {
-            auto* c = reinterpret_cast<const uint8_t*>(combined.data()) + i * kStride + 20;
-            if (c[0] != 0 && c[0] != 0xff) {
-                std::fprintf(stderr, "[CP-UPL] vert %u color=[%02x,%02x,%02x,%02x]\n",
-                             i, c[0], c[1], c[2], c[3]);
-                ++s_cpu;
-            }
-        }
-    }
-
     uint32_t needed = uint32_t(combined.size());
     if (cb.vb && cb.vb_size < needed) {
         frame().deletions.push_buffer(dev_.allocator(), cb.vb, cb.alloc);
@@ -1474,7 +1439,7 @@ void Renderer::cbuf_upload(CBuff& cb) {
         bi.size = needed;
         bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VmaAllocationCreateInfo ai{}; ai.usage = VMA_MEMORY_USAGE_AUTO;
-        vmaCreateBuffer(dev_.allocator(), &bi, &ai, &cb.vb, &cb.alloc, nullptr);
+        check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &cb.vb, &cb.alloc, nullptr), "display list vb");
         cb.vb_size = needed;
     }
 
@@ -1484,7 +1449,7 @@ void Renderer::cbuf_upload(CBuff& cb) {
     VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cai.commandBufferCount = 1;
-    VkCommandBuffer cmd; vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd);
+    VkCommandBuffer cmd; check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "display list cmd");
     VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bbi);
@@ -1504,29 +1469,16 @@ void Renderer::cbuf_upload(CBuff& cb) {
 bool Renderer::CBuffCall(int index, bool) {
     if (index < 0 || !frame_active_) return false;
 
-    static uint32_t s_ok = 0, s_fail_size = 0, s_fail_valid = 0, s_fail_upload = 0, s_total = 0;
-    ++s_total;
-
     VkBuffer vb = VK_NULL_HANDLE;
-    std::vector<CBuffSubDraw> draws;
+    std::vector<DisplayListSubDraw> draws;
     {
-        std::lock_guard lk(cbuf_mu_);
-        if (size_t(index) >= cbufs_.size()) { ++s_fail_size; goto report; }
-        {
-        auto& cb = cbufs_[index];
-        if (!cb.valid || cb.draws.empty()) { ++s_fail_valid; goto report; }
-        if (!cb.uploaded) { cbuf_upload(cb); if (!cb.uploaded) { ++s_fail_upload; goto report; } }
+        std::lock_guard lk(display_list_mutex_);
+        if (size_t(index) >= display_lists_.size()) return false;
+        auto& cb = display_lists_[index];
+        if (!cb.valid || cb.draws.empty()) return false;
+        if (!cb.uploaded) { display_list_upload(cb); if (!cb.uploaded) return false; }
         vb = cb.vb; draws = cb.gpu_draws;
-        ++s_ok;
-        }
     }
-    goto draw;
-report:
-    if (s_total % 2000 == 0)
-        std::fprintf(stderr, "[vk3-cb] total=%u ok=%u sz=%u val=%u upl=%u\n",
-                     s_total, s_ok, s_fail_size, s_fail_valid, s_fail_upload);
-    return false;
-draw:
 
     auto& f = frame();
     ensure_pass();
@@ -1543,7 +1495,7 @@ draw:
     bool textured = false;
     bool lm_active = false;
     {
-        std::lock_guard lk(tex_mu_);
+        std::lock_guard lk(texture_mutex_);
         int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
                    textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
         auto& ts = textures_[tex];
@@ -1587,7 +1539,6 @@ draw:
         }
         vkCmdSetPrimitiveTopology(f.cmd, topo);
         vkCmdDraw(f.cmd, sd.vertex_count, 1, 0, 0);
-        ++stat_draws_;
     }
 
     depth_bias_constant_ = 0;
@@ -1646,7 +1597,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     vkCmdSetPrimitiveTopology(f.cmd, topo);
 
     VkDescriptorSet ds = VK_NULL_HANDLE; bool textured = false; bool lm_active = false;
-    { std::lock_guard lk(tex_mu_);
+    { std::lock_guard lk(texture_mutex_);
       int tex = (bound_tex_ > 0 && size_t(bound_tex_) < textures_.size() &&
                  textures_[bound_tex_].ready) ? bound_tex_ : default_tex_;
       auto& ts = textures_[tex];
@@ -1685,7 +1636,6 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
 
     depth_bias_constant_ = 0;
     depth_bias_slope_    = 0;
-    ++stat_draws_;
 }
 
 }  // namespace plce::vk3

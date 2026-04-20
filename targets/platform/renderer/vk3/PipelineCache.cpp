@@ -1,7 +1,9 @@
 #include "PipelineCache.h"
 
 #include <cstdio>
+#include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 namespace plce::vk3 {
 
@@ -28,18 +30,25 @@ void PipelineCache::init(const Config& cfg) {
     cfg_ = cfg;
     vert_mod_ = make_module(cfg.device, cfg.vert_spv, cfg.vert_size);
     frag_mod_ = make_module(cfg.device, cfg.frag_spv, cfg.frag_size);
+
+    VkPipelineCacheCreateInfo pcci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    check(vkCreatePipelineCache(cfg.device, &pcci, nullptr, &vk_cache_), "pipeline cache");
 }
 
 void PipelineCache::destroy() {
     for (auto& [k, p] : cache_)
         vkDestroyPipeline(cfg_.device, p, nullptr);
     cache_.clear();
+    if (vk_cache_) {
+        vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
+        vk_cache_ = VK_NULL_HANDLE;
+    }
     if (frag_mod_) vkDestroyShaderModule(cfg_.device, frag_mod_, nullptr);
     if (vert_mod_) vkDestroyShaderModule(cfg_.device, vert_mod_, nullptr);
     vert_mod_ = frag_mod_ = VK_NULL_HANDLE;
 }
 
-VkPipeline PipelineCache::get(const PsoKey& key) {
+VkPipeline PipelineCache::get(const PipelineKey& key) {
     auto it = cache_.find(key);
     if (it != cache_.end()) return it->second;
     VkPipeline p = create(key);
@@ -48,30 +57,30 @@ VkPipeline PipelineCache::get(const PsoKey& key) {
 }
 
 void PipelineCache::warm_up() {
-    PsoKey opaque{};
+    PipelineKey opaque{};
     get(opaque);
 
-    PsoKey opaque_cull = opaque;
+    PipelineKey opaque_cull = opaque;
     opaque_cull.cull_back = 1;
     get(opaque_cull);
 
-    PsoKey blend{};
+    PipelineKey blend{};
     blend.blend_enable = 1;
     blend.depth_write  = 0;
     get(blend);
 
-    PsoKey depth_off{};
+    PipelineKey depth_off{};
     depth_off.depth_test = 0;
     get(depth_off);
 
-    PsoKey lines_key{};
+    PipelineKey lines_key{};
     lines_key.lines = 1;
     get(lines_key);
 
     std::fprintf(stderr, "[vk3] warmed %zu pipelines\n", cache_.size());
 }
 
-VkPipeline PipelineCache::create(const PsoKey& key) {
+VkPipeline PipelineCache::create(const PipelineKey& key) {
     // Shader stages
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -188,10 +197,50 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     gci.layout              = cfg_.layout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    check(vkCreateGraphicsPipelines(cfg_.device, VK_NULL_HANDLE, 1, &gci,
+    check(vkCreateGraphicsPipelines(cfg_.device, vk_cache_, 1, &gci,
                                     nullptr, &pipeline),
           "graphics pipeline");
     return pipeline;
+}
+
+void PipelineCache::load_cache(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return;
+    std::fseek(f, 0, SEEK_END);
+    long sz = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { std::fclose(f); return; }
+    std::vector<uint8_t> blob(static_cast<size_t>(sz));
+    std::fread(blob.data(), 1, blob.size(), f);
+    std::fclose(f);
+    if (vk_cache_) {
+        vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
+        vk_cache_ = VK_NULL_HANDLE;
+    }
+    VkPipelineCacheCreateInfo pcci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    pcci.initialDataSize = blob.size();
+    pcci.pInitialData    = blob.data();
+    VkResult r = vkCreatePipelineCache(cfg_.device, &pcci, nullptr, &vk_cache_);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[vk3] pipeline cache load failed (VkResult=%d), using empty cache\n", int(r));
+        pcci.initialDataSize = 0;
+        pcci.pInitialData    = nullptr;
+        check(vkCreatePipelineCache(cfg_.device, &pcci, nullptr, &vk_cache_), "pipeline cache fallback");
+    }
+}
+
+void PipelineCache::save_cache(const char* path) {
+    if (!vk_cache_) return;
+    size_t sz = 0;
+    VkResult r = vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, nullptr);
+    if (r != VK_SUCCESS || sz == 0) return;
+    std::vector<uint8_t> blob(sz);
+    r = vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, blob.data());
+    if (r != VK_SUCCESS) return;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return;
+    std::fwrite(blob.data(), 1, sz, f);
+    std::fclose(f);
 }
 
 }  // namespace plce::vk3

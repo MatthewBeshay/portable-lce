@@ -46,6 +46,12 @@ public:
     VmaAllocation   transient_alloc = nullptr;
     DeletionQueue   deletions;
 
+    FrameContext() = default;
+    FrameContext(const FrameContext&) = delete;
+    FrameContext& operator=(const FrameContext&) = delete;
+    FrameContext(FrameContext&&) noexcept = default;
+    FrameContext& operator=(FrameContext&&) noexcept = default;
+
 private:
     std::byte*   transient_mapped_  = nullptr;
     VkDeviceSize transient_offset_  = 0;

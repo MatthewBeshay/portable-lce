@@ -25,7 +25,7 @@ namespace plce::vk3 {
 /// per-texture samplers, and fan-to-list CPU conversion.
 class Renderer final : public rp::IRenderPath {
 public:
-    struct CBuffDraw {
+    struct DisplayListDraw {
         int primType = 0;
         int vertexType = 0;
         int shaderType = 0;
@@ -201,8 +201,8 @@ private:
     bool     should_close_  = false;
 
     // -- Render state tracking --
-    PsoKey   pso_key_{};
-    PsoKey   last_bound_pso_{};
+    PipelineKey   pso_key_{};
+    PipelineKey   last_bound_pso_{};
     bool     pso_dirty_ = true;
 
     std::array<float, 4> clear_color_{0.05f, 0.05f, 0.10f, 1.0f};
@@ -263,7 +263,7 @@ private:
     VkSampler get_or_create_sampler(const SamplerKey& key);
 
     // Textures
-    struct TexSlot {
+    struct TextureSlot {
         VkImage         image    = VK_NULL_HANDLE;
         VmaAllocation   alloc    = nullptr;
         VkImageView     view     = VK_NULL_HANDLE;
@@ -273,7 +273,7 @@ private:
         SamplerKey      sampler_key{};
         bool            sampler_dirty = false;
     };
-    std::vector<TexSlot> textures_;
+    std::vector<TextureSlot> textures_;
     int default_tex_ = 0;
     int default_lm_  = 0;
     int bound_tex_   = 0;
@@ -283,39 +283,35 @@ private:
                                VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
                                VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE};
     uint32_t next_material_id_ = 0;
-    mutable std::mutex tex_mu_;
+    mutable std::mutex texture_mutex_;
 
-    // CBuffs (display lists)
-    struct CBuffSubDraw {
+    // Display lists
+    struct DisplayListSubDraw {
         uint32_t vertex_offset = 0;
         uint32_t vertex_count  = 0;
         int      prim_type     = 0;
     };
-    struct CBuff {
-        std::vector<CBuffDraw> draws;
-        std::vector<CBuffSubDraw> gpu_draws;
+    struct DisplayList {
+        std::vector<DisplayListDraw> draws;
+        std::vector<DisplayListSubDraw> gpu_draws;
         VkBuffer      vb = VK_NULL_HANDLE;
         VmaAllocation alloc = nullptr;
         uint32_t      vb_size = 0;
         bool valid = false, uploaded = false;
     };
-    std::vector<CBuff> cbufs_;
-    int next_cbuf_ = 1;
-    mutable std::mutex cbuf_mu_;
+    std::vector<DisplayList> display_lists_;
+    int next_display_list_ = 1;
+    mutable std::mutex display_list_mutex_;
 
     // Thread-safe deferred buffer destruction. Worker threads push here
     // instead of accessing frame().deletions (which is main-thread only).
     struct PendingDestroy { VkBuffer buf; VmaAllocation alloc; };
     std::vector<PendingDestroy> pending_destroys_;
-    std::mutex pending_mu_;
+    std::mutex pending_destroy_mutex_;
 
     // Framebuffer info
     rp::FrameFramebuffer fb_{};
     SDL_Window* window_ = nullptr;
-
-    // Stats
-    uint32_t stat_draws_ = 0, stat_frames_ = 0;
-    double   stat_start_ = 0;
 
     // -- Internal helpers --
     FrameContext& frame() { return frames_[frame_idx_]; }
@@ -326,8 +322,8 @@ private:
     int  ensure_default_texture();
     int  ensure_default_lightmap();
     void upload_texture(int idx, int w, int h, const void* pixels);
-    void update_tex_descriptor(TexSlot& t);
-    void cbuf_upload(CBuff& cb);
+    void update_tex_descriptor(TextureSlot& t);
+    void display_list_upload(DisplayList& cb);
     void fill_push_constants(void* out, bool textured, const glm::vec4* tint = nullptr);
 };
 

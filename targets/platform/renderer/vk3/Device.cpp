@@ -142,10 +142,14 @@ Device::~Device() {
 void Device::name(VkObjectType type, uint64_t obj, const char* label) const {
 #ifndef NDEBUG
     if (!*device_) return;
-    try {
-        vk::DebugUtilsObjectNameInfoEXT ni(type, obj, label);
-        (*device_).setDebugUtilsObjectNameEXT(ni);
-    } catch (...) {}
+    static auto fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetDeviceProcAddr(*device_, "vkSetDebugUtilsObjectNameEXT"));
+    if (!fn) return;
+    VkDebugUtilsObjectNameInfoEXT ni{VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+    ni.objectType   = type;
+    ni.objectHandle = obj;
+    ni.pObjectName  = label;
+    fn(*device_, &ni);
 #else
     (void)type; (void)obj; (void)label;
 #endif
