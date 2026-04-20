@@ -28,9 +28,12 @@ void FrameContext::recreate_transient(VmaAllocator alloc, VkDeviceSize new_size)
 }
 
 void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family) {
-    // Command pool + primary command buffer
+    // Command pool + primary command buffer. No RESET_COMMAND_BUFFER_BIT —
+    // we reset the whole pool once per frame instead of the single CB,
+    // which is cheaper in the driver and scales to additional CBs later
+    // without revisiting pool flags.
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pci.flags = 0;
     pci.queueFamilyIndex = queue_family;
     check(vkCreateCommandPool(dev, &pci, nullptr, &pool), "cmd pool");
 
@@ -88,7 +91,7 @@ void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     }
 
     vkResetFences(dev, 1, &fence);
-    vkResetCommandBuffer(cmd, 0);
+    vkResetCommandPool(dev, pool, 0);
     transient_offset_ = 0;
 
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
