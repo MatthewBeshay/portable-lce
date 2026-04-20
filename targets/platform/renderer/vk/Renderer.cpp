@@ -367,7 +367,10 @@ void Renderer::Present() {
     wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSemaphoreSubmitInfo sig{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     sig.semaphore = f.sem_done;
-    sig.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+    // Present only consumes the color attachment — narrow stage mask lets
+    // the driver release the semaphore as soon as color-attachment writes
+    // retire, without waiting for unrelated graphics-stage work.
+    sig.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     csi.commandBuffer = f.cmd;
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
