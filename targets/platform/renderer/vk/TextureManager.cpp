@@ -214,14 +214,8 @@ void TextureManager::free(int idx, DeletionQueue& deletions) {
     // the image is no longer referenced by the GPU.
     wait_for_upload(idx);
     auto& t = textures_[idx];
-    if (t.view || t.image) {
-        auto view = t.view; auto img = t.image; auto alloc = t.alloc;
-        auto dev = device_; auto vma = allocator_;
-        deletions.push([=]() {
-            if (view) vkDestroyImageView(dev, view, nullptr);
-            if (img)  vmaDestroyImage(vma, img, alloc);
-        });
-    }
+    if (t.view || t.image)
+        deletions.push_view_image(device_, t.view, allocator_, t.image, t.alloc);
     t = {};
 }
 

@@ -1,7 +1,31 @@
 #include "FrameContext.h"
 #include "VkCheck.h"
 
+#include <algorithm>
+#include <cstdio>
+
 namespace plce::vk {
+
+void FrameContext::recreate_transient(VmaAllocator alloc, VkDeviceSize new_size) {
+    if (transient_vb) vmaDestroyBuffer(alloc, transient_vb, transient_alloc);
+    transient_vb = VK_NULL_HANDLE;
+    transient_alloc = nullptr;
+    transient_mapped_ = nullptr;
+
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size  = new_size;
+    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    VmaAllocationCreateInfo vai{};
+    vai.usage = VMA_MEMORY_USAGE_AUTO;
+    vai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo info{};
+    check(vmaCreateBuffer(alloc, &bci, &vai, &transient_vb,
+                          &transient_alloc, &info),
+          "transient vb");
+    transient_mapped_ = static_cast<std::byte*>(info.pMappedData);
+    transient_size_ = new_size;
+}
 
 void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family) {
     // Command pool + primary command buffer
@@ -25,19 +49,8 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
     fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     check(vkCreateFence(dev, &fci, nullptr, &fence), "fence");
 
-    // Transient vertex buffer — host-visible, persistently mapped
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size  = kTransientSize;
-    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    VmaAllocationCreateInfo vai{};
-    vai.usage = VMA_MEMORY_USAGE_AUTO;
-    vai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    VmaAllocationInfo info{};
-    check(vmaCreateBuffer(alloc, &bci, &vai, &transient_vb,
-                          &transient_alloc, &info),
-          "transient vb");
-    transient_mapped_ = static_cast<std::byte*>(info.pMappedData);
+    // Transient vertex buffer — host-visible, persistently mapped. Grows on demand.
+    recreate_transient(alloc, kInitialTransientSize);
 }
 
 void FrameContext::destroy(VkDevice dev, VmaAllocator alloc) {
@@ -49,9 +62,25 @@ void FrameContext::destroy(VkDevice dev, VmaAllocator alloc) {
     if (pool)         vkDestroyCommandPool(dev, pool, nullptr);
 }
 
-void FrameContext::begin(VkDevice dev) {
+void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX);
     deletions.flush();
+
+    // Grow the transient buffer if a prior frame overflowed. Safe here because
+    // the fence has signaled — no GPU work is still reading from the old buffer.
+    if (pending_grow_bytes_ > 0) {
+        VkDeviceSize new_size = transient_size_ * 2;
+        while (new_size < pending_grow_bytes_) new_size *= 2;
+        new_size = std::min(new_size, kMaxTransientSize);
+        if (new_size > transient_size_) {
+            std::fprintf(stderr, "[vk] transient VB grew from %llu to %llu bytes\n",
+                         (unsigned long long)transient_size_,
+                         (unsigned long long)new_size);
+            recreate_transient(alloc, new_size);
+        }
+        pending_grow_bytes_ = 0;
+    }
+
     vkResetFences(dev, 1, &fence);
     vkResetCommandBuffer(cmd, 0);
     transient_offset_ = 0;

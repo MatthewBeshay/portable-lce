@@ -14,23 +14,35 @@ namespace plce::vk {
 class DeletionQueue {
 public:
     void push(std::function<void()>&& fn) {
-        entries_.push_back({Tag::generic, {}, {}, {}, std::move(fn)});
+        entries_.push_back({Tag::generic, nullptr, {}, nullptr, VK_NULL_HANDLE, nullptr, std::move(fn)});
     }
 
     void push_buffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation a) {
-        entries_.push_back({Tag::buffer, alloc, {.buffer = buf}, a, {}});
+        entries_.push_back({Tag::buffer, alloc, {.buffer = buf}, a, VK_NULL_HANDLE, nullptr, {}});
     }
 
     void push_image(VmaAllocator alloc, VkImage img, VmaAllocation a) {
-        entries_.push_back({Tag::image, alloc, {.image = img}, a, {}});
+        entries_.push_back({Tag::image, alloc, {.image = img}, a, VK_NULL_HANDLE, nullptr, {}});
+    }
+
+    /// Destroy an image + view pair allocated from VMA. This is the common
+    /// shape for TextureManager::free — no std::function allocation.
+    void push_view_image(VkDevice dev, VkImageView view,
+                         VmaAllocator alloc, VkImage img, VmaAllocation a) {
+        entries_.push_back({Tag::view_image, alloc, {.image = img}, a, view, dev, {}});
     }
 
     void flush() noexcept {
         for (auto& e : entries_) {
             switch (e.tag) {
-                case Tag::buffer:  vmaDestroyBuffer(e.alloc, e.handle.buffer, e.vma_alloc); break;
-                case Tag::image:   vmaDestroyImage(e.alloc, e.handle.image, e.vma_alloc); break;
-                case Tag::generic: if (e.fn) e.fn(); break;
+                case Tag::buffer:     vmaDestroyBuffer(e.alloc, e.handle.buffer, e.vma_alloc); break;
+                case Tag::image:      vmaDestroyImage(e.alloc, e.handle.image, e.vma_alloc); break;
+                case Tag::view_image: {
+                    if (e.view) vkDestroyImageView(e.device, e.view, nullptr);
+                    if (e.handle.image) vmaDestroyImage(e.alloc, e.handle.image, e.vma_alloc);
+                    break;
+                }
+                case Tag::generic:    if (e.fn) e.fn(); break;
             }
         }
         entries_.clear();
@@ -45,14 +57,16 @@ public:
     DeletionQueue& operator=(DeletionQueue&&) noexcept = default;
 
 private:
-    enum class Tag : uint8_t { buffer, image, generic };
+    enum class Tag : uint8_t { buffer, image, view_image, generic };
     union Handle { VkBuffer buffer; VkImage image; };
     struct Entry {
         Tag           tag;
-        VmaAllocator  alloc    = nullptr;
-        Handle        handle   = {};
+        VmaAllocator  alloc     = nullptr;
+        Handle        handle    = {};
         VmaAllocation vma_alloc = nullptr;
-        std::function<void()> fn;  // only used for Tag::generic
+        VkImageView   view      = VK_NULL_HANDLE;  // view_image only
+        VkDevice      device    = nullptr;          // view_image only
+        std::function<void()> fn;                   // generic only
     };
     std::vector<Entry> entries_;
 };

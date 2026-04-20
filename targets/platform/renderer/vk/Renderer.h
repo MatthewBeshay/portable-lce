@@ -188,7 +188,6 @@ private:
     bool     frame_active_  = false;
     bool     pass_active_   = false;
     bool     should_close_  = false;
-    bool     transient_overflow_warned_ = false;
 
     // -- Render state tracking --
     PipelineKey   pso_key_{};
@@ -223,11 +222,20 @@ private:
     bool texture_enabled_  = true;
     std::array<float, 2> global_lm_uv_{240, 240};
 
-    // Matrix stacks
+    // Matrix stacks. Depth starts at 1 (identity). The game pushes at most
+    // ~3 deep in practice; kMaxStackDepth provides a safety ceiling.
+    static constexpr uint8_t kMaxStackDepth = 16;
+    struct MatrixStack {
+        std::array<glm::mat4, kMaxStackDepth> data;
+        uint8_t depth = 1;
+        MatrixStack() { data[0] = glm::mat4(1); }
+        glm::mat4&       top()       { return data[depth - 1]; }
+        const glm::mat4& top() const { return data[depth - 1]; }
+    };
     rp::MatrixStack matrix_mode_ = rp::MatrixStack::modelview;
-    std::vector<glm::mat4> mv_stack_{glm::mat4(1)};
-    std::vector<glm::mat4> proj_stack_{glm::mat4(1)};
-    std::vector<glm::mat4> tex_stack_{glm::mat4(1)};
+    MatrixStack mv_stack_;
+    MatrixStack proj_stack_;
+    MatrixStack tex_stack_;
 
     uint32_t next_material_id_ = 0;
 
@@ -242,7 +250,7 @@ private:
 
     // -- Internal helpers --
     FrameContext& frame() { return frames_[frame_idx_]; }
-    std::vector<glm::mat4>& stack();
+    MatrixStack& stack();
     void ensure_pass();
     void begin_pass();
     void end_pass();

@@ -241,7 +241,7 @@ void Renderer::StartFrame() {
         if (acq != VK_SUCCESS) return;
     }
 
-    f.begin(dev_.handle());
+    f.begin(dev_.handle(), dev_.allocator());
 
     // Reset pipeline state to safe defaults each frame.
     // Prevents stale blend/depth state from a previous frame's draw
@@ -250,7 +250,6 @@ void Renderer::StartFrame() {
     pso_dirty_    = true;
     pass_active_  = false;
     frame_active_ = true;
-    transient_overflow_warned_ = false;
 }
 
 void Renderer::Present() {
@@ -422,7 +421,7 @@ void Renderer::resize(uint32_t w, uint32_t h) {
 // MATRIX STACK
 // ===================================================================
 
-std::vector<glm::mat4>& Renderer::stack() {
+Renderer::MatrixStack& Renderer::stack() {
     switch (matrix_mode_) {
         case rp::MatrixStack::modelview:  return mv_stack_;
         case rp::MatrixStack::projection: return proj_stack_;
@@ -432,39 +431,49 @@ std::vector<glm::mat4>& Renderer::stack() {
 }
 
 void Renderer::MatrixMode(rp::MatrixStack s) { matrix_mode_ = s; }
-void Renderer::MatrixSetIdentity() { stack().back() = glm::mat4(1); }
+void Renderer::MatrixSetIdentity() { stack().top() = glm::mat4(1); }
 void Renderer::MatrixTranslate(float x, float y, float z) {
-    stack().back() = glm::translate(stack().back(), glm::vec3(x,y,z));
+    stack().top() = glm::translate(stack().top(), glm::vec3(x,y,z));
 }
 void Renderer::MatrixRotate(float a, float x, float y, float z) {
-    stack().back() = glm::rotate(stack().back(), a, glm::vec3(x,y,z));
+    stack().top() = glm::rotate(stack().top(), a, glm::vec3(x,y,z));
 }
 void Renderer::MatrixScale(float x, float y, float z) {
-    stack().back() = glm::scale(stack().back(), glm::vec3(x,y,z));
+    stack().top() = glm::scale(stack().top(), glm::vec3(x,y,z));
 }
 void Renderer::MatrixPerspective(float fovy, float asp, float zn, float zf) {
-    stack().back() = stack().back() * glm::perspective(glm::radians(fovy), asp, zn, zf);
+    stack().top() = stack().top() * glm::perspective(glm::radians(fovy), asp, zn, zf);
 }
 void Renderer::MatrixOrthogonal(float l, float r, float b, float t, float zn, float zf) {
-    stack().back() = stack().back() * glm::ortho(l, r, b, t, zn, zf);
+    stack().top() = stack().top() * glm::ortho(l, r, b, t, zn, zf);
 }
-void Renderer::MatrixPush() { auto& s = stack(); s.push_back(s.back()); }
+void Renderer::MatrixPush() {
+    auto& s = stack();
+    assert(s.depth < kMaxStackDepth && "Matrix stack overflow");
+    if (s.depth >= kMaxStackDepth) {
+        std::fprintf(stderr, "[vk] matrix stack overflow at depth %u\n", s.depth);
+        return;
+    }
+    s.data[s.depth] = s.data[s.depth - 1];
+    ++s.depth;
+}
 void Renderer::MatrixPop() {
     auto& s = stack();
-    assert(s.size() > 1 && "Matrix stack underflow");
-    if (s.size() > 1) s.pop_back();
+    assert(s.depth > 1 && "Matrix stack underflow");
+    if (s.depth > 1) --s.depth;
+    else std::fprintf(stderr, "[vk] matrix stack underflow\n");
 }
 void Renderer::MatrixMult(float* m) {
     glm::mat4 mat; std::memcpy(&mat[0][0], m, 64);
-    stack().back() = stack().back() * mat;
+    stack().top() = stack().top() * mat;
 }
 const float* Renderer::MatrixGet(rp::MatrixStack s) {
     switch (s) {
-        case rp::MatrixStack::modelview:  return &mv_stack_.back()[0][0];
-        case rp::MatrixStack::projection: return &proj_stack_.back()[0][0];
-        case rp::MatrixStack::texture:    return &tex_stack_.back()[0][0];
+        case rp::MatrixStack::modelview:  return &mv_stack_.top()[0][0];
+        case rp::MatrixStack::projection: return &proj_stack_.top()[0][0];
+        case rp::MatrixStack::texture:    return &tex_stack_.top()[0][0];
     }
-    return &mv_stack_.back()[0][0];
+    return &mv_stack_.top()[0][0];
 }
 
 // ===================================================================
@@ -502,7 +511,7 @@ void Renderer::StateSetDepthSlopeAndBias(float slope, float bias) {
     depth_bias_slope_ = slope; depth_bias_constant_ = bias;
 }
 void Renderer::StateSetLightDirection(int idx, float x, float y, float z) {
-    glm::vec3 d = glm::normalize(glm::mat3(mv_stack_.back()) * glm::vec3(x,y,z));
+    glm::vec3 d = glm::normalize(glm::mat3(mv_stack_.top()) * glm::vec3(x,y,z));
     if (idx == 0) light0_dir_eye_ = d; else light1_dir_eye_ = d;
 }
 void Renderer::StateSetTextureEnable(bool e) { if (active_tex_unit_ == 0) texture_enabled_ = e; }
@@ -519,13 +528,13 @@ void Renderer::UpdateGamma(unsigned short g) {
 
 void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* tint) {
     PushConstants& pc = *static_cast<PushConstants*>(out);
-    const auto& mv = mv_stack_.back();
-    pc.mvp = proj_stack_.back() * mv;
+    const auto& mv = mv_stack_.top();
+    pc.mvp = proj_stack_.top() * mv;
     // Y-flip is handled by the negative viewport height in begin_pass() —
     // no MVP manipulation needed here.
 
     glm::mat3 nm(mv);
-    const auto& tm = tex_stack_.back();
+    const auto& tm = tex_stack_.top();
     pc.nm0       = glm::vec4(nm[0], tm[0][0]);
     pc.nm1       = glm::vec4(nm[1], tm[1][1]);
     pc.nm2       = glm::vec4(nm[2], tm[3][0]);
@@ -622,10 +631,9 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     VkDeviceSize bytes = VkDeviceSize(count) * stride;
     void* dst = f.alloc_transient(bytes);
     if (!dst) {
-        if (!transient_overflow_warned_) {
-            std::fprintf(stderr, "[vk] transient VB full, skipping draw\n");
-            transient_overflow_warned_ = true;
-        }
+        // Overflow recorded inside alloc_transient; next begin() will grow.
+        // The draw is dropped this frame but the slot will have headroom
+        // when it's reused.
         return;
     }
     std::memcpy(dst, vdata, bytes);
