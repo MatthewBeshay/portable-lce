@@ -106,10 +106,15 @@ private:
 
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
     static constexpr VkDeviceSize kMaxUploadBytes = 64ull * 1024 * 1024;
+    static constexpr uint32_t kDescPoolMaxSets = 4096;
 
     // Async upload tracking
     std::vector<PendingUpload> pending_uploads_;
     std::vector<VkFence>       fence_pool_;  // recycled fences
+
+    // Descriptor pool capacity tracking
+    uint32_t desc_sets_allocated_ = 0;
+    bool     desc_pool_warned_    = false;
 
     // Sampler cache
     std::unordered_map<SamplerKey, VkSampler, SamplerKeyHash> sampler_cache_;

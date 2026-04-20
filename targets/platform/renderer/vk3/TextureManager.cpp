@@ -495,6 +495,12 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         dai.descriptorPool = tex_pool_; dai.descriptorSetCount = 1;
         dai.pSetLayouts = &tex_set_layout_;
         check(vkAllocateDescriptorSets(device_, &dai, &t.desc_set), "texture desc set");
+        ++desc_sets_allocated_;
+        if (!desc_pool_warned_ && desc_sets_allocated_ > kDescPoolMaxSets * 9 / 10) {
+            std::fprintf(stderr, "[vk3] WARNING: descriptor pool %u/%u sets used (near capacity)\n",
+                         desc_sets_allocated_, kDescPoolMaxSets);
+            desc_pool_warned_ = true;
+        }
     }
     // Write descriptor with per-texture sampler (binding 0 = diffuse, binding 1 = lightmap fallback)
     {
