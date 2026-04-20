@@ -70,9 +70,11 @@ public:
     int lightmap_tex() const { return lightmap_tex_; }
 
     /// Returns the bindless slot for the currently-bound texture, falling
-    /// back to default_tex_ if the bound one is not ready. Waits lazily on
-    /// a pending fence if the slot exists but the image is still uploading.
-    /// `textured_out` is true when the bound slot is NOT the default.
+    /// back to default_tex_ if the bound one is not ready. The draw path
+    /// never waits on a pending upload fence — stale binds render as the
+    /// 1x1 default for a frame or two until complete_upload() publishes
+    /// the real view. `textured_out` is true when the bound slot is NOT
+    /// the default.
     uint32_t resolve_bound_slot(bool& textured_out);
 
     /// Same for the lightmap. Returns slot index (default_lm_ if unset/unready),
@@ -83,14 +85,34 @@ private:
     struct PendingUpload {
         VkFence         fence         = VK_NULL_HANDLE;
         VkCommandBuffer cmd           = VK_NULL_HANDLE;
+        // One-shot fallback path: populated when the upload did not fit in
+        // the persistent staging ring. Destroyed in complete_upload.
         VkBuffer        staging_buf   = VK_NULL_HANDLE;
         VmaAllocation   staging_alloc = nullptr;
+        // Ring path: monotonic byte counter at which the upload's reserved
+        // range ends. complete_upload advances staging_ring_tail_ to this
+        // value. Zero when the one-shot fallback was used.
+        VkDeviceSize    ring_end      = 0;
         int             texture_idx   = -1;
     };
 
     void upload_texture(int idx, int w, int h, const void* pixels);
     int  ensure_default_texture();
     int  ensure_default_lightmap();
+
+    // Reservation returned by ring_reserve: the in-buffer offset to
+    // memcpy into / reference from vkCmdCopyBufferToImage, plus the
+    // monotonic end counter used to advance the tail on completion.
+    struct RingReservation {
+        VkDeviceSize offset;      // byte offset inside staging_ring_buf_
+        VkDeviceSize end_counter; // store in PendingUpload::ring_end
+    };
+
+    /// Reserve a contiguous byte range inside the staging ring for a single
+    /// upload. Returns std::nullopt if the request exceeds the ring size
+    /// or the ring is currently full — callers fall back to a one-shot
+    /// vmaCreateBuffer in that case.
+    std::optional<RingReservation> ring_reserve(VkDeviceSize bytes);
 
     /// Write texture slot `idx`'s current view into binding 0 of the bindless set.
     void write_slot(int idx);
@@ -116,6 +138,22 @@ private:
     VkCommandPool      upload_pool_ = VK_NULL_HANDLE;
     mutable std::mutex upload_pool_mutex_;
     static constexpr VkDeviceSize kMaxUploadBytes = 64ull * 1024 * 1024;
+
+    // Persistent staging ring shared by every texture upload. One long-
+    // lived host-visible VkBuffer; each upload memcpy's pixels into the
+    // ring and records the byte range in its PendingUpload. When the
+    // upload fence signals, complete_upload advances staging_ring_tail_
+    // past that range. Uploads that don't fit in the ring (or don't fit
+    // yet — the tail hasn't moved) fall back to a one-shot vmaCreateBuffer.
+    static constexpr VkDeviceSize kStagingRingSize = 32ull * 1024 * 1024;
+    static constexpr VkDeviceSize kStagingRingAlign = 64;  // conservative
+
+    VkBuffer       staging_ring_buf_   = VK_NULL_HANDLE;
+    VmaAllocation  staging_ring_alloc_ = nullptr;
+    std::byte*     staging_ring_map_   = nullptr;
+    VkDeviceSize   staging_ring_head_  = 0;
+    VkDeviceSize   staging_ring_tail_  = 0;
+    mutable std::mutex staging_ring_mutex_;
 
     std::vector<PendingUpload> pending_uploads_;
     std::vector<VkFence>       fence_pool_;

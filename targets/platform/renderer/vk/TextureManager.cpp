@@ -28,6 +28,22 @@ void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
     pci.queueFamilyIndex = dev.queue_family();
     check(vkCreateCommandPool(device_, &pci, nullptr, &upload_pool_), "upload pool");
 
+    // Persistent staging ring. One host-visible, persistently-mapped buffer
+    // used by every texture upload that fits. Bump-allocated via
+    // ring_reserve(); reclaimed in complete_upload().
+    VkBufferCreateInfo ring_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ring_bi.size  = kStagingRingSize;
+    ring_bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VmaAllocationCreateInfo ring_ai{};
+    ring_ai.usage = VMA_MEMORY_USAGE_AUTO;
+    ring_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo ring_info{};
+    check(vmaCreateBuffer(allocator_, &ring_bi, &ring_ai, &staging_ring_buf_,
+                          &staging_ring_alloc_, &ring_info),
+          "staging ring");
+    staging_ring_map_ = static_cast<std::byte*>(ring_info.pMappedData);
+
     default_tex_ = ensure_default_texture();
     default_lm_  = ensure_default_lightmap();
     bound_tex_   = default_tex_;
@@ -35,6 +51,13 @@ void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
 
 void TextureManager::destroy(VkDevice device, VmaAllocator allocator) {
     wait_all_uploads();
+
+    if (staging_ring_buf_) {
+        vmaDestroyBuffer(allocator, staging_ring_buf_, staging_ring_alloc_);
+        staging_ring_buf_   = VK_NULL_HANDLE;
+        staging_ring_alloc_ = nullptr;
+        staging_ring_map_   = nullptr;
+    }
 
     if (upload_pool_) vkDestroyCommandPool(device, upload_pool_, nullptr);
     for (VkFence f : fence_pool_) vkDestroyFence(device, f, nullptr);
@@ -44,6 +67,40 @@ void TextureManager::destroy(VkDevice device, VmaAllocator allocator) {
         if (t.view)  vkDestroyImageView(device, t.view, nullptr);
         if (t.image) vmaDestroyImage(allocator, t.image, t.alloc);
     }
+}
+
+// ===================================================================
+// STAGING RING
+// ===================================================================
+
+std::optional<TextureManager::RingReservation>
+TextureManager::ring_reserve(VkDeviceSize bytes) {
+    const VkDeviceSize aligned =
+        (bytes + kStagingRingAlign - 1) & ~(kStagingRingAlign - 1);
+    if (aligned == 0 || aligned > kStagingRingSize) return std::nullopt;
+
+    std::lock_guard lk(staging_ring_mutex_);
+
+    // head_ and tail_ are monotonic byte counters. In-buffer offset is
+    // head_ mod ring_size. The number of bytes currently reserved by
+    // in-flight uploads is (head_ - tail_); the ring is full when that
+    // equals kStagingRingSize.
+    VkDeviceSize in_flight = staging_ring_head_ - staging_ring_tail_;
+    if (in_flight + aligned > kStagingRingSize) return std::nullopt;
+
+    VkDeviceSize off = staging_ring_head_ % kStagingRingSize;
+    if (off + aligned > kStagingRingSize) {
+        // Request would straddle the ring boundary. Pad the monotonic
+        // head up to the next multiple of ring_size so the upload sits
+        // contiguously at offset 0, and re-check space.
+        VkDeviceSize pad = kStagingRingSize - off;
+        if (in_flight + pad + aligned > kStagingRingSize) return std::nullopt;
+        staging_ring_head_ += pad;
+        off = 0;
+    }
+
+    staging_ring_head_ += aligned;
+    return RingReservation{off, staging_ring_head_};
 }
 
 // ===================================================================
@@ -78,7 +135,20 @@ void TextureManager::complete_upload(PendingUpload& pu) {
     textures_[pu.texture_idx].ready = true;
     // Publish the image view into the bindless array now that it's safe to sample.
     write_slot(pu.texture_idx);
-    vmaDestroyBuffer(allocator_, pu.staging_buf, pu.staging_alloc);
+
+    if (pu.staging_buf) {
+        // One-shot fallback path — destroy the private staging buffer.
+        vmaDestroyBuffer(allocator_, pu.staging_buf, pu.staging_alloc);
+    } else if (pu.ring_end != 0) {
+        // Ring path — advance the tail. poll_uploads / wait_for_upload call
+        // complete_upload in fence-signal order which matches submit order
+        // on the single graphics queue, so ring_end is always monotonically
+        // non-decreasing here.
+        std::lock_guard lk(staging_ring_mutex_);
+        if (pu.ring_end > staging_ring_tail_)
+            staging_ring_tail_ = pu.ring_end;
+    }
+
     {
         std::lock_guard pool_lk(upload_pool_mutex_);
         vkFreeCommandBuffers(device_, upload_pool_, 1, &pu.cmd);
@@ -277,17 +347,35 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
     if (bytes > kMaxUploadBytes) return;
 
-    VkBufferCreateInfo stg_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    stg_bi.size = bytes; stg_bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    VmaAllocationCreateInfo stg_ai{};
-    stg_ai.usage = VMA_MEMORY_USAGE_AUTO;
-    stg_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                   VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    VmaAllocationInfo stg_info{};
-    VkBuffer stg_buf = VK_NULL_HANDLE; VmaAllocation stg_alloc = nullptr;
-    check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &stg_buf, &stg_alloc, &stg_info),
-          "tex update staging");
-    std::memcpy(stg_info.pMappedData, data, bytes);
+    // Source: ring first, fall back to a one-shot vmaCreateBuffer if the
+    // update doesn't fit.
+    std::optional<RingReservation> res = ring_reserve(bytes);
+    std::byte*    src_map       = nullptr;
+    VkBuffer      src_buf       = VK_NULL_HANDLE;
+    VkDeviceSize  src_offset    = 0;
+    VkDeviceSize  ring_end      = 0;
+    VkBuffer      oneshot_buf   = VK_NULL_HANDLE;
+    VmaAllocation oneshot_alloc = nullptr;
+    if (res) {
+        src_map    = staging_ring_map_ + res->offset;
+        src_buf    = staging_ring_buf_;
+        src_offset = res->offset;
+        ring_end   = res->end_counter;
+    } else {
+        VkBufferCreateInfo stg_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        stg_bi.size = bytes; stg_bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo stg_ai{};
+        stg_ai.usage = VMA_MEMORY_USAGE_AUTO;
+        stg_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                       VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo stg_info{};
+        check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &oneshot_buf,
+                              &oneshot_alloc, &stg_info),
+              "tex update staging (fallback)");
+        src_map = static_cast<std::byte*>(stg_info.pMappedData);
+        src_buf = oneshot_buf;
+    }
+    std::memcpy(src_map, data, bytes);
 
     VkCommandBuffer cmd;
     {
@@ -314,10 +402,11 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         vkCmdPipelineBarrier2(cmd, &dep);
 
         VkBufferImageCopy rgn{};
+        rgn.bufferOffset = src_offset;
         rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         rgn.imageOffset = {xo, yo, 0};
         rgn.imageExtent = {uint32_t(w), uint32_t(h), 1};
-        vkCmdCopyBufferToImage(cmd, stg_buf, image,
+        vkCmdCopyBufferToImage(cmd, src_buf, image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
 
         b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
@@ -339,7 +428,7 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     check(dev_->submit2(1, &sub, fence), "tex update submit");
 
     std::lock_guard lk(texture_mutex_);
-    pending_uploads_.push_back({fence, cmd, stg_buf, stg_alloc, idx});
+    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc, ring_end, idx});
     textures_[idx].ready = false;
 }
 
@@ -441,17 +530,35 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
     if (bytes > kMaxUploadBytes) return;
 
-    VkBufferCreateInfo stg_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    stg_bi.size = bytes; stg_bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    VmaAllocationCreateInfo stg_ai{};
-    stg_ai.usage = VMA_MEMORY_USAGE_AUTO;
-    stg_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                   VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    VmaAllocationInfo stg_info{};
-    VkBuffer stg_buf = VK_NULL_HANDLE; VmaAllocation stg_alloc = nullptr;
-    check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &stg_buf, &stg_alloc, &stg_info),
-          "texture staging");
-    std::memcpy(stg_info.pMappedData, pixels, bytes);
+    // Source: ring first, fall back to a one-shot vmaCreateBuffer if the
+    // upload doesn't fit or the ring is momentarily full.
+    std::optional<RingReservation> res = ring_reserve(bytes);
+    std::byte*    src_map       = nullptr;
+    VkBuffer      src_buf       = VK_NULL_HANDLE;
+    VkDeviceSize  src_offset    = 0;
+    VkDeviceSize  ring_end      = 0;
+    VkBuffer      oneshot_buf   = VK_NULL_HANDLE;
+    VmaAllocation oneshot_alloc = nullptr;
+    if (res) {
+        src_map    = staging_ring_map_ + res->offset;
+        src_buf    = staging_ring_buf_;
+        src_offset = res->offset;
+        ring_end   = res->end_counter;
+    } else {
+        VkBufferCreateInfo stg_bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        stg_bi.size = bytes; stg_bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo stg_ai{};
+        stg_ai.usage = VMA_MEMORY_USAGE_AUTO;
+        stg_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                       VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo stg_info{};
+        check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &oneshot_buf,
+                              &oneshot_alloc, &stg_info),
+              "texture staging (fallback)");
+        src_map = static_cast<std::byte*>(stg_info.pMappedData);
+        src_buf = oneshot_buf;
+    }
+    std::memcpy(src_map, pixels, bytes);
 
     VkCommandBuffer cmd;
     {
@@ -480,9 +587,10 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
             vkCmdPipelineBarrier2(cmd, &dep);
         }
         VkBufferImageCopy rgn{};
+        rgn.bufferOffset = src_offset;
         rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         rgn.imageExtent = {uint32_t(w), uint32_t(h), 1};
-        vkCmdCopyBufferToImage(cmd, stg_buf, upload_image,
+        vkCmdCopyBufferToImage(cmd, src_buf, upload_image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
 
         // Mip generation
@@ -553,7 +661,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     check(dev_->submit2(1, &sub, fence), "texture upload submit");
 
     std::lock_guard lk(texture_mutex_);
-    pending_uploads_.push_back({fence, cmd, stg_buf, stg_alloc, idx});
+    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc, ring_end, idx});
 }
 
 namespace {
