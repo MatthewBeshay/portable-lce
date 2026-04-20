@@ -30,9 +30,11 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
     // Command pool + primary command buffer. No RESET_COMMAND_BUFFER_BIT —
     // we reset the whole pool once per frame instead of the single CB,
     // which is cheaper in the driver and scales to additional CBs later
-    // without revisiting pool flags.
+    // without revisiting pool flags. TRANSIENT_BIT hints that every
+    // buffer allocated here is short-lived (one frame) so the driver can
+    // pick a lighter-weight allocator.
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    pci.flags = 0;
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
     pci.queueFamilyIndex = queue_family;
     check(vkCreateCommandPool(dev, &pci, nullptr, &pool), "cmd pool");
 
