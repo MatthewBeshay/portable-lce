@@ -2,20 +2,21 @@
 #include <stb_image.h>
 
 #include "TextureManager.h"
+#include "Device.h"
 #include "VkCheck.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 namespace plce::vk {
 
-void TextureManager::init(VkDevice device, VmaAllocator allocator, VkQueue queue,
-                          uint32_t queue_family, VkDescriptorSet bindless_set) {
-    device_        = device;
-    allocator_     = allocator;
-    queue_         = queue;
-    bindless_set_  = bindless_set;
+void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
+    dev_          = &dev;
+    device_       = dev.handle();
+    allocator_    = dev.allocator();
+    bindless_set_ = bindless_set;
 
     textures_.reserve(256);
     pending_uploads_.reserve(16);
@@ -24,7 +25,7 @@ void TextureManager::init(VkDevice device, VmaAllocator allocator, VkQueue queue
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
                 VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pci.queueFamilyIndex = queue_family;
+    pci.queueFamilyIndex = dev.queue_family();
     check(vkCreateCommandPool(device_, &pci, nullptr, &upload_pool_), "upload pool");
 
     default_tex_ = ensure_default_texture();
@@ -50,18 +51,28 @@ void TextureManager::destroy(VkDevice device, VmaAllocator allocator) {
 // ===================================================================
 
 VkFence TextureManager::acquire_fence() {
-    if (!fence_pool_.empty()) {
-        VkFence f = fence_pool_.back();
-        fence_pool_.pop_back();
-        return f;
+    // Dedicated mutex: fence_pool_ lives outside the texture state, and
+    // acquire_fence is called from worker-thread upload paths without
+    // texture_mutex_ held while release_fence runs under texture_mutex_.
+    {
+        std::lock_guard lk(fence_pool_mutex_);
+        if (!fence_pool_.empty()) {
+            VkFence f = fence_pool_.back();
+            fence_pool_.pop_back();
+            return f;
+        }
     }
+    // Slow path (pool empty) — create a fresh fence outside the lock.
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     VkFence f = VK_NULL_HANDLE;
     check(vkCreateFence(device_, &fci, nullptr, &f), "upload fence");
     return f;
 }
 
-void TextureManager::release_fence(VkFence f) { fence_pool_.push_back(f); }
+void TextureManager::release_fence(VkFence f) {
+    std::lock_guard lk(fence_pool_mutex_);
+    fence_pool_.push_back(f);
+}
 
 void TextureManager::complete_upload(PendingUpload& pu) {
     textures_[pu.texture_idx].ready = true;
@@ -117,12 +128,16 @@ void TextureManager::write_slot(int idx) {
     // Caller holds texture_mutex_.
     if (bindless_set_ == VK_NULL_HANDLE) return;
     if (idx < 0 || size_t(idx) >= textures_.size()) return;
-    auto& t = textures_[idx];
-    if (!t.view) return;
+    write_slot_with_view(idx, textures_[idx].view);
+}
+
+void TextureManager::write_slot_with_view(int idx, VkImageView view) {
+    // Caller holds texture_mutex_.
+    if (bindless_set_ == VK_NULL_HANDLE || view == VK_NULL_HANDLE) return;
 
     VkDescriptorImageInfo dii{};
     dii.sampler     = VK_NULL_HANDLE;  // separate sampler binding
-    dii.imageView   = t.view;
+    dii.imageView   = view;
     dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkWriteDescriptorSet wd{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -173,12 +188,14 @@ uint32_t TextureManager::resolve_lightmap_slot(bool& active_out) {
 
 int TextureManager::create() {
     std::lock_guard lk(texture_mutex_);
-    textures_.emplace_back();
-    const int idx = int(textures_.size()) - 1;
+    const int idx = int(textures_.size());
     if (uint32_t(idx) >= kMaxTextures) {
-        std::fprintf(stderr, "[vk] WARNING: texture count %d exceeds bindless array size %u\n",
-                     idx, kMaxTextures);
+        throw std::runtime_error(
+            "vk::TextureManager::create: texture count exceeds bindless array size "
+            "(kMaxTextures=4096). Raise kMaxTextures and the descriptor set layout "
+            "in lockstep if the game needs more textures.");
     }
+    textures_.emplace_back();
     return idx;
 }
 
@@ -188,13 +205,19 @@ void TextureManager::free(int idx, DeletionQueue& deletions) {
     if (idx == default_tex_) return;
     wait_for_upload(idx);
     auto& t = textures_[idx];
+    // Redirect the bindless slot at `idx` to the 1×1 default view before we
+    // queue the real view for deletion. Without this, the slot holds a
+    // handle that's about to be destroyed; if a later frame indexes this
+    // slot (e.g. via a stale tex_id in a display list) the driver samples
+    // a freed image view. PARTIALLY_BOUND only protects against never-
+    // sampled slots, not stale handles.
+    if (default_tex_ > 0 && size_t(default_tex_) < textures_.size() &&
+        textures_[default_tex_].view) {
+        write_slot_with_view(idx, textures_[default_tex_].view);
+    }
     if (t.view || t.image)
         deletions.push_view_image(device_, t.view, allocator_, t.image, t.alloc);
     t = {};
-    // Leave the bindless slot pointing at the stale view — PARTIALLY_BOUND
-    // means it only matters if something samples it, which it shouldn't
-    // after the free. Callers that reuse the slot via create() will
-    // overwrite the entry on the next upload.
 }
 
 void TextureManager::bind(int idx) {
@@ -297,61 +320,19 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     csi.commandBuffer = cmd;
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-    check(vkQueueSubmit2(queue_, 1, &sub, fence), "tex update submit");
+    check(dev_->submit2(1, &sub, fence), "tex update submit");
 
     std::lock_guard lk(texture_mutex_);
     pending_uploads_.push_back({fence, cmd, stg_buf, stg_alloc, idx});
     textures_[idx].ready = false;
 }
 
-void TextureManager::set_param(int param, int value) {
-    // Recorded on the slot for possible future per-texture sampler support,
-    // but with the current single-sampler bindless layout this is a no-op
-    // in terms of rendering.
-    std::lock_guard lk(texture_mutex_);
-    if (bound_tex_ <= 0 || size_t(bound_tex_) >= textures_.size()) return;
-    auto& t = textures_[bound_tex_];
-
-    constexpr int GL_TEXTURE_MIN_FILTER = 0x2801;
-    constexpr int GL_TEXTURE_MAG_FILTER = 0x2800;
-    constexpr int GL_TEXTURE_WRAP_S     = 0x2802;
-    constexpr int GL_TEXTURE_WRAP_T     = 0x2803;
-    constexpr int GL_NEAREST            = 0x2600;
-    constexpr int GL_LINEAR             = 0x2601;
-    constexpr int GL_NEAREST_MIPMAP_NEAREST = 0x2700;
-    constexpr int GL_LINEAR_MIPMAP_NEAREST  = 0x2701;
-    constexpr int GL_NEAREST_MIPMAP_LINEAR  = 0x2702;
-    constexpr int GL_LINEAR_MIPMAP_LINEAR   = 0x2703;
-    constexpr int GL_CLAMP_TO_EDGE = 0x812F;
-
-    switch (param) {
-        case GL_TEXTURE_MIN_FILTER:
-            switch (value) {
-                case GL_NEAREST:                 t.sampler_key.min_filter = VK_FILTER_NEAREST; t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST; break;
-                case GL_LINEAR:                  t.sampler_key.min_filter = VK_FILTER_LINEAR;  t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST; break;
-                case GL_NEAREST_MIPMAP_NEAREST:  t.sampler_key.min_filter = VK_FILTER_NEAREST; t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST; break;
-                case GL_LINEAR_MIPMAP_NEAREST:   t.sampler_key.min_filter = VK_FILTER_LINEAR;  t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST; break;
-                case GL_NEAREST_MIPMAP_LINEAR:   t.sampler_key.min_filter = VK_FILTER_NEAREST; t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;  break;
-                case GL_LINEAR_MIPMAP_LINEAR:    t.sampler_key.min_filter = VK_FILTER_LINEAR;  t.sampler_key.mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;  break;
-            }
-            break;
-        case GL_TEXTURE_MAG_FILTER:
-            t.sampler_key.mag_filter = (value == GL_NEAREST) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-            break;
-        case GL_TEXTURE_WRAP_S:
-        case GL_TEXTURE_WRAP_T: {
-            VkSamplerAddressMode mode;
-            if (value == GL_CLAMP_TO_EDGE)        mode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            else if (value == 0x2901 /*GL_REPEAT*/) mode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            else {
-                std::fprintf(stderr, "[vk] TextureSetParam: unsupported WRAP value 0x%x, using REPEAT\n", unsigned(value));
-                mode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            }
-            if (param == GL_TEXTURE_WRAP_S) t.sampler_key.wrap_s = mode;
-            else                            t.sampler_key.wrap_t = mode;
-            break;
-        }
-    }
+void TextureManager::set_param(int /*param*/, int /*value*/) {
+    // No-op under the bindless layout: diffuse textures all share the
+    // immutable diffuse sampler baked into the descriptor set layout
+    // (Renderer.cpp). Per-texture filter/wrap variations are unsupported
+    // by design. If a caller needs them, add a second sampler binding
+    // and a selector bit in the push constant — not a silent store.
 }
 
 int TextureManager::ensure_default_texture() {
@@ -373,29 +354,43 @@ int TextureManager::ensure_default_lightmap() {
 }
 
 void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
+    // Snapshot the slot under the lock, then drop it for the long image
+    // creation path. `reuse` tells the rest of the function whether we can
+    // keep the existing VkImage/VkImageView or must allocate fresh ones.
+    bool reuse;
+    VkImage old_image = VK_NULL_HANDLE;
+    VmaAllocation old_alloc = nullptr;
+    VkImageView   old_view  = VK_NULL_HANDLE;
     {
         std::lock_guard lk(texture_mutex_);
         wait_for_upload(idx);
+        TextureSlot& t = textures_[idx];
+        reuse = t.ready && t.width == uint32_t(w) && t.height == uint32_t(h);
+        if (t.ready && !reuse) {
+            old_image = t.image;
+            old_alloc = t.alloc;
+            old_view  = t.view;
+            t = {};
+        }
+        t.width = uint32_t(w);
+        t.height = uint32_t(h);
     }
-
-    auto& t = textures_[idx];
-    bool reuse = t.ready && t.width == uint32_t(w) && t.height == uint32_t(h);
-    if (t.ready && !reuse) {
-        if (t.view)  vkDestroyImageView(device_, t.view, nullptr);
-        if (t.image) vmaDestroyImage(allocator_, t.image, t.alloc);
-        SamplerKey sk = t.sampler_key;
-        t = {}; t.sampler_key = sk;
-    }
-    t.width = w; t.height = h;
+    // Destroy the old image handles outside the lock. Safe because
+    // wait_for_upload above guarantees no fence still references them.
+    if (old_view)  vkDestroyImageView(device_, old_view, nullptr);
+    if (old_image) vmaDestroyImage(allocator_, old_image, old_alloc);
 
     uint32_t mips = 1;
     { uint32_t d = std::max(uint32_t(w), uint32_t(h)); while (d > 1) { d >>= 1; ++mips; } }
 
+    VkImage       new_image = VK_NULL_HANDLE;
+    VmaAllocation new_alloc = nullptr;
+    VkImageView   new_view  = VK_NULL_HANDLE;
     if (!reuse) {
         VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ici.imageType = VK_IMAGE_TYPE_2D;
         ici.format    = VK_FORMAT_R8G8B8A8_UNORM;
-        ici.extent    = {t.width, t.height, 1};
+        ici.extent    = {uint32_t(w), uint32_t(h), 1};
         ici.mipLevels = mips; ici.arrayLayers = 1;
         ici.samples   = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling    = VK_IMAGE_TILING_OPTIMAL;
@@ -403,13 +398,28 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                         VK_IMAGE_USAGE_SAMPLED_BIT;
         VmaAllocationCreateInfo ai{}; ai.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(allocator_, &ici, &ai, &t.image, &t.alloc, nullptr), "texture image");
+        check(vmaCreateImage(allocator_, &ici, &ai, &new_image, &new_alloc, nullptr),
+              "texture image");
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vci.image = t.image; vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.image = new_image; vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = VK_FORMAT_R8G8B8A8_UNORM;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
-        check(vkCreateImageView(device_, &vci, nullptr, &t.view), "texture view");
+        check(vkCreateImageView(device_, &vci, nullptr, &new_view), "texture view");
+
+        std::lock_guard lk(texture_mutex_);
+        TextureSlot& t = textures_[idx];
+        t.image = new_image;
+        t.alloc = new_alloc;
+        t.view  = new_view;
+    }
+    // Capture the image handle for the command buffer recording below. Under
+    // reuse this is the existing image; under the !reuse path it's the one we
+    // just created and stored.
+    VkImage upload_image;
+    {
+        std::lock_guard lk(texture_mutex_);
+        upload_image = textures_[idx].image;
     }
 
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
@@ -447,7 +457,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
             b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            b.image = t.image;
+            b.image = upload_image;
             b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
             VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
             dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
@@ -455,8 +465,8 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         }
         VkBufferImageCopy rgn{};
         rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        rgn.imageExtent = {t.width, t.height, 1};
-        vkCmdCopyBufferToImage(cmd, stg_buf, t.image,
+        rgn.imageExtent = {uint32_t(w), uint32_t(h), 1};
+        vkCmdCopyBufferToImage(cmd, stg_buf, upload_image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
 
         // Mip generation
@@ -469,7 +479,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
             b.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
             b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            b.image = t.image;
+            b.image = upload_image;
             b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i-1, 1, 0, 1};
             VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
             dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
@@ -481,8 +491,8 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
             blit.srcOffsets[1] = {mw, mh, 1};
             blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
             blit.dstOffsets[1] = {nw, nh, 1};
-            vkCmdBlitImage(cmd, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            vkCmdBlitImage(cmd, upload_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           upload_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            1, &blit, VK_FILTER_LINEAR);
             mw = nw; mh = nh;
         }
@@ -498,7 +508,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
                 ends[n].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                 ends[n].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                 ends[n].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                ends[n].image = t.image;
+                ends[n].image = upload_image;
                 ends[n].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips-1, 0, 1};
                 ++n;
             }
@@ -509,7 +519,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
             ends[n].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
             ends[n].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             ends[n].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            ends[n].image = t.image;
+            ends[n].image = upload_image;
             ends[n].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mips-1, 1, 0, 1};
             ++n;
             VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -524,7 +534,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     csi.commandBuffer = cmd;
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-    check(vkQueueSubmit2(queue_, 1, &sub, fence), "texture upload submit");
+    check(dev_->submit2(1, &sub, fence), "texture upload submit");
 
     std::lock_guard lk(texture_mutex_);
     pending_uploads_.push_back({fence, cmd, stg_buf, stg_alloc, idx});

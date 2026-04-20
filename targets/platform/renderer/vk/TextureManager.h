@@ -7,7 +7,6 @@
 #include <mutex>
 #include <optional>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 #include "DeletionQueue.h"
@@ -15,23 +14,12 @@
 
 namespace plce::vk {
 
-// Per-texture sampler state (kept for TextureSetParam / legacy API).
-struct SamplerKey {
-    VkFilter     min_filter = VK_FILTER_NEAREST;
-    VkFilter     mag_filter = VK_FILTER_NEAREST;
-    VkSamplerMipmapMode mip_mode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    VkSamplerAddressMode wrap_s = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    VkSamplerAddressMode wrap_t = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    bool operator==(const SamplerKey&) const = default;
-};
-
 struct TextureSlot {
     VkImage       image = VK_NULL_HANDLE;
     VmaAllocation alloc = nullptr;
     VkImageView   view  = VK_NULL_HANDLE;
     uint32_t      width = 0, height = 0;
     bool          ready = false;
-    SamplerKey    sampler_key{};  // retained for set_param; ignored by bindless path
 };
 
 /// Bindless texture manager: one descriptor set holds a sampled-image array
@@ -44,16 +32,21 @@ struct TextureSlot {
 ///   binding 1: VK_DESCRIPTOR_TYPE_SAMPLER          (immutable, diffuse)
 ///   binding 2: VK_DESCRIPTOR_TYPE_SAMPLER          (immutable, lightmap)
 ///
-/// Per-texture SamplerKey changes (TextureSetParam) are stored but have no
-/// effect under bindless rendering — all diffuse textures share the same
-/// immutable sampler (nearest, mipmap-linear, repeat) chosen to match the
-/// majority of game textures.
+/// Per-texture sampler variation is NOT supported: every diffuse texture uses
+/// the immutable diffuse sampler baked into the layout (nearest, mipmap-linear,
+/// repeat). TextureSetParam is therefore a no-op with a diagnostic log; adding
+/// per-texture samplers would require a second sampler binding and a selector
+/// bit in the push constant.
+class Device;  // forward decl
+
 class TextureManager {
 public:
     static constexpr uint32_t kMaxTextures = 4096;
 
-    void init(VkDevice device, VmaAllocator allocator, VkQueue queue,
-              uint32_t queue_family, VkDescriptorSet bindless_set);
+    /// The Device reference is stored for queue submission through
+    /// Device::submit2, which guards vkQueueSubmit2 against concurrent
+    /// main-thread present calls.
+    void init(const Device& dev, VkDescriptorSet bindless_set);
     void destroy(VkDevice device, VmaAllocator allocator);
 
     int  create();
@@ -101,6 +94,9 @@ private:
 
     /// Write texture slot `idx`'s current view into binding 0 of the bindless set.
     void write_slot(int idx);
+    /// Write an explicit view into slot `idx` (used by free() to redirect
+    /// freed slots at the 1×1 default texture before deleting the old view).
+    void write_slot_with_view(int idx, VkImageView view);
 
     VkFence acquire_fence();
     void    release_fence(VkFence);
@@ -108,9 +104,9 @@ private:
     void    wait_for_upload(int texture_idx);
     void    wait_all_uploads();
 
-    VkDevice     device_       = VK_NULL_HANDLE;
-    VmaAllocator allocator_    = nullptr;
-    VkQueue      queue_        = VK_NULL_HANDLE;
+    const Device* dev_       = nullptr;  // non-owning; guarded submits
+    VkDevice      device_    = VK_NULL_HANDLE;
+    VmaAllocator  allocator_ = nullptr;
 
     /// Descriptor set owning the SAMPLED_IMAGE[kMaxTextures] array. Owned by
     /// Renderer; TextureManager holds a non-owning handle and writes into it.
@@ -123,6 +119,7 @@ private:
 
     std::vector<PendingUpload> pending_uploads_;
     std::vector<VkFence>       fence_pool_;
+    mutable std::mutex         fence_pool_mutex_;
 
     std::vector<TextureSlot> textures_;
     int default_tex_  = 0;

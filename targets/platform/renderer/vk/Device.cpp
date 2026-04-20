@@ -153,6 +153,17 @@ Device::~Device() {
     // vk::raii handles destroy everything else in correct order
 }
 
+VkResult Device::submit2(uint32_t submit_count, const VkSubmitInfo2* submits,
+                         VkFence fence) const {
+    std::lock_guard lk(queue_mutex_);
+    return vkQueueSubmit2(queue_, submit_count, submits, fence);
+}
+
+VkResult Device::present_khr(const VkPresentInfoKHR* present_info) const {
+    std::lock_guard lk(queue_mutex_);
+    return vkQueuePresentKHR(queue_, present_info);
+}
+
 void Device::name(VkObjectType type, uint64_t obj, const char* label) const {
 #ifndef NDEBUG
     if (!*device_) return;

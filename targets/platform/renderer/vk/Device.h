@@ -4,6 +4,7 @@
 #include <vma/vk_mem_alloc.h>
 
 #include <cstdint>
+#include <mutex>
 
 struct SDL_Window;
 
@@ -46,6 +47,17 @@ public:
         name(T::objectType, reinterpret_cast<uint64_t>(static_cast<typename T::CType>(handle)), label);
     }
 
+    /// Externally synchronized wrapper around vkQueueSubmit2. All renderer
+    /// code that submits to the graphics queue goes through this so that
+    /// main-thread presentation and worker-thread texture uploads cannot
+    /// race on the VkQueue handle (VUID-vkQueueSubmit2-queue-parameter).
+    VkResult submit2(uint32_t submit_count, const VkSubmitInfo2* submits,
+                     VkFence fence) const;
+
+    /// Externally synchronized wrapper around vkQueuePresentKHR, paired with
+    /// submit2 above so present cannot race with a worker-thread upload.
+    VkResult present_khr(const VkPresentInfoKHR* present_info) const;
+
 private:
     ::vk::raii::Context              ctx_;
     ::vk::raii::Instance             instance_{nullptr};
@@ -56,6 +68,7 @@ private:
     uint32_t                       queue_family_ = 0;
     VkQueue                        queue_        = VK_NULL_HANDLE;
     VmaAllocator                   allocator_    = nullptr;
+    mutable std::mutex             queue_mutex_;  // guards submit2
 };
 
 }  // namespace plce::vk

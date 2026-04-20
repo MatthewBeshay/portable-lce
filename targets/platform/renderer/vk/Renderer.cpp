@@ -240,14 +240,13 @@ Renderer::Renderer(SDL_Window* window)
         csi.commandBuffer = cmd;
         VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
         sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-        vkQueueSubmit2(dev_.queue(), 1, &sub, VK_NULL_HANDLE);
+        check(dev_.submit2(1, &sub, VK_NULL_HANDLE), "quad ib submit");
         vkQueueWaitIdle(dev_.queue());
         vmaDestroyBuffer(dev_.allocator(), stg, sa);
         vkDestroyCommandPool(dev_.handle(), pool, nullptr);
     }
 
-    tex_mgr_.init(dev_.handle(), dev_.allocator(), dev_.queue(), dev_.queue_family(),
-                  bindless_set_);
+    tex_mgr_.init(dev_, bindless_set_);
     dl_mgr_.init();
 
     {
@@ -357,7 +356,7 @@ void Renderer::Present() {
     sub.waitSemaphoreInfoCount    = 1; sub.pWaitSemaphoreInfos    = &wait;
     sub.commandBufferInfoCount    = 1; sub.pCommandBufferInfos    = &csi;
     sub.signalSemaphoreInfoCount  = 1; sub.pSignalSemaphoreInfos  = &sig;
-    check(vkQueueSubmit2(dev_.queue(), 1, &sub, f.fence), "submit");
+    check(dev_.submit2(1, &sub, f.fence), "submit");
 
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.waitSemaphoreCount = 1;
@@ -366,7 +365,7 @@ void Renderer::Present() {
     auto sc = swap_.handle();
     pi.pSwapchains        = &sc;
     pi.pImageIndices      = &acquired_img_;
-    VkResult pr = vkQueuePresentKHR(dev_.queue(), &pi);
+    VkResult pr = dev_.present_khr(&pi);
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
         int w, h; SDL_GetWindowSize(window_, &w, &h);
         resize(uint32_t(w), uint32_t(h));
@@ -542,8 +541,11 @@ void Renderer::MatrixPush() {
     auto& s = stack();
     assert(s.depth < kMaxStackDepth && "Matrix stack overflow");
     if (s.depth >= kMaxStackDepth) {
-        std::fprintf(stderr, "[vk] matrix stack overflow at depth %u\n", s.depth);
-        return;
+        // Previously logged-and-returned, but that silently unbalances every
+        // subsequent MatrixPop. A throw surfaces the misuse instead.
+        throw std::runtime_error(
+            "vk::Renderer::MatrixPush: matrix stack overflow at depth 16 "
+            "(raise kMaxStackDepth if the game legitimately needs deeper stacks)");
     }
     s.data[s.depth] = s.data[s.depth - 1];
     ++s.depth;
@@ -773,7 +775,12 @@ void Renderer::DrawVertices(int primType, int count, void* data,
                        0, 256, &pc);
 
     if (is_quads) {
-        uint32_t qc = std::min(uint32_t(count) / 4, kMaxQuads);
+        uint32_t qc = uint32_t(count) / 4;
+        if (qc > kMaxQuads) {
+            throw std::runtime_error(
+                "vk::Renderer::DrawVertices: quad count exceeds kMaxQuads=16384 "
+                "(raise the quad index buffer allocation if the game needs more)");
+        }
         vkCmdBindIndexBuffer(f.cmd, quad_ib_, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(f.cmd, qc * 6, 1, 0, 0, 0);
     } else {
