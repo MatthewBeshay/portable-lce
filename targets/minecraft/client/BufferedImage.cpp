@@ -15,11 +15,8 @@
 
 
 BufferedImage::BufferedImage(int width, int height, int type) {
-    data[0] = new int[width * height];
-
-    for (int i = 1; i < 10; i++) {
-        data[i] = nullptr;
-    }
+    data[0].assign(size_t(width) * size_t(height), 0);
+    // data[1..9] default-construct empty — no explicit init needed.
     this->width = width;
     this->height = height;
 }
@@ -38,13 +35,12 @@ void BufferedImage::ByteFlip4(unsigned int& data) {
 BufferedImage::BufferedImage(const std::string& File, bool filenameHasExtension,
                              bool bTitleUpdateTexture,
                              const std::string& drive) {
-    int32_t hr = -1;
     std::string filePath = File;
 
     for (size_t i = 0; i < filePath.length(); ++i) {
         if (filePath[i] == '\\') filePath[i] = '/';
     }
-    for (int l = 0; l < 10; l++) data[l] = nullptr;
+    // data[0..9] default-construct empty.
 
     std::string baseName = filePath;
     if (!filenameHasExtension) {
@@ -86,42 +82,38 @@ BufferedImage::BufferedImage(const std::string& File, bool filenameHasExtension,
             }
         }
 
-        D3DXIMAGE_INFO ImageInfo;
-        memset(&ImageInfo, 0, sizeof(D3DXIMAGE_INFO));
+        std::optional<rp::LoadedImage> img;
 
         if (foundOnDisk) {
             std::string nativePath = std::filesystem::path(finalPath).string();
-            hr = RenderPath.LoadTextureData(nativePath.c_str(),
-                                                  &ImageInfo, &data[l]);
+            img = RenderPath.load_texture_data(nativePath.c_str());
         } else {
             std::string archiveKey = "res/" + fileName;
             if (gameServices().hasArchiveFile(archiveKey)) {
                 std::vector<uint8_t> ba =
                     gameServices().getArchiveFile(archiveKey);
-                hr = RenderPath.LoadTextureData(ba.data(), ba.size(),
-                                                      &ImageInfo, &data[l]);
+                img = RenderPath.load_texture_data(std::span<const uint8_t>(ba));
             }
         }
 
-        if (hr == 0) {
+        if (img) {
             if (l == 0) {
-                width = ImageInfo.Width;
-                height = ImageInfo.Height;
+                width = img->width;
+                height = img->height;
             }
+            data[l] = std::move(img->argb_pixels);
         } else {
             if (l == 0) {
                 // safety dummy to prevent crash
                 width = 1;
                 height = 1;
-                data[0] = new int[1];
-                data[0][0] = 0xFFFF00FF;
+                data[0] = {int(0xFFFF00FF)};
             }
             break;
         }
     }
 }
 BufferedImage::BufferedImage() {
-    for (int l = 0; l < 10; l++) data[l] = nullptr;
     width = 0;
     height = 0;
 }
@@ -131,42 +123,28 @@ bool BufferedImage::loadMipmapPng(int level, std::uint8_t* bytes,
     if (level < 0 || level >= 10 || bytes == nullptr || numBytes == 0) {
         return false;
     }
-    D3DXIMAGE_INFO ImageInfo;
-    int32_t hr = RenderPath.LoadTextureData(bytes, numBytes, &ImageInfo,
-                                                  &data[level]);
-    if (hr != 0) {
-        return false;
-    }
+    auto img = RenderPath.load_texture_data(std::span<const uint8_t>(bytes, numBytes));
+    if (!img) return false;
     if (level == 0) {
-        width = ImageInfo.Width;
-        height = ImageInfo.Height;
+        width = img->width;
+        height = img->height;
     }
+    data[level] = std::move(img->argb_pixels);
     return true;
 }
 
 BufferedImage::BufferedImage(std::uint8_t* pbData, std::uint32_t dataBytes) {
-    for (int l = 0; l < 10; l++) {
-        data[l] = nullptr;
-    }
-
-    D3DXIMAGE_INFO ImageInfo;
-    memset(&ImageInfo, 0, sizeof(D3DXIMAGE_INFO));
-    int32_t hr = RenderPath.LoadTextureData(pbData, dataBytes, &ImageInfo,
-                                                  &data[0]);
-
-    if (hr == 0) {
-        width = ImageInfo.Width;
-        height = ImageInfo.Height;
+    auto img = RenderPath.load_texture_data(std::span<const uint8_t>(pbData, dataBytes));
+    if (img) {
+        width = img->width;
+        height = img->height;
+        data[0] = std::move(img->argb_pixels);
     } else {
         gameServices().fatalLoadError();
     }
 }
 
-BufferedImage::~BufferedImage() {
-    for (int i = 0; i < 10; i++) {
-        delete[] data[i];
-    }
-}
+BufferedImage::~BufferedImage() = default;
 
 int BufferedImage::getWidth() { return width; }
 
@@ -184,9 +162,11 @@ void BufferedImage::getRGB(int startX, int startY, int w, int h,
     }
 }
 
-int* BufferedImage::getData() { return data[0]; }
+int* BufferedImage::getData() { return data[0].empty() ? nullptr : data[0].data(); }
 
-int* BufferedImage::getData(int level) { return data[level]; }
+int* BufferedImage::getData(int level) {
+    return (level < 0 || level >= 10 || data[level].empty()) ? nullptr : data[level].data();
+}
 
 Graphics* BufferedImage::getGraphics() { return nullptr; }
 
@@ -228,7 +208,7 @@ BufferedImage* BufferedImage::getSubimage(int x, int y, int w, int h) {
         int xx = x >> level;
         int yy = y >> level;
         int srcW = width >> level;
-        img->data[level] = new int[ww * hh];
+        img->data[level].resize(size_t(ww) * size_t(hh));
         for (int row = 0; row < hh; row++) {
             for (int col = 0; col < ww; col++) {
                 img->data[level][row * ww + col] =
@@ -242,7 +222,8 @@ BufferedImage* BufferedImage::getSubimage(int x, int y, int w, int h) {
 }
 
 void BufferedImage::preMultiplyAlpha() {
-    int* curData = data[0];
+    int* curData = data[0].empty() ? nullptr : data[0].data();
+    if (!curData) return;
 
     int cur = 0;
     int alpha = 0;

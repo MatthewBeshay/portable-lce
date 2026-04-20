@@ -3,10 +3,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace rp {
+
+/// Decoded image returned from IRenderPath::load_texture_data.
+/// argb_pixels contains width*height 32-bit ARGB values (A in high byte);
+/// this matches BufferedImage's internal storage and uploads directly via
+/// IRenderPath::TextureData.
+struct LoadedImage {
+    int width  = 0;
+    int height = 0;
+    std::vector<int> argb_pixels;
+};
 
 // ---------------------------------------------------------------------------
 // Handle types
@@ -534,10 +546,13 @@ public:
     // Texture queries
     [[nodiscard]] virtual int TextureGetTextureLevels() = 0;
     virtual void ReadPixels(int x, int y, int w, int h, void* buf) = 0;
-    [[nodiscard]] virtual int LoadTextureData(const char* filename,
-                                              void* srcInfo, int** dataOut) = 0;
-    [[nodiscard]] virtual int LoadTextureData(uint8_t* data, uint32_t bytes,
-                                              void* srcInfo, int** dataOut) = 0;
+    /// Load texture data from a file path (PNG etc. via stb_image).
+    /// Returns std::nullopt on failure; never throws.
+    [[nodiscard]] virtual std::optional<LoadedImage>
+    load_texture_data(const char* filename) = 0;
+    /// Load texture data from an in-memory byte span.
+    [[nodiscard]] virtual std::optional<LoadedImage>
+    load_texture_data(std::span<const uint8_t> bytes) = 0;
 
     // Lighting state
     virtual void StateSetVertexTextureUV(float u, float v) = 0;

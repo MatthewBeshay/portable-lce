@@ -5,10 +5,13 @@
 
 #include <cstdint>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
 #include "DeletionQueue.h"
+#include "platform/renderer/IRenderPath.h"  // rp::LoadedImage
 
 namespace plce::vk {
 
@@ -68,8 +71,8 @@ public:
     /// Called once per frame from Renderer::StartFrame.
     void poll_uploads();
 
-    int load_texture_data(const char* fn, void* info, int** out);
-    int load_texture_data(uint8_t* data, uint32_t bytes, void* info, int** out);
+    [[nodiscard]] std::optional<rp::LoadedImage> load_texture_data(const char* filename);
+    [[nodiscard]] std::optional<rp::LoadedImage> load_texture_data(std::span<const uint8_t> bytes);
 
     int default_tex() const { return default_tex_; }
     int default_lm() const { return default_lm_; }

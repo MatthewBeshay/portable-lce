@@ -3,13 +3,10 @@
 
 #include "TextureManager.h"
 #include "VkCheck.h"
-#include "VertexFormats.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-
-#include "platform/PlatformTypes.h"
 
 namespace plce::vk {
 
@@ -659,24 +656,42 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     pending_uploads_.push_back({fence, cmd, stg_buf, stg_alloc, idx});
 }
 
-int TextureManager::load_texture_data(const char* fn, void* srcInfo, int** out) {
+namespace {
+/// Pack stb_image RGBA bytes into an ARGB int array (matching the legacy
+/// BufferedImage internal format). A in high byte, then R, G, B.
+rp::LoadedImage pack_argb(unsigned char* px, int w, int h) {
+    rp::LoadedImage out;
+    out.width  = w;
+    out.height = h;
+    out.argb_pixels.resize(size_t(w) * size_t(h));
+    for (int i = 0; i < w * h; ++i) {
+        unsigned char r = px[i * 4 + 0];
+        unsigned char g = px[i * 4 + 1];
+        unsigned char b = px[i * 4 + 2];
+        unsigned char a = px[i * 4 + 3];
+        out.argb_pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+    return out;
+}
+}  // namespace
+
+std::optional<rp::LoadedImage> TextureManager::load_texture_data(const char* filename) {
     int w, h, c;
-    unsigned char* px = stbi_load(fn, &w, &h, &c, 4);
-    if (!px) return -1;
-    if (auto* i = static_cast<D3DXIMAGE_INFO*>(srcInfo)) { i->Width = w; i->Height = h; }
-    *out = stb_to_argb(px, w, h);
+    unsigned char* px = stbi_load(filename, &w, &h, &c, 4);
+    if (!px) return std::nullopt;
+    rp::LoadedImage img = pack_argb(px, w, h);
     stbi_image_free(px);
-    return 0;
+    return img;
 }
 
-int TextureManager::load_texture_data(uint8_t* data, uint32_t bytes, void* srcInfo, int** out) {
+std::optional<rp::LoadedImage> TextureManager::load_texture_data(std::span<const uint8_t> bytes) {
     int w, h, c;
-    unsigned char* px = stbi_load_from_memory(data, int(bytes), &w, &h, &c, 4);
-    if (!px) return -1;
-    if (auto* i = static_cast<D3DXIMAGE_INFO*>(srcInfo)) { i->Width = w; i->Height = h; }
-    *out = stb_to_argb(px, w, h);
+    unsigned char* px = stbi_load_from_memory(
+        bytes.data(), int(bytes.size()), &w, &h, &c, 4);
+    if (!px) return std::nullopt;
+    rp::LoadedImage img = pack_argb(px, w, h);
     stbi_image_free(px);
-    return 0;
+    return img;
 }
 
 }  // namespace plce::vk

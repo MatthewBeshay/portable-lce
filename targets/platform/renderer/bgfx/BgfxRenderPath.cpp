@@ -1163,45 +1163,41 @@ void BgfxRenderPath::TextureDataUpdate(int xoff, int yoff, int w, int h,
 
 int BgfxRenderPath::TextureGetTextureLevels() { return 1; }
 void BgfxRenderPath::ReadPixels(int, int, int, int, void*) {}
-static int* stb_pixels_to_argb(unsigned char* pixels, int w, int h) {
-    int* px = new int[w * h];
-    for (int i = 0; i < w * h; i++) {
-        unsigned char r = pixels[i * 4], g = pixels[i * 4 + 1],
-                      b = pixels[i * 4 + 2], a = pixels[i * 4 + 3];
-        px[i] = (a << 24) | (r << 16) | (g << 8) | b;
-    }
-    return px;
-}
 
-int BgfxRenderPath::LoadTextureData(const char* filename, void* srcInfo,
-                                    int** dataOut) {
+namespace {
+rp::LoadedImage bgfx_pack_argb(unsigned char* px, int w, int h) {
+    rp::LoadedImage out;
+    out.width  = w;
+    out.height = h;
+    out.argb_pixels.resize(size_t(w) * size_t(h));
+    for (int i = 0; i < w * h; ++i) {
+        unsigned char r = px[i * 4 + 0];
+        unsigned char g = px[i * 4 + 1];
+        unsigned char b = px[i * 4 + 2];
+        unsigned char a = px[i * 4 + 3];
+        out.argb_pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+    return out;
+}
+}  // namespace
+
+std::optional<rp::LoadedImage> BgfxRenderPath::load_texture_data(const char* filename) {
     int w, h, channels;
     unsigned char* pixels = stbi_load(filename, &w, &h, &channels, 4);
-    if (!pixels) return -1;
-    auto* info = static_cast<D3DXIMAGE_INFO*>(srcInfo);
-    if (info) {
-        info->Width = w;
-        info->Height = h;
-    }
-    *dataOut = stb_pixels_to_argb(pixels, w, h);
+    if (!pixels) return std::nullopt;
+    rp::LoadedImage img = bgfx_pack_argb(pixels, w, h);
     stbi_image_free(pixels);
-    return 0;
+    return img;
 }
 
-int BgfxRenderPath::LoadTextureData(uint8_t* data, uint32_t bytes,
-                                    void* srcInfo, int** dataOut) {
+std::optional<rp::LoadedImage> BgfxRenderPath::load_texture_data(std::span<const uint8_t> bytes) {
     int w, h, channels;
     unsigned char* pixels =
-        stbi_load_from_memory(data, bytes, &w, &h, &channels, 4);
-    if (!pixels) return -1;
-    auto* info = static_cast<D3DXIMAGE_INFO*>(srcInfo);
-    if (info) {
-        info->Width = w;
-        info->Height = h;
-    }
-    *dataOut = stb_pixels_to_argb(pixels, w, h);
+        stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &channels, 4);
+    if (!pixels) return std::nullopt;
+    rp::LoadedImage img = bgfx_pack_argb(pixels, w, h);
     stbi_image_free(pixels);
-    return 0;
+    return img;
 }
 
 // MARK: Frame lifecycle

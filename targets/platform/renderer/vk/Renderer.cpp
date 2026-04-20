@@ -749,8 +749,12 @@ void Renderer::TextureBind(int idx) { tex_mgr_.bind(idx); }
 void Renderer::TextureData(int w, int h, void* data, int level, int) { tex_mgr_.data(w, h, data, level); }
 void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int lvl) { tex_mgr_.data_update(xo, yo, w, h, data, lvl); }
 void Renderer::TextureSetParam(int param, int value) { tex_mgr_.set_param(param, value); }
-int Renderer::LoadTextureData(const char* fn, void* info, int** out) { return tex_mgr_.load_texture_data(fn, info, out); }
-int Renderer::LoadTextureData(uint8_t* data, uint32_t bytes, void* info, int** out) { return tex_mgr_.load_texture_data(data, bytes, info, out); }
+std::optional<rp::LoadedImage> Renderer::load_texture_data(const char* filename) {
+    return tex_mgr_.load_texture_data(filename);
+}
+std::optional<rp::LoadedImage> Renderer::load_texture_data(std::span<const uint8_t> bytes) {
+    return tex_mgr_.load_texture_data(bytes);
+}
 
 // ===================================================================
 // CBUFF (DISPLAY LISTS — delegated to DisplayListManager)

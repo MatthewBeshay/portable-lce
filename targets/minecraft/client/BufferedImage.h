@@ -7,7 +7,8 @@ class Graphics;
 
 class BufferedImage {
 private:
-    int* data[10];  // Arrays for mipmaps - nullptr if not used
+    // Per-mip pixel storage (ARGB int). Empty vector = this mip level unused.
+    std::vector<int> data[10];
     int width;
     int height;
     void ByteFlip4(unsigned int& data);  // 4J added

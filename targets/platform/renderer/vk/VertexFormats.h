@@ -77,19 +77,6 @@ inline uint8_t depth_to_vk(rp::DepthTest f) {
     return VK_COMPARE_OP_LESS_OR_EQUAL;
 }
 
-// Convert RGBA pixel data from stb_image into an ARGB int array.
-// Caller takes ownership of the returned pointer and must delete[] it —
-// this is the IRenderPath::LoadTextureData contract (int** out), so
-// std::vector cannot be used here.
-inline int* stb_to_argb(unsigned char* px, int w, int h) {
-    int* out = new int[w * h];
-    for (int i = 0; i < w * h; ++i) {
-        unsigned char r = px[i*4], g = px[i*4+1], b = px[i*4+2], a = px[i*4+3];
-        out[i] = (a << 24) | (r << 16) | (g << 8) | b;
-    }
-    return out;
-}
-
 // Expand compact 16-byte vertex format to 32-byte world_standard.
 inline std::vector<std::byte> expand_compact(const void* data, int& count) {
     constexpr uint32_t kStride = 32;

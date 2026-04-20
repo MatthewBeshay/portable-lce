@@ -149,8 +149,10 @@ public:
 
     void SetChunkOffset(float x, float y, float z) override { chunk_offset_ = {x,y,z}; }
     void ReadPixels(int, int, int, int, void*) override {}
-    [[nodiscard]] int LoadTextureData(const char* fn, void* info, int** out) override;
-    [[nodiscard]] int LoadTextureData(uint8_t* data, uint32_t bytes, void* info, int** out) override;
+    [[nodiscard]] std::optional<rp::LoadedImage>
+    load_texture_data(const char* filename) override;
+    [[nodiscard]] std::optional<rp::LoadedImage>
+    load_texture_data(std::span<const uint8_t> bytes) override;
 
     void Set_matrixDirty() override {}
     void CBuffLockStaticCreations() override {}
