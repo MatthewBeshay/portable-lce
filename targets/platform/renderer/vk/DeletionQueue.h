@@ -6,7 +6,7 @@
 #include <vma/vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 /// Deferred destruction queue. Resources are pushed during rendering and
 /// destroyed when the owning frame's fence signals (guaranteed no GPU access).
@@ -57,4 +57,4 @@ private:
     std::vector<Entry> entries_;
 };
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

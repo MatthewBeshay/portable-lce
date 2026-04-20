@@ -7,33 +7,25 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
 #include <vector>
 
 #include "platform/renderer/IRenderPath.h"
 #include "Device.h"
 #include "DeletionQueue.h"
+#include "DisplayListManager.h"
 #include "FrameContext.h"
 #include "PipelineCache.h"
 #include "Swapchain.h"
+#include "TextureManager.h"
 
 struct SDL_Window;
 
-namespace plce::vk_render { class TerrainRenderer; }
+namespace plce::vk {
 
-namespace plce::vk2 {
-
-/// Clean VulkanRenderPath implementation using separated vk2 components.
-/// Follows VULKAN_GRAPHICS_BEST_PRACTICES.md throughout.
+/// Vulkan renderer (vk) — uses dynamic depth bias instead of MVP Z hack,
+/// per-texture samplers, and fan-to-list CPU conversion.
 class Renderer final : public rp::IRenderPath {
 public:
-    struct CBuffDraw {
-        int primType = 0;
-        int vertexType = 0;
-        int shaderType = 0;
-        std::vector<std::byte> verts;
-    };
-
     explicit Renderer(SDL_Window* window);
     ~Renderer() override;
 
@@ -72,7 +64,7 @@ public:
     // -- Draw --
     void DrawVertices(int primType, int count, void* data, int vType, int sType) override;
 
-    // -- Resources (stubbed where not needed) --
+    // -- Resources --
     [[nodiscard]] rp::MeshHandle create_mesh(const rp::MeshDesc&) override { return rp::kInvalidMesh; }
     void update_mesh(rp::MeshHandle, const rp::MeshDesc&) override {}
     void destroy_mesh(rp::MeshHandle) override {}
@@ -115,11 +107,11 @@ public:
     [[nodiscard]] int TextureCreate() override;
     void TextureFree(int idx) override;
     void TextureBind(int idx) override;
-    void TextureBindVertex(int idx, bool) override { lightmap_tex_ = idx; }
+    void TextureBindVertex(int idx, bool) override { tex_mgr_.bind_vertex(idx); }
     void TextureSetTextureLevels(int) override {}
     void TextureData(int w, int h, void* data, int level, int format) override;
     void TextureDataUpdate(int xo, int yo, int w, int h, void* data, int lvl) override;
-    void TextureSetParam(int, int) override {}
+    void TextureSetParam(int param, int value) override;
     [[nodiscard]] int TextureGetTextureLevels() override { return 1; }
 
     // -- State --
@@ -155,7 +147,7 @@ public:
     void StateSetActiveTexture(int gl_enum) override;
     void StateSetVertexTextureUV(float u, float v) override { global_lm_uv_ = {u,v}; }
 
-    void SetChunkOffset(float, float, float) override {}
+    void SetChunkOffset(float x, float y, float z) override { chunk_offset_ = {x,y,z}; }
     void ReadPixels(int, int, int, int, void*) override {}
     [[nodiscard]] int LoadTextureData(const char* fn, void* info, int** out) override;
     [[nodiscard]] int LoadTextureData(uint8_t* data, uint32_t bytes, void* info, int** out) override;
@@ -169,13 +161,6 @@ public:
     void BeginEvent(const char*) override {}
     void EndEvent() override {}
 
-    // -- Terrain --
-    void chunk_upload(const ChunkUpload&) override;
-    void chunk_destroy(int32_t cx, int32_t cy, int32_t cz, uint8_t layer) override;
-    void chunk_upload_from_cbuff(int cbuff_id, const ChunkUpload& base) override;
-    void render_terrain(const float* mvp, const float* frustum, uint8_t layer = 0) override;
-    void set_terrain_atlas(int texture_id) override;
-
 private:
     static constexpr uint32_t kFramesInFlight = 2;
 
@@ -184,25 +169,18 @@ private:
     Swapchain  swap_;
     std::array<FrameContext, kFramesInFlight> frames_;
     PipelineCache pipelines_;
+    TextureManager tex_mgr_;
+    DisplayListManager dl_mgr_;
 
     // -- Pipeline layout + descriptors --
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout tex_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool tex_pool_ = VK_NULL_HANDLE;
-    VkSampler tex_sampler_     = VK_NULL_HANDLE;
-    VkSampler tex_sampler_lm_  = VK_NULL_HANDLE;
 
-    // Quad index buffer (GL_QUADS → 2 triangles)
+    // Quad index buffer (GL_QUADS -> 2 triangles)
     VkBuffer      quad_ib_       = VK_NULL_HANDLE;
     VmaAllocation quad_ib_alloc_ = nullptr;
     static constexpr uint32_t kMaxQuads = 16384;
-
-    // Staging for texture uploads
-    VkBuffer      staging_buf_    = VK_NULL_HANDLE;
-    VmaAllocation staging_alloc_  = nullptr;
-    std::byte*    staging_mapped_ = nullptr;
-    static constexpr VkDeviceSize kStagingSize = 16ull * 1024 * 1024;
-    VkCommandPool upload_pool_ = VK_NULL_HANDLE;
 
     // -- Per-frame state --
     uint32_t frame_idx_     = 0;
@@ -210,10 +188,11 @@ private:
     bool     frame_active_  = false;
     bool     pass_active_   = false;
     bool     should_close_  = false;
+    bool     transient_overflow_warned_ = false;
 
     // -- Render state tracking --
-    PsoKey   pso_key_{};
-    PsoKey   last_bound_pso_{};
+    PipelineKey   pso_key_{};
+    PipelineKey   last_bound_pso_{};
     bool     pso_dirty_ = true;
 
     std::array<float, 4> clear_color_{0.05f, 0.05f, 0.10f, 1.0f};
@@ -250,50 +229,16 @@ private:
     std::vector<glm::mat4> proj_stack_{glm::mat4(1)};
     std::vector<glm::mat4> tex_stack_{glm::mat4(1)};
 
-    // Textures
-    struct TexSlot {
-        VkImage         image    = VK_NULL_HANDLE;
-        VmaAllocation   alloc    = nullptr;
-        VkImageView     view     = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
-        uint32_t        width = 0, height = 0;
-        bool            ready = false;
-    };
-    std::vector<TexSlot> textures_;
-    int default_tex_ = 0;
-    int bound_tex_   = 0;
-    int lightmap_tex_ = 0;
     uint32_t next_material_id_ = 0;
-    mutable std::mutex tex_mu_;
 
-    // CBuffs (display lists)
-    struct CBuffSubDraw {
-        uint32_t vertex_offset = 0;
-        uint32_t vertex_count  = 0;
-        int      prim_type     = 0;
-    };
-    struct CBuff {
-        std::vector<CBuffDraw> draws;
-        std::vector<CBuffSubDraw> gpu_draws;
-        VkBuffer      vb = VK_NULL_HANDLE;
-        VmaAllocation alloc = nullptr;
-        uint32_t      vb_size = 0;
-        bool valid = false, uploaded = false;
-    };
-    std::vector<CBuff> cbufs_;
-    int next_cbuf_ = 1;
-    mutable std::mutex cbuf_mu_;
+    // Thread-safe deferred buffer destruction. Worker threads push here
+    // instead of accessing frame().deletions (which is main-thread only).
+    std::vector<PendingDestroy> pending_destroys_;
+    std::mutex pending_destroy_mutex_;
 
-    // Terrain renderer
-    std::unique_ptr<plce::vk_render::TerrainRenderer> terrain_;
-
-    // Framebuffer info for game queries
+    // Framebuffer info
     rp::FrameFramebuffer fb_{};
     SDL_Window* window_ = nullptr;
-
-    // Stats
-    uint32_t stat_draws_ = 0, stat_frames_ = 0;
-    double   stat_start_ = 0;
 
     // -- Internal helpers --
     FrameContext& frame() { return frames_[frame_idx_]; }
@@ -301,9 +246,7 @@ private:
     void ensure_pass();
     void begin_pass();
     void end_pass();
-    int  ensure_default_texture();
-    void upload_texture(int idx, int w, int h, const void* pixels);
-    void cbuf_upload(CBuff& cb);
+    void fill_push_constants(void* out, bool textured, const glm::vec4* tint = nullptr);
 };
 
-}  // namespace plce::vk2
+}  // namespace plce::vk

@@ -11,7 +11,7 @@
 
 #include "platform/PlatformTypes.h"
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 void TextureManager::init(VkDevice device, VmaAllocator allocator, VkQueue queue,
                            uint32_t queue_family, VkDescriptorSetLayout tex_set_layout,
@@ -76,7 +76,10 @@ void TextureManager::release_fence(VkFence f) {
 void TextureManager::complete_upload(PendingUpload& pu) {
     textures_[pu.texture_idx].ready = true;
     vmaDestroyBuffer(allocator_, pu.staging_buf, pu.staging_alloc);
-    vkFreeCommandBuffers(device_, upload_pool_, 1, &pu.cmd);
+    {
+        std::lock_guard pool_lk(upload_pool_mutex_);
+        vkFreeCommandBuffers(device_, upload_pool_, 1, &pu.cmd);
+    }
     vkResetFences(device_, 1, &pu.fence);
     release_fence(pu.fence);
 }
@@ -241,6 +244,8 @@ void TextureManager::data(int w, int h, const void* pixels, int level) {
 void TextureManager::data_update(int xo, int yo, int w, int h, const void* data, int level) {
     if (level != 0 || !data) return;
     int idx;
+    uint32_t tw = 0, th = 0;
+    VkImage image = VK_NULL_HANDLE;
     {
         std::lock_guard lk(texture_mutex_);
         idx = bound_tex_;
@@ -248,16 +253,19 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         // Partial update assumes the image is in SHADER_READ_ONLY_OPTIMAL.
         // Wait for any pending full upload first.
         wait_for_upload(idx);
+        // Read ready/size/image under the lock — all are written under the lock.
+        if (!textures_[idx].ready) return;
+        tw = textures_[idx].width;
+        th = textures_[idx].height;
+        image = textures_[idx].image;
     }
-    auto& t = textures_[idx];
-    if (!t.ready) return;
 
-    if (xo == 0 && yo == 0 && uint32_t(w) == t.width && uint32_t(h) == t.height) {
+    if (xo == 0 && yo == 0 && uint32_t(w) == tw && uint32_t(h) == th) {
         // Full rewrite — use async upload path.
         upload_texture(idx, w, h, data);
         return;
     }
-    if (xo < 0 || yo < 0 || uint32_t(xo + w) > t.width || uint32_t(yo + h) > t.height) return;
+    if (xo < 0 || yo < 0 || uint32_t(xo + w) > tw || uint32_t(yo + h) > th) return;
 
     // Partial sub-region update — async with per-upload staging + fence.
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
@@ -275,45 +283,50 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
           "tex update staging");
     std::memcpy(stg_info.pMappedData, data, bytes);
 
-    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    VkCommandBuffer cmd; check(vkAllocateCommandBuffers(device_, &cai, &cmd), "tex update cmd");
-    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bbi);
+    VkCommandBuffer cmd;
+    {
+        // All command pool operations must be externally synchronized.
+        std::lock_guard pool_lk(upload_pool_mutex_);
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check(vkAllocateCommandBuffers(device_, &cai, &cmd), "tex update cmd");
+        VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bbi);
 
-    // Transition to TRANSFER_DST for the sub-region copy
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    b.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-    b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.image = t.image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &dep);
+        // Transition to TRANSFER_DST for the sub-region copy
+        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        b.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.image = image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &b;
+        vkCmdPipelineBarrier2(cmd, &dep);
 
-    VkBufferImageCopy rgn{};
-    rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    rgn.imageOffset = {xo, yo, 0};
-    rgn.imageExtent = {uint32_t(w), uint32_t(h), 1};
-    vkCmdCopyBufferToImage(cmd, stg_buf, t.image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
+        VkBufferImageCopy rgn{};
+        rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rgn.imageOffset = {xo, yo, 0};
+        rgn.imageExtent = {uint32_t(w), uint32_t(h), 1};
+        vkCmdCopyBufferToImage(cmd, stg_buf, image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
 
-    // Transition back to SHADER_READ_ONLY
-    b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-    b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier2(cmd, &dep);
+        // Transition back to SHADER_READ_ONLY
+        b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier2(cmd, &dep);
 
-    vkEndCommandBuffer(cmd);
+        vkEndCommandBuffer(cmd);
+    }
 
     VkFence fence = acquire_fence();
     VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -497,7 +510,7 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         check(vkAllocateDescriptorSets(device_, &dai, &t.desc_set), "texture desc set");
         ++desc_sets_allocated_;
         if (!desc_pool_warned_ && desc_sets_allocated_ > kDescPoolMaxSets * 9 / 10) {
-            std::fprintf(stderr, "[vk3] WARNING: descriptor pool %u/%u sets used (near capacity)\n",
+            std::fprintf(stderr, "[vk] WARNING: descriptor pool %u/%u sets used (near capacity)\n",
                          desc_sets_allocated_, kDescPoolMaxSets);
             desc_pool_warned_ = true;
         }
@@ -545,18 +558,23 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
           "texture staging");
     std::memcpy(stg_info.pMappedData, pixels, bytes);
 
-    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    VkCommandBuffer cmd; check(vkAllocateCommandBuffers(device_, &cai, &cmd), "texture upload cmd");
-    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bbi);
+    VkCommandBuffer cmd;
+    {
+        // All command pool operations must be externally synchronized per Vulkan spec.
+        std::lock_guard pool_lk(upload_pool_mutex_);
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cai.commandPool = upload_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check(vkAllocateCommandBuffers(device_, &cai, &cmd), "texture upload cmd");
+        VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bbi);
 
-    // UNDEFINED -> TRANSFER_DST
+        // UNDEFINED -> TRANSFER_DST. No prior producer, so src stage/access are NONE.
     {
         VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        b.srcAccessMask = 0;
         b.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
         b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -630,7 +648,8 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         dep.imageMemoryBarrierCount = n; dep.pImageMemoryBarriers = ends;
         vkCmdPipelineBarrier2(cmd, &dep);
     }
-    vkEndCommandBuffer(cmd);
+        vkEndCommandBuffer(cmd);
+    }  // close upload_pool_mutex_ scope
 
     VkFence fence = acquire_fence();
     VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -664,4 +683,4 @@ int TextureManager::load_texture_data(uint8_t* data, uint32_t bytes, void* srcIn
     return 0;
 }
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

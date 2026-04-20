@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 void Swapchain::create(const Device& dev, uint32_t w, uint32_t h,
                        VkPresentModeKHR preferred_mode) {
@@ -137,4 +137,4 @@ void Swapchain::destroy_depth(const Device& dev) {
     depth_alloc_ = nullptr;
 }
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

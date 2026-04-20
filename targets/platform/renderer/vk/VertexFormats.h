@@ -12,7 +12,7 @@
 
 #include "platform/renderer/IRenderPath.h"
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 // Push constant block -- matches the GLSL layout in basic.vert / basic.frag.
 // Single 256-byte range shared by both vertex and fragment stages.
@@ -145,4 +145,4 @@ inline std::vector<std::byte> fan_to_list(const void* data, int& count) {
     return out;
 }
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

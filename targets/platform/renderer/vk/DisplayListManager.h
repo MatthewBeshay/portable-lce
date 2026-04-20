@@ -10,7 +10,7 @@
 
 #include "DeletionQueue.h"
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 struct DisplayListDraw {
     int primType = 0;
@@ -47,9 +47,17 @@ public:
     int size(int index);
     void end();
 
-    /// Returns pointer to uploaded display list, or nullptr if not available.
-    const DisplayList* prepare(int index, DeletionQueue& deletions,
-                               VmaAllocator allocator);
+    /// Snapshot of a prepared display list — safe to use after the manager's
+    /// mutex is released. A null vb means the display list is not available.
+    struct Snapshot {
+        VkBuffer vb = VK_NULL_HANDLE;
+        std::vector<DisplayListSubDraw> draws;
+    };
+
+    /// Locks the manager, uploads the display list if needed, and returns a
+    /// by-value snapshot safe to use after the lock is released. Returns an
+    /// empty snapshot (vb == VK_NULL_HANDLE) if the display list is unusable.
+    Snapshot prepare(int index, DeletionQueue& deletions, VmaAllocator allocator);
 
     void record_draw(int primType, int vertexType, const void* data, size_t bytes);
 
@@ -64,4 +72,4 @@ private:
     mutable std::mutex display_list_mutex_;
 };
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

@@ -1,19 +1,13 @@
 #include "PipelineCache.h"
+#include "VkCheck.h"
 
 #include <cstdio>
-#include <cstring>
-#include <stdexcept>
+#include <cstdint>
+#include <vector>
 
-namespace plce::vk2 {
+namespace plce::vk {
 
 namespace {
-void check(VkResult r, const char* w) {
-    if (r != VK_SUCCESS) {
-        char b[128]; std::snprintf(b, sizeof b, "%s: %d", w, int(r));
-        throw std::runtime_error(b);
-    }
-}
-
 VkShaderModule make_module(VkDevice dev, const uint32_t* code, size_t bytes) {
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = bytes;
@@ -28,18 +22,25 @@ void PipelineCache::init(const Config& cfg) {
     cfg_ = cfg;
     vert_mod_ = make_module(cfg.device, cfg.vert_spv, cfg.vert_size);
     frag_mod_ = make_module(cfg.device, cfg.frag_spv, cfg.frag_size);
+
+    VkPipelineCacheCreateInfo pcci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    check(vkCreatePipelineCache(cfg.device, &pcci, nullptr, &vk_cache_), "pipeline cache");
 }
 
 void PipelineCache::destroy() {
     for (auto& [k, p] : cache_)
         vkDestroyPipeline(cfg_.device, p, nullptr);
     cache_.clear();
+    if (vk_cache_) {
+        vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
+        vk_cache_ = VK_NULL_HANDLE;
+    }
     if (frag_mod_) vkDestroyShaderModule(cfg_.device, frag_mod_, nullptr);
     if (vert_mod_) vkDestroyShaderModule(cfg_.device, vert_mod_, nullptr);
     vert_mod_ = frag_mod_ = VK_NULL_HANDLE;
 }
 
-VkPipeline PipelineCache::get(const PsoKey& key) {
+VkPipeline PipelineCache::get(const PipelineKey& key) {
     auto it = cache_.find(key);
     if (it != cache_.end()) return it->second;
     VkPipeline p = create(key);
@@ -48,32 +49,30 @@ VkPipeline PipelineCache::get(const PsoKey& key) {
 }
 
 void PipelineCache::warm_up() {
-    // Pre-create the most common pipeline variants so the first draw
-    // of each type doesn't hitch.
-    PsoKey opaque{};  // depth test+write, no blend, no cull
+    PipelineKey opaque{};
     get(opaque);
 
-    PsoKey opaque_cull = opaque;
-    opaque_cull.cull_back = 1;
+    PipelineKey opaque_cull = opaque;
+    opaque_cull.set_cull_back(true);
     get(opaque_cull);
 
-    PsoKey blend{};
-    blend.blend_enable = 1;
-    blend.depth_write  = 0;
+    PipelineKey blend{};
+    blend.set_blend_enable(true);
+    blend.set_depth_write(false);
     get(blend);
 
-    PsoKey depth_off{};
-    depth_off.depth_test = 0;
+    PipelineKey depth_off{};
+    depth_off.set_depth_test(false);
     get(depth_off);
 
-    PsoKey lines{};
-    lines.lines = 1;
-    get(lines);
+    PipelineKey lines_key{};
+    lines_key.set_lines(true);
+    get(lines_key);
 
-    std::fprintf(stderr, "[vk2] warmed %zu pipelines\n", cache_.size());
+    std::fprintf(stderr, "[vk] warmed %zu pipelines\n", cache_.size());
 }
 
-VkPipeline PipelineCache::create(const PsoKey& key) {
+VkPipeline PipelineCache::create(const PipelineKey& key) {
     // Shader stages
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -85,21 +84,20 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     stages[1].module = frag_mod_;
     stages[1].pName  = "main";
 
-    // Vertex input: 32-byte world_standard format
-    // [pos vec3 | uv vec2 | color rgba8 | normal rgba8snorm | tex2 short2]
-    VkVertexInputBindingDescription binding{0, 32,
-        VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[4]{
+    // Vertex input: 32-byte WorldStandardVertex
+    VkVertexInputBindingDescription binding{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[5]{
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},   // pos
         {1, 0, VK_FORMAT_R32G32_SFLOAT,    12},  // uv
         {2, 0, VK_FORMAT_R8G8B8A8_UNORM,   20},  // color
         {3, 0, VK_FORMAT_R8G8B8A8_SNORM,   24},  // normal
+        {4, 0, VK_FORMAT_R16G16_SINT,      28},  // lightmap UVs
     };
     VkPipelineVertexInputStateCreateInfo vi{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount   = 1;
     vi.pVertexBindingDescriptions      = &binding;
-    vi.vertexAttributeDescriptionCount = 4;
+    vi.vertexAttributeDescriptionCount = 5;
     vi.pVertexAttributeDescriptions    = attrs;
 
     // Input assembly — topology is dynamic
@@ -113,19 +111,16 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     vp.viewportCount = 1;
     vp.scissorCount  = 1;
 
-    // Rasterization
+    // Rasterization — canonical CCW front face with back-face culling.
+    // Y-flip is done via negative viewport height at bind time, which
+    // naturally reverses winding so this stays consistent with game geometry.
     VkPipelineRasterizationStateCreateInfo rs{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode    = (key.lines || !key.cull_back)
-                         ? VK_CULL_MODE_NONE
-                         : VK_CULL_MODE_BACK_BIT;
-    // Matrix Y-flip (mvp[1] = -mvp[1]) reverses triangle winding,
-    // so CW in clip space corresponds to CCW in GL / world space.
-    rs.frontFace   = VK_FRONT_FACE_CLOCKWISE;
-    rs.lineWidth   = 1.0f;
-    // No hardware depth bias — applied via MVP Z offset (bgfx pattern).
-    rs.depthBiasEnable = VK_FALSE;
+    rs.polygonMode    = VK_POLYGON_MODE_FILL;
+    rs.cullMode       = key.cull_back() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    rs.frontFace      = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth      = 1.0f;
+    rs.depthBiasEnable = VK_TRUE;  // dynamic depth bias via vkCmdSetDepthBias
 
     // Multisample
     VkPipelineMultisampleStateCreateInfo ms{
@@ -135,44 +130,45 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     // Depth/stencil
     VkPipelineDepthStencilStateCreateInfo ds{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    ds.depthTestEnable  = key.depth_test  ? VK_TRUE : VK_FALSE;
-    ds.depthWriteEnable = key.depth_write ? VK_TRUE : VK_FALSE;
-    ds.depthCompareOp   = VkCompareOp(key.depth_func);
+    ds.depthTestEnable  = key.depth_test()  ? VK_TRUE : VK_FALSE;
+    ds.depthWriteEnable = key.depth_write() ? VK_TRUE : VK_FALSE;
+    ds.depthCompareOp   = VkCompareOp(key.depth_func());
 
     // Blend
+    const uint8_t cmask = key.color_mask();
     VkPipelineColorBlendAttachmentState att{};
-    att.blendEnable         = key.blend_enable ? VK_TRUE : VK_FALSE;
-    att.srcColorBlendFactor = VkBlendFactor(key.blend_src);
-    att.dstColorBlendFactor = VkBlendFactor(key.blend_dst);
+    att.blendEnable         = key.blend_enable() ? VK_TRUE : VK_FALSE;
+    att.srcColorBlendFactor = VkBlendFactor(key.blend_src());
+    att.dstColorBlendFactor = VkBlendFactor(key.blend_dst());
     att.colorBlendOp        = VK_BLEND_OP_ADD;
-    // Alpha blend: match color factors (GL glBlendFunc sets both).
-    att.srcAlphaBlendFactor = VkBlendFactor(key.blend_src);
-    att.dstAlphaBlendFactor = VkBlendFactor(key.blend_dst);
+    att.srcAlphaBlendFactor = VkBlendFactor(key.blend_src());
+    att.dstAlphaBlendFactor = VkBlendFactor(key.blend_dst());
     att.alphaBlendOp        = VK_BLEND_OP_ADD;
     att.colorWriteMask =
-        ((key.color_mask & 0x1) ? VK_COLOR_COMPONENT_R_BIT : 0) |
-        ((key.color_mask & 0x2) ? VK_COLOR_COMPONENT_G_BIT : 0) |
-        ((key.color_mask & 0x4) ? VK_COLOR_COMPONENT_B_BIT : 0) |
-        ((key.color_mask & 0x8) ? VK_COLOR_COMPONENT_A_BIT : 0);
+        ((cmask & 0x1) ? VK_COLOR_COMPONENT_R_BIT : 0) |
+        ((cmask & 0x2) ? VK_COLOR_COMPONENT_G_BIT : 0) |
+        ((cmask & 0x4) ? VK_COLOR_COMPONENT_B_BIT : 0) |
+        ((cmask & 0x8) ? VK_COLOR_COMPONENT_A_BIT : 0);
 
     VkPipelineColorBlendStateCreateInfo cb{
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments    = &att;
 
-    // Dynamic state — minimal set matching bgfx
+    // Dynamic state
     VkDynamicState dyn_states[] = {
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+        VK_DYNAMIC_STATE_DEPTH_BIAS,
     };
     VkPipelineDynamicStateCreateInfo dyn{
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dyn.dynamicStateCount = uint32_t(std::size(dyn_states));
     dyn.pDynamicStates    = dyn_states;
 
-    // Dynamic rendering
+    // Dynamic rendering (no VkRenderPass)
     VkPipelineRenderingCreateInfo prci{
         VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     prci.colorAttachmentCount    = 1;
@@ -196,10 +192,50 @@ VkPipeline PipelineCache::create(const PsoKey& key) {
     gci.layout              = cfg_.layout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    check(vkCreateGraphicsPipelines(cfg_.device, VK_NULL_HANDLE, 1, &gci,
+    check(vkCreateGraphicsPipelines(cfg_.device, vk_cache_, 1, &gci,
                                     nullptr, &pipeline),
           "graphics pipeline");
     return pipeline;
 }
 
-}  // namespace plce::vk2
+void PipelineCache::load_cache(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return;
+    std::fseek(f, 0, SEEK_END);
+    long sz = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { std::fclose(f); return; }
+    std::vector<uint8_t> blob(static_cast<size_t>(sz));
+    std::fread(blob.data(), 1, blob.size(), f);
+    std::fclose(f);
+    if (vk_cache_) {
+        vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
+        vk_cache_ = VK_NULL_HANDLE;
+    }
+    VkPipelineCacheCreateInfo pcci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    pcci.initialDataSize = blob.size();
+    pcci.pInitialData    = blob.data();
+    VkResult r = vkCreatePipelineCache(cfg_.device, &pcci, nullptr, &vk_cache_);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[vk] pipeline cache load failed (VkResult=%d), using empty cache\n", int(r));
+        pcci.initialDataSize = 0;
+        pcci.pInitialData    = nullptr;
+        check(vkCreatePipelineCache(cfg_.device, &pcci, nullptr, &vk_cache_), "pipeline cache fallback");
+    }
+}
+
+void PipelineCache::save_cache(const char* path) {
+    if (!vk_cache_) return;
+    size_t sz = 0;
+    VkResult r = vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, nullptr);
+    if (r != VK_SUCCESS || sz == 0) return;
+    std::vector<uint8_t> blob(sz);
+    r = vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, blob.data());
+    if (r != VK_SUCCESS) return;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return;
+    std::fwrite(blob.data(), 1, sz, f);
+    std::fclose(f);
+}
+
+}  // namespace plce::vk

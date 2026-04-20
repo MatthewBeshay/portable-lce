@@ -8,7 +8,7 @@
 
 #include "DeletionQueue.h"
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 /// Per-frame GPU resources. The renderer owns kFramesInFlight of these
 /// and rotates between them.
@@ -57,4 +57,4 @@ private:
     VkDeviceSize transient_offset_  = 0;
 };
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

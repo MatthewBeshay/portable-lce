@@ -10,7 +10,7 @@
 
 #include "DeletionQueue.h"
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 // Per-texture sampler state
 struct SamplerKey {
@@ -104,7 +104,16 @@ private:
     VkDescriptorSetLayout tex_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool      tex_pool_       = VK_NULL_HANDLE;
 
+    // Upload command pool shared across all threads that touch it.
+    // Vulkan spec requires external synchronization on vkAllocateCommandBuffers,
+    // vkFreeCommandBuffers, vkBeginCommandBuffer, vkCmdPipelineBarrier2, and
+    // vkResetCommandBuffer for any command buffer from this pool. The mutex
+    // covers every such call site. Per-thread pools were considered but offer
+    // no real parallelism win since poll_uploads on the main thread must still
+    // free command buffers allocated on worker threads, forcing a cross-thread
+    // lock anyway.
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
+    mutable std::mutex upload_pool_mutex_;
     static constexpr VkDeviceSize kMaxUploadBytes = 64ull * 1024 * 1024;
     static constexpr uint32_t kDescPoolMaxSets = 4096;
 
@@ -133,4 +142,4 @@ private:
     mutable std::mutex texture_mutex_;
 };
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

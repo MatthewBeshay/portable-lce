@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 class Device;
 
@@ -48,4 +48,4 @@ private:
     VkImageView   depth_view_  = VK_NULL_HANDLE;
 };
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

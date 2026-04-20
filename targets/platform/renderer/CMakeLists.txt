@@ -2,21 +2,21 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     find_path(VMA_INCLUDE_DIR "vma/vk_mem_alloc.h" REQUIRED)
 
     plce_add_library(plce_platform_renderer_vk SOURCES
-        vk3/Device.cpp
-        vk3/FrameContext.cpp
-        vk3/PipelineCache.cpp
-        vk3/Swapchain.cpp
-        vk3/TextureManager.cpp
-        vk3/DisplayListManager.cpp
-        vk3/Renderer.cpp
-        vk3/vma_impl.cpp
+        vk/Device.cpp
+        vk/FrameContext.cpp
+        vk/PipelineCache.cpp
+        vk/Swapchain.cpp
+        vk/TextureManager.cpp
+        vk/DisplayListManager.cpp
+        vk/Renderer.cpp
+        vk/vma_impl.cpp
         RenderPathGlobals.cpp
         gl_stubs.cpp
     )
 
     target_include_directories(plce_platform_renderer_vk
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..
-                ${CMAKE_CURRENT_SOURCE_DIR}/vk3
+                ${CMAKE_CURRENT_SOURCE_DIR}/vk
                 ${Stb_INCLUDE_DIR}
                 ${VMA_INCLUDE_DIR}
     )
@@ -30,9 +30,9 @@ if(PLCE_RENDERER STREQUAL "vulkan")
     )
 
     plce_compile_shader(plce_platform_renderer_vk
-        vk3/shaders/basic.vert kBasicVertSpv)
+        vk/shaders/basic.vert kBasicVertSpv)
     plce_compile_shader(plce_platform_renderer_vk
-        vk3/shaders/basic.frag kBasicFragSpv)
+        vk/shaders/basic.frag kBasicFragSpv)
 
     add_library(plce_platform_renderer ALIAS plce_platform_renderer_vk)
     return()

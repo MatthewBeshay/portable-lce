@@ -14,10 +14,10 @@
 #include "VkCheck.h"
 #include "VertexFormats.h"
 
-#include "vk3/shaders/basic.vert.spv.h"  // kBasicVertSpv
-#include "vk3/shaders/basic.frag.spv.h"  // kBasicFragSpv
+#include "vk/shaders/basic.vert.spv.h"  // kBasicVertSpv
+#include "vk/shaders/basic.frag.spv.h"  // kBasicFragSpv
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 namespace {
 constexpr const char* kPipelineCachePath = "pipeline_cache.bin";
@@ -177,7 +177,7 @@ Renderer::Renderer(SDL_Window* window)
         fb_.is_hi_def     = h >= 720;
     }
 
-    std::fprintf(stderr, "[vk3] renderer ready %ux%u images=%u\n",
+    std::fprintf(stderr, "[vk] renderer ready %ux%u images=%u\n",
                  swap_.extent().width, swap_.extent().height,
                  swap_.image_count());
 }
@@ -349,8 +349,12 @@ void Renderer::begin_pass() {
     ri.pDepthAttachment     = &depth;
     vkCmdBeginRendering(cmd, &ri);
 
-    VkViewport vp{0, 0, float(swap_.extent().width),
-                  float(swap_.extent().height), 0, 1};
+    // Y-flip via negative viewport height (VK_KHR_maintenance1, core in 1.1).
+    // Geometry in game space (Y-up) renders with CCW front faces and back-face
+    // culling — the canonical Vulkan configuration. No MVP row negation needed.
+    const float w = float(swap_.extent().width);
+    const float h = float(swap_.extent().height);
+    VkViewport vp{0.0f, h, w, -h, 0.0f, 1.0f};
     VkRect2D sc_r{{0,0}, swap_.extent()};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc_r);
@@ -468,12 +472,12 @@ const float* Renderer::MatrixGet(rp::MatrixStack s) {
 // ===================================================================
 
 void Renderer::StateSetColour(float r, float g, float b, float a) { state_colour_ = {r,g,b,a}; }
-void Renderer::StateSetDepthMask(bool e) { if (pso_key_.depth_write != e) { pso_key_.depth_write = e; pso_dirty_ = true; } }
-void Renderer::StateSetBlendEnable(bool e) { if (pso_key_.blend_enable != e) { pso_key_.blend_enable = e; pso_dirty_ = true; } }
+void Renderer::StateSetDepthMask(bool e) { if (pso_key_.depth_write() != e) { pso_key_.set_depth_write(e); pso_dirty_ = true; } }
+void Renderer::StateSetBlendEnable(bool e) { if (pso_key_.blend_enable() != e) { pso_key_.set_blend_enable(e); pso_dirty_ = true; } }
 void Renderer::StateSetBlendFunc(rp::BlendFactor s, rp::BlendFactor d) {
     uint8_t vs = blend_to_vk(s), vd = blend_to_vk(d);
-    if (pso_key_.blend_src != vs || pso_key_.blend_dst != vd) {
-        pso_key_.blend_src = vs; pso_key_.blend_dst = vd; pso_dirty_ = true;
+    if (pso_key_.blend_src() != vs || pso_key_.blend_dst() != vd) {
+        pso_key_.set_blend_src(vs); pso_key_.set_blend_dst(vd); pso_dirty_ = true;
     }
 }
 void Renderer::StateSetBlendFactor(unsigned int argb) {
@@ -485,14 +489,14 @@ void Renderer::StateSetBlendFactor(unsigned int argb) {
 void Renderer::StateSetAlphaFunc(rp::AlphaTest f, float ref) { alpha_test_func_ = f; alpha_ref_ = ref; }
 void Renderer::StateSetDepthFunc(rp::DepthTest f) {
     uint8_t v = depth_to_vk(f);
-    if (pso_key_.depth_func != v) { pso_key_.depth_func = v; pso_dirty_ = true; }
+    if (pso_key_.depth_func() != v) { pso_key_.set_depth_func(v); pso_dirty_ = true; }
 }
-void Renderer::StateSetFaceCull(bool e) { if (pso_key_.cull_back != e) { pso_key_.cull_back = e; pso_dirty_ = true; } }
+void Renderer::StateSetFaceCull(bool e) { if (pso_key_.cull_back() != e) { pso_key_.set_cull_back(e); pso_dirty_ = true; } }
 void Renderer::StateSetWriteEnable(bool r, bool g, bool b, bool a) {
     uint8_t m = (r?1:0)|(g?2:0)|(b?4:0)|(a?8:0);
-    if (pso_key_.color_mask != m) { pso_key_.color_mask = m; pso_dirty_ = true; }
+    if (pso_key_.color_mask() != m) { pso_key_.set_color_mask(m); pso_dirty_ = true; }
 }
-void Renderer::StateSetDepthTestEnable(bool e) { if (pso_key_.depth_test != e) { pso_key_.depth_test = e; pso_dirty_ = true; } }
+void Renderer::StateSetDepthTestEnable(bool e) { if (pso_key_.depth_test() != e) { pso_key_.set_depth_test(e); pso_dirty_ = true; } }
 void Renderer::StateSetAlphaTestEnable(bool e) { alpha_test_enabled_ = e; }
 void Renderer::StateSetDepthSlopeAndBias(float slope, float bias) {
     depth_bias_slope_ = slope; depth_bias_constant_ = bias;
@@ -517,8 +521,8 @@ void Renderer::fill_push_constants(void* out, bool textured, const glm::vec4* ti
     PushConstants& pc = *static_cast<PushConstants*>(out);
     const auto& mv = mv_stack_.back();
     pc.mvp = proj_stack_.back() * mv;
-    // Y-flip for Vulkan NDC: negate ROW 1 (not column 1)
-    for (int c = 0; c < 4; ++c) pc.mvp[c][1] = -pc.mvp[c][1];
+    // Y-flip is handled by the negative viewport height in begin_pass() —
+    // no MVP manipulation needed here.
 
     glm::mat3 nm(mv);
     const auto& tm = tex_stack_.back();
@@ -611,7 +615,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
         default: return;
     }
     if (is_quads && (count % 4) != 0) return;
-    if (pso_key_.lines != is_lines) { pso_key_.lines = is_lines; pso_dirty_ = true; }
+    if (pso_key_.lines() != is_lines) { pso_key_.set_lines(is_lines); pso_dirty_ = true; }
 
     auto& f = frame();
     constexpr VkDeviceSize stride = 32;
@@ -619,7 +623,7 @@ void Renderer::DrawVertices(int primType, int count, void* data,
     void* dst = f.alloc_transient(bytes);
     if (!dst) {
         if (!transient_overflow_warned_) {
-            std::fprintf(stderr, "[vk3] transient VB full, skipping draw\n");
+            std::fprintf(stderr, "[vk] transient VB full, skipping draw\n");
             transient_overflow_warned_ = true;
         }
         return;
@@ -732,11 +736,11 @@ void Renderer::CBuffEnd() { dl_mgr_.end(); }
 bool Renderer::CBuffCall(int index, bool) {
     if (index < 0 || !frame_active_) return false;
 
-    auto* dl = dl_mgr_.prepare(index, frame().deletions, dev_.allocator());
-    if (!dl) return false;
+    auto snap = dl_mgr_.prepare(index, frame().deletions, dev_.allocator());
+    if (snap.vb == VK_NULL_HANDLE) return false;
 
-    VkBuffer vb = dl->vb;
-    auto draws = dl->gpu_draws;
+    VkBuffer vb = snap.vb;
+    const auto& draws = snap.draws;
 
     auto& f = frame();
     ensure_pass();
@@ -847,12 +851,12 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     depth_bias_slope_    = 0;
 }
 
-}  // namespace plce::vk3
+}  // namespace plce::vk
 
 // ===================================================================
 // FACTORY
 // ===================================================================
 
 std::unique_ptr<rp::IRenderPath> make_vulkan_render_path(SDL_Window* window) {
-    return std::make_unique<plce::vk3::Renderer>(window);
+    return std::make_unique<plce::vk::Renderer>(window);
 }

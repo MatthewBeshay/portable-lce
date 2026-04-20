@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 /// Check a VkResult and throw on failure.
 inline void check(VkResult r, const char* msg) {
@@ -16,4 +16,4 @@ inline void check(VkResult r, const char* msg) {
     }
 }
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

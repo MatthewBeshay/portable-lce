@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace plce::vk3 {
+namespace plce::vk {
 
 namespace {
 // Thread-local display list recording state
@@ -85,14 +85,15 @@ bool DisplayListManager::is_recording() const {
     return t_rec.id >= 0;
 }
 
-const DisplayList* DisplayListManager::prepare(int index, DeletionQueue& deletions,
-                                                VmaAllocator allocator) {
+DisplayListManager::Snapshot DisplayListManager::prepare(int index,
+                                                           DeletionQueue& deletions,
+                                                           VmaAllocator allocator) {
     std::lock_guard lk(display_list_mutex_);
-    if (size_t(index) >= display_lists_.size()) return nullptr;
+    if (index < 0 || size_t(index) >= display_lists_.size()) return {};
     auto& cb = display_lists_[index];
-    if (!cb.valid || cb.draws.empty()) return nullptr;
-    if (!cb.uploaded) { upload(cb, deletions, allocator); if (!cb.uploaded) return nullptr; }
-    return &cb;
+    if (!cb.valid || cb.draws.empty()) return {};
+    if (!cb.uploaded) { upload(cb, deletions, allocator); if (!cb.uploaded) return {}; }
+    return {cb.vb, cb.gpu_draws};
 }
 
 void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
@@ -177,4 +178,4 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
     cb.uploaded = true;
 }
 
-}  // namespace plce::vk3
+}  // namespace plce::vk

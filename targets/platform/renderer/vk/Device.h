@@ -1,50 +1,61 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_raii.hpp>
+#include <vma/vk_mem_alloc.h>
+
+#include <cstdint>
 
 struct SDL_Window;
-struct VmaAllocator_T;
-using VmaAllocator = VmaAllocator_T*;
 
 namespace plce::vk {
 
-/// Owns Vulkan instance, physical device, logical device, and VMA allocator.
-/// Created once at startup, destroyed at shutdown. No per-frame state.
+/// Vulkan device context — owns instance, surface, device, VMA, and queue.
+/// Created once at startup, destroyed at shutdown.
 class Device {
 public:
-    explicit Device(SDL_Window* window, bool enable_validation = false);
+    struct Config {
+        SDL_Window* window            = nullptr;
+        bool        enable_validation = false;
+    };
+
+    explicit Device(const Config& cfg);
     ~Device();
 
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
 
-    [[nodiscard]] VkInstance       instance()        const noexcept { return instance_; }
-    [[nodiscard]] VkPhysicalDevice physical_device() const noexcept { return phys_; }
-    [[nodiscard]] VkDevice         device()          const noexcept { return device_; }
-    [[nodiscard]] VkSurfaceKHR     surface()         const noexcept { return surface_; }
-    [[nodiscard]] uint32_t         graphics_family() const noexcept { return graphics_family_; }
-    [[nodiscard]] VkQueue          graphics_queue()  const noexcept { return graphics_queue_; }
-    [[nodiscard]] VmaAllocator     allocator()       const noexcept { return allocator_; }
+    // --- Accessors (raw handles for interop with VMA / legacy code) ---
+    VkInstance       instance()      const { return *instance_; }
+    VkPhysicalDevice physical()     const { return *physical_; }
+    VkDevice         handle()       const { return *device_; }
+    VkSurfaceKHR     surface()      const { return *surface_; }
+    uint32_t         queue_family() const { return queue_family_; }
+    VkQueue          queue()        const { return queue_; }
+    VmaAllocator     allocator()    const { return allocator_; }
 
-    /// Set a debug name on a Vulkan object (no-op in release builds).
-    void set_debug_name(VkObjectType type, uint64_t handle,
-                        const char* name) const;
+    // --- RAII accessors ---
+    const ::vk::raii::Instance&       vk_instance() const { return instance_; }
+    const ::vk::raii::PhysicalDevice& vk_physical() const { return physical_; }
+    const ::vk::raii::Device&         vk_device()   const { return device_; }
+
+    /// Debug name helper (no-op in release builds).
+    void name(VkObjectType type, uint64_t obj, const char* label) const;
+
+    template <typename T>
+    void name(T handle, const char* label) const {
+        name(T::objectType, reinterpret_cast<uint64_t>(static_cast<typename T::CType>(handle)), label);
+    }
 
 private:
-    void create_instance(SDL_Window* window, bool enable_validation);
-    void create_surface(SDL_Window* window);
-    void pick_physical_device();
-    void create_device();
-    void create_allocator();
-
-    VkInstance                instance_        = VK_NULL_HANDLE;
-    VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
-    VkSurfaceKHR             surface_         = VK_NULL_HANDLE;
-    VkPhysicalDevice         phys_            = VK_NULL_HANDLE;
-    VkDevice                 device_          = VK_NULL_HANDLE;
-    uint32_t                 graphics_family_ = 0;
-    VkQueue                  graphics_queue_  = VK_NULL_HANDLE;
-    VmaAllocator             allocator_       = nullptr;
+    ::vk::raii::Context              ctx_;
+    ::vk::raii::Instance             instance_{nullptr};
+    ::vk::raii::DebugUtilsMessengerEXT messenger_{nullptr};
+    ::vk::raii::SurfaceKHR           surface_{nullptr};
+    ::vk::raii::PhysicalDevice       physical_{nullptr};
+    ::vk::raii::Device               device_{nullptr};
+    uint32_t                       queue_family_ = 0;
+    VkQueue                        queue_        = VK_NULL_HANDLE;
+    VmaAllocator                   allocator_    = nullptr;
 };
 
 }  // namespace plce::vk
