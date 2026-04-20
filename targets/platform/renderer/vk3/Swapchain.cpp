@@ -7,7 +7,10 @@
 
 namespace plce::vk3 {
 
-void Swapchain::create(const Device& dev, uint32_t w, uint32_t h) {
+void Swapchain::create(const Device& dev, uint32_t w, uint32_t h,
+                       VkPresentModeKHR preferred_mode) {
+    present_mode_ = preferred_mode;
+
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.physical(), dev.surface(), &caps);
 
@@ -50,7 +53,18 @@ void Swapchain::create(const Device& dev, uint32_t w, uint32_t h) {
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.preTransform     = caps.currentTransform;
     ci.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    ci.presentMode      = VK_PRESENT_MODE_FIFO_KHR;
+
+    // Select present mode: use requested mode if supported, else fall back to FIFO
+    // (which is always guaranteed available per Vulkan spec).
+    VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
+    if (preferred_mode != VK_PRESENT_MODE_FIFO_KHR) {
+        uint32_t pm_n = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(dev.physical(), dev.surface(), &pm_n, nullptr);
+        std::vector<VkPresentModeKHR> modes(pm_n);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(dev.physical(), dev.surface(), &pm_n, modes.data());
+        for (auto m : modes) if (m == preferred_mode) { mode = m; break; }
+    }
+    ci.presentMode      = mode;
     ci.clipped          = VK_TRUE;
     check(vkCreateSwapchainKHR(dev.handle(), &ci, nullptr, &swapchain_),
           "vkCreateSwapchainKHR");
@@ -84,8 +98,9 @@ void Swapchain::destroy(const Device& dev) {
 }
 
 void Swapchain::resize(const Device& dev, uint32_t w, uint32_t h) {
+    VkPresentModeKHR mode = present_mode_;
     destroy(dev);
-    create(dev, w, h);
+    create(dev, w, h, mode);
 }
 
 void Swapchain::create_depth(const Device& dev) {

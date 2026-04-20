@@ -13,7 +13,10 @@ class Device;
 /// Swapchain + depth attachment. Handles creation, resize, and cleanup.
 class Swapchain {
 public:
-    void create(const Device& dev, uint32_t w, uint32_t h);
+    /// Create the swapchain. `preferred_mode` is the desired present mode —
+    /// FIFO is always available and used as fallback if unsupported.
+    void create(const Device& dev, uint32_t w, uint32_t h,
+                VkPresentModeKHR preferred_mode = VK_PRESENT_MODE_FIFO_KHR);
     void destroy(const Device& dev);
     void resize(const Device& dev, uint32_t w, uint32_t h);
 
@@ -35,6 +38,7 @@ private:
     VkSwapchainKHR           swapchain_   = VK_NULL_HANDLE;
     VkFormat                 format_      = VK_FORMAT_UNDEFINED;
     VkExtent2D               extent_      = {};
+    VkPresentModeKHR         present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
     std::vector<VkImage>     images_;
     std::vector<VkImageView> views_;
 

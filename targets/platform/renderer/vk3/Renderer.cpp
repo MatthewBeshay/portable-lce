@@ -19,6 +19,10 @@
 
 namespace plce::vk3 {
 
+namespace {
+constexpr const char* kPipelineCachePath = "pipeline_cache.bin";
+}
+
 // ===================================================================
 // LIFECYCLE
 // ===================================================================
@@ -32,7 +36,11 @@ Renderer::Renderer(SDL_Window* window)
 #endif
            }),
       window_(window) {
-    swap_.create(dev_, 0, 0);
+#ifdef ENABLE_VSYNC
+    swap_.create(dev_, 0, 0, VK_PRESENT_MODE_FIFO_KHR);
+#else
+    swap_.create(dev_, 0, 0, VK_PRESENT_MODE_MAILBOX_KHR);
+#endif
 
     for (auto& f : frames_)
         f.create(dev_.handle(), dev_.allocator(), dev_.queue_family());
@@ -98,7 +106,7 @@ Renderer::Renderer(SDL_Window* window)
         pc.frag_spv     = kBasicFragSpv;
         pc.frag_size    = sizeof(kBasicFragSpv);
         pipelines_.init(pc);
-        pipelines_.load_cache("pipeline_cache.bin");
+        pipelines_.load_cache(kPipelineCachePath);
         pipelines_.warm_up();
     }
 
@@ -176,7 +184,7 @@ Renderer::Renderer(SDL_Window* window)
 
 Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
-    pipelines_.save_cache("pipeline_cache.bin");
+    pipelines_.save_cache(kPipelineCachePath);
     for (auto& pd : pending_destroys_)
         vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
     pending_destroys_.clear();
