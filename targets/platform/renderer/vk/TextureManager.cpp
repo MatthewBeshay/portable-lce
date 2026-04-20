@@ -155,28 +155,29 @@ void TextureManager::write_slot_with_view(int idx, VkImageView view) {
 // ===================================================================
 
 uint32_t TextureManager::resolve_bound_slot(bool& textured_out) {
+    // Never wait on the render thread. If the bound texture's upload is
+    // still in flight, fall back to the 1x1 default — the bindless array
+    // snaps to the real view on the frame after the upload fence signals
+    // (complete_upload -> write_slot). Prior behaviour called
+    // vkWaitForFences(UINT64_MAX) here which stalled every draw behind a
+    // pending upload.
     std::lock_guard lk(texture_mutex_);
     int idx = bound_tex_;
     if (idx <= 0 || size_t(idx) >= textures_.size() || !textures_[idx].ready) {
-        if (idx > 0 && size_t(idx) < textures_.size()) wait_for_upload(idx);
-        if (idx <= 0 || size_t(idx) >= textures_.size() || !textures_[idx].ready) {
-            textured_out = false;
-            return uint32_t(default_tex_);
-        }
+        textured_out = false;
+        return uint32_t(default_tex_);
     }
     textured_out = (idx != default_tex_);
     return uint32_t(idx);
 }
 
 uint32_t TextureManager::resolve_lightmap_slot(bool& active_out) {
+    // See resolve_bound_slot: no render-thread fence wait.
     std::lock_guard lk(texture_mutex_);
     int idx = lightmap_tex_;
     if (idx <= 0 || size_t(idx) >= textures_.size() || !textures_[idx].ready) {
-        if (idx > 0 && size_t(idx) < textures_.size()) wait_for_upload(idx);
-        if (idx <= 0 || size_t(idx) >= textures_.size() || !textures_[idx].ready) {
-            active_out = false;
-            return uint32_t(default_lm_);
-        }
+        active_out = false;
+        return uint32_t(default_lm_);
     }
     active_out = true;
     return uint32_t(idx);
