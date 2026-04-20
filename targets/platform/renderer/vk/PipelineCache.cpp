@@ -225,23 +225,14 @@ VkPipeline PipelineCache::create(const PipelineKey& key) {
     return pipeline;
 }
 
-void PipelineCache::load_cache(const char* path) {
-    FILE* f = std::fopen(path, "rb");
-    if (!f) return;
-    std::fseek(f, 0, SEEK_END);
-    long sz = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    if (sz <= 0) { std::fclose(f); return; }
-    std::vector<uint8_t> blob(static_cast<size_t>(sz));
-    std::fread(blob.data(), 1, blob.size(), f);
-    std::fclose(f);
+void PipelineCache::load_cache(std::span<const std::uint8_t> blob) {
     if (vk_cache_) {
         vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
         vk_cache_ = VK_NULL_HANDLE;
     }
     VkPipelineCacheCreateInfo pcci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     pcci.initialDataSize = blob.size();
-    pcci.pInitialData    = blob.data();
+    pcci.pInitialData    = blob.empty() ? nullptr : blob.data();
     VkResult r = vkCreatePipelineCache(cfg_.device, &pcci, nullptr, &vk_cache_);
     if (r != VK_SUCCESS) {
         std::fprintf(stderr, "[vk] pipeline cache load failed (VkResult=%d), using empty cache\n", int(r));
@@ -251,18 +242,15 @@ void PipelineCache::load_cache(const char* path) {
     }
 }
 
-void PipelineCache::save_cache(const char* path) {
-    if (!vk_cache_) return;
+std::vector<std::uint8_t> PipelineCache::save_cache() const {
+    if (!vk_cache_) return {};
     size_t sz = 0;
-    VkResult r = vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, nullptr);
-    if (r != VK_SUCCESS || sz == 0) return;
-    std::vector<uint8_t> blob(sz);
-    r = vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, blob.data());
-    if (r != VK_SUCCESS) return;
-    FILE* f = std::fopen(path, "wb");
-    if (!f) return;
-    std::fwrite(blob.data(), 1, sz, f);
-    std::fclose(f);
+    if (vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, nullptr) != VK_SUCCESS || sz == 0)
+        return {};
+    std::vector<std::uint8_t> blob(sz);
+    if (vkGetPipelineCacheData(cfg_.device, vk_cache_, &sz, blob.data()) != VK_SUCCESS)
+        return {};
+    return blob;
 }
 
 }  // namespace plce::vk

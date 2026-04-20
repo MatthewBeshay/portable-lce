@@ -4,7 +4,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <unordered_map>
+#include <vector>
 
 namespace plce::vk {
 
@@ -104,8 +106,13 @@ public:
     /// Pre-create common pipeline variants to avoid first-draw hitches.
     void warm_up();
 
-    void load_cache(const char* path);
-    void save_cache(const char* path);
+    /// Populate the VkPipelineCache from a previously serialized blob.
+    /// If the blob is invalid or empty, falls back to an empty cache.
+    void load_cache(std::span<const std::uint8_t> blob);
+
+    /// Serialize the VkPipelineCache into a byte buffer the caller can
+    /// persist wherever makes sense (a filesystem, the network, /dev/null).
+    [[nodiscard]] std::vector<std::uint8_t> save_cache() const;
 
 private:
     VkPipeline create(const PipelineKey& key);

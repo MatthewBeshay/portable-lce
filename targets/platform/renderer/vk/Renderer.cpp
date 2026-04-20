@@ -14,6 +14,7 @@
 
 #include "VkCheck.h"
 #include "VertexFormats.h"
+#include "platform/fs/fs.h"
 
 #include "vk/shaders/basic.vert.spv.h"          // kBasicVertSpv
 #include "vk/shaders/basic.frag.spv.h"          // kBasicFragSpv
@@ -22,14 +23,10 @@
 namespace plce::vk {
 
 namespace {
-// Returns the pipeline cache path — user app-data dir if SDL can give us one,
-// otherwise current working directory as a last-resort fallback.
-std::string pipeline_cache_path() {
-    char* base = SDL_GetPrefPath("plce", "vk");
-    std::string out;
-    if (base) { out = std::string(base) + "pipeline_cache.bin"; SDL_free(base); }
-    else       out = "pipeline_cache.bin";
-    return out;
+// Pipeline cache path under the platform user-data directory. Goes through
+// IPlatformFilesystem so it respects the same location game saves and config use.
+std::filesystem::path pipeline_cache_path() {
+    return PlatformFilesystem.getUserDataPath() / "pipeline_cache.bin";
 }
 }
 
@@ -125,7 +122,12 @@ Renderer::Renderer(SDL_Window* window)
         pc.vert_compact_spv  = kBasicCompactVertSpv;
         pc.vert_compact_size = sizeof(kBasicCompactVertSpv);
         pipelines_.init(pc);
-        pipelines_.load_cache(pipeline_cache_path().c_str());
+        // Feed the on-disk cache blob (if any) through the platform filesystem.
+        const auto path = pipeline_cache_path();
+        std::vector<std::uint8_t> blob;
+        if (PlatformFilesystem.exists(path))
+            blob = PlatformFilesystem.readFileToVec(path);
+        pipelines_.load_cache(blob);
         pipelines_.warm_up();
     }
 
@@ -203,7 +205,8 @@ Renderer::Renderer(SDL_Window* window)
 
 Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
-    pipelines_.save_cache(pipeline_cache_path().c_str());
+    if (auto blob = pipelines_.save_cache(); !blob.empty())
+        (void)PlatformFilesystem.writeFile(pipeline_cache_path(), blob.data(), blob.size());
     for (auto& pd : pending_destroys_)
         vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
     pending_destroys_.clear();
