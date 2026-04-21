@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace plce::vk {
@@ -83,12 +82,6 @@ struct PipelineKey {
     bool operator==(const PipelineKey&) const = default;
 };
 
-struct PipelineKeyHash {
-    size_t operator()(const PipelineKey& k) const noexcept {
-        return std::hash<uint64_t>{}(k.bits);
-    }
-};
-
 /// Creates and caches VkPipeline objects keyed by PipelineKey.
 class PipelineCache {
 public:
@@ -126,12 +119,26 @@ public:
 private:
     VkPipeline create(const PipelineKey& key);
 
+    // Open-addressing table with Fibonacci hashing and linear probing.
+    // Capacity is always a power of two; load factor is capped at 0.5 so
+    // probe chains stay short. Empty slots have pipeline == VK_NULL_HANDLE
+    // (pipeline handles created by vkCreateGraphicsPipelines are never
+    // null on success, so VK_NULL_HANDLE is a safe sentinel).
+    struct Entry {
+        uint64_t   key      = 0;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+    };
+    void rehash(size_t new_cap);
+    static size_t probe(const std::vector<Entry>& slots, size_t mask, uint64_t key);
+
     Config cfg_{};
     VkShaderModule vert_mod_         = VK_NULL_HANDLE;
     VkShaderModule vert_compact_mod_ = VK_NULL_HANDLE;
     VkShaderModule frag_mod_         = VK_NULL_HANDLE;
     VkPipelineCache vk_cache_ = VK_NULL_HANDLE;
-    std::unordered_map<PipelineKey, VkPipeline, PipelineKeyHash> cache_;
+    std::vector<Entry> cache_slots_;
+    size_t cache_mask_ = 0;    // cache_slots_.size() - 1
+    size_t cache_count_ = 0;
 };
 
 }  // namespace plce::vk

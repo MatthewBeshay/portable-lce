@@ -166,9 +166,13 @@ void PipelineCache::init(const Config& cfg) {
 }
 
 void PipelineCache::destroy() {
-    for (auto& [k, p] : cache_)
-        vkDestroyPipeline(cfg_.device, p, nullptr);
-    cache_.clear();
+    for (auto& e : cache_slots_) {
+        if (e.pipeline != VK_NULL_HANDLE)
+            vkDestroyPipeline(cfg_.device, e.pipeline, nullptr);
+    }
+    cache_slots_.clear();
+    cache_mask_  = 0;
+    cache_count_ = 0;
     if (vk_cache_) {
         vkDestroyPipelineCache(cfg_.device, vk_cache_, nullptr);
         vk_cache_ = VK_NULL_HANDLE;
@@ -179,11 +183,47 @@ void PipelineCache::destroy() {
     vert_mod_ = vert_compact_mod_ = frag_mod_ = VK_NULL_HANDLE;
 }
 
+// Linear probe inside the flat table. Returns the slot index for
+// `key` — either the entry that contains it, or the first empty slot
+// where it would be inserted. Caller checks pipeline handle to
+// distinguish.
+size_t PipelineCache::probe(const std::vector<Entry>& slots,
+                            size_t mask, uint64_t key) {
+    // Fibonacci hashing — multiply by 2^64 / phi. The high bits of the
+    // product have the best distribution; anding with mask picks a
+    // subset that's good enough for our small tables.
+    size_t idx = size_t(key * 0x9E3779B97F4A7C15ull) & mask;
+    while (slots[idx].pipeline != VK_NULL_HANDLE && slots[idx].key != key) {
+        idx = (idx + 1) & mask;
+    }
+    return idx;
+}
+
+void PipelineCache::rehash(size_t new_cap) {
+    std::vector<Entry> new_slots(new_cap);
+    const size_t new_mask = new_cap - 1;
+    for (const auto& e : cache_slots_) {
+        if (e.pipeline == VK_NULL_HANDLE) continue;
+        size_t idx = probe(new_slots, new_mask, e.key);
+        new_slots[idx] = e;
+    }
+    cache_slots_ = std::move(new_slots);
+    cache_mask_  = new_mask;
+}
+
 VkPipeline PipelineCache::get(const PipelineKey& key) {
-    auto it = cache_.find(key);
-    if (it != cache_.end()) return it->second;
+    if (cache_slots_.empty()) rehash(16);  // initial power-of-two capacity
+    size_t idx = probe(cache_slots_, cache_mask_, key.bits);
+    if (cache_slots_[idx].pipeline != VK_NULL_HANDLE)
+        return cache_slots_[idx].pipeline;
+    // Miss — grow if needed before the insert (load factor 0.5).
+    if ((cache_count_ + 1) * 2 > cache_slots_.size()) {
+        rehash(cache_slots_.size() * 2);
+        idx = probe(cache_slots_, cache_mask_, key.bits);
+    }
     VkPipeline p = create(key);
-    cache_.emplace(key, p);
+    cache_slots_[idx] = {key.bits, p};
+    ++cache_count_;
     return p;
 }
 
@@ -224,11 +264,19 @@ void PipelineCache::warm_up() {
 
     // Skip any keys already present (defensive — warm_up is expected to
     // run exactly once, but re-entering it should not crash).
+    if (cache_slots_.empty()) rehash(16);
     std::vector<PipelineKey> fresh;
     fresh.reserve(keys.size());
-    for (const auto& k : keys)
-        if (cache_.find(k) == cache_.end()) fresh.push_back(k);
+    for (const auto& k : keys) {
+        size_t idx = probe(cache_slots_, cache_mask_, k.bits);
+        if (cache_slots_[idx].pipeline == VK_NULL_HANDLE)
+            fresh.push_back(k);
+    }
     if (fresh.empty()) return;
+
+    // Grow once up-front so probe indices stay valid through the inserts.
+    while ((cache_count_ + fresh.size()) * 2 > cache_slots_.size())
+        rehash(cache_slots_.size() * 2);
 
     std::vector<PipelineBuild> builds(fresh.size());
     std::vector<VkGraphicsPipelineCreateInfo> cis(fresh.size());
@@ -242,10 +290,13 @@ void PipelineCache::warm_up() {
                                     uint32_t(cis.size()), cis.data(),
                                     nullptr, out.data()),
           "graphics pipelines (warm up)");
-    for (size_t i = 0; i < fresh.size(); ++i)
-        cache_.emplace(fresh[i], out[i]);
+    for (size_t i = 0; i < fresh.size(); ++i) {
+        size_t idx = probe(cache_slots_, cache_mask_, fresh[i].bits);
+        cache_slots_[idx] = {fresh[i].bits, out[i]};
+        ++cache_count_;
+    }
 
-    std::fprintf(stderr, "[vk] warmed %zu pipelines\n", cache_.size());
+    std::fprintf(stderr, "[vk] warmed %zu pipelines\n", cache_count_);
 }
 
 VkPipeline PipelineCache::create(const PipelineKey& key) {
