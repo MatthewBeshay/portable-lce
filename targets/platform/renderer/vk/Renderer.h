@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_raii.hpp>
 
 #include <array>
 #include <cstdint>
@@ -161,14 +162,15 @@ private:
     DisplayListManager dl_mgr_;
 
     // -- Pipeline layout + descriptors --
-    VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
-    // Bindless descriptor set: SAMPLED_IMAGE[kMaxTextures] at binding 0,
-    // two immutable samplers at bindings 1 (diffuse) and 2 (lightmap).
-    VkDescriptorSetLayout bindless_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      bindless_pool_       = VK_NULL_HANDLE;
-    VkDescriptorSet       bindless_set_        = VK_NULL_HANDLE;
-    VkSampler             sampler_diffuse_     = VK_NULL_HANDLE;
-    VkSampler             sampler_lightmap_    = VK_NULL_HANDLE;
+    // RAII-wrapped so a mid-constructor throw releases the handles. The
+    // descriptor set itself is owned by the pool (no FREE_DESCRIPTOR_SET
+    // flag), so bindless_set_ stays a raw handle.
+    ::vk::raii::Sampler             sampler_diffuse_{nullptr};
+    ::vk::raii::Sampler             sampler_lightmap_{nullptr};
+    ::vk::raii::DescriptorSetLayout bindless_set_layout_{nullptr};
+    ::vk::raii::DescriptorPool      bindless_pool_{nullptr};
+    ::vk::raii::PipelineLayout      pipeline_layout_{nullptr};
+    VkDescriptorSet                 bindless_set_ = VK_NULL_HANDLE;
 
     // Quad index buffer (GL_QUADS -> 2 triangles)
     VmaBuffer quad_ib_;

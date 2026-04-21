@@ -65,34 +65,32 @@ Renderer::Renderer(SDL_Window* window)
     // sampler side. Each sampler gets its own fully-initialised sci struct
     // so that differences are explicit and fields don't silently inherit.
     {
-        VkSamplerCreateInfo diffuse{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        diffuse.magFilter    = VK_FILTER_NEAREST;
-        diffuse.minFilter    = VK_FILTER_NEAREST;
-        diffuse.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        diffuse.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        diffuse.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        diffuse.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        ::vk::SamplerCreateInfo diffuse;
+        diffuse.magFilter    = ::vk::Filter::eNearest;
+        diffuse.minFilter    = ::vk::Filter::eNearest;
+        diffuse.mipmapMode   = ::vk::SamplerMipmapMode::eLinear;
+        diffuse.addressModeU = ::vk::SamplerAddressMode::eRepeat;
+        diffuse.addressModeV = ::vk::SamplerAddressMode::eRepeat;
+        diffuse.addressModeW = ::vk::SamplerAddressMode::eRepeat;
         diffuse.minLod       = 0.0f;
         diffuse.maxLod       = VK_LOD_CLAMP_NONE;
-        check(vkCreateSampler(dev_.handle(), &diffuse, nullptr, &sampler_diffuse_),
-              "diffuse sampler");
+        sampler_diffuse_     = ::vk::raii::Sampler(dev_.vk_device(), diffuse);
 
-        VkSamplerCreateInfo lightmap{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        lightmap.magFilter    = VK_FILTER_LINEAR;
-        lightmap.minFilter    = VK_FILTER_LINEAR;
-        lightmap.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        lightmap.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        lightmap.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        lightmap.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        ::vk::SamplerCreateInfo lightmap;
+        lightmap.magFilter    = ::vk::Filter::eLinear;
+        lightmap.minFilter    = ::vk::Filter::eLinear;
+        lightmap.mipmapMode   = ::vk::SamplerMipmapMode::eNearest;
+        lightmap.addressModeU = ::vk::SamplerAddressMode::eClampToEdge;
+        lightmap.addressModeV = ::vk::SamplerAddressMode::eClampToEdge;
+        lightmap.addressModeW = ::vk::SamplerAddressMode::eClampToEdge;
         lightmap.minLod       = 0.0f;
         lightmap.maxLod       = 0.25f;  // lightmap is a single mip, clamp hard
-        check(vkCreateSampler(dev_.handle(), &lightmap, nullptr, &sampler_lightmap_),
-              "lightmap sampler");
+        sampler_lightmap_     = ::vk::raii::Sampler(dev_.vk_device(), lightmap);
     }
 
     // Bindless descriptor set layout: SAMPLED_IMAGE[kMaxTextures] + 2 immutable samplers.
     {
-        VkSampler immutable[2] = {sampler_diffuse_, sampler_lightmap_};
+        VkSampler immutable[2] = {*sampler_diffuse_, *sampler_lightmap_};
         VkDescriptorSetLayoutBinding bindings[3]{};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
@@ -129,9 +127,8 @@ Renderer::Renderer(SDL_Window* window)
         ci.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         ci.bindingCount = 3;
         ci.pBindings    = bindings;
-        check(vkCreateDescriptorSetLayout(dev_.handle(), &ci, nullptr,
-                                          &bindless_set_layout_),
-              "bindless desc layout");
+        bindless_set_layout_ = ::vk::raii::DescriptorSetLayout(
+            dev_.vk_device(), ::vk::DescriptorSetLayoutCreateInfo(ci));
     }
 
     // Descriptor pool for the one bindless set.
@@ -147,22 +144,26 @@ Renderer::Renderer(SDL_Window* window)
         ci.maxSets       = 1;
         ci.poolSizeCount = 2;
         ci.pPoolSizes    = ps;
-        check(vkCreateDescriptorPool(dev_.handle(), &ci, nullptr, &bindless_pool_),
-              "bindless desc pool");
+        bindless_pool_ = ::vk::raii::DescriptorPool(
+            dev_.vk_device(), ::vk::DescriptorPoolCreateInfo(ci));
     }
 
-    // Allocate the one bindless set.
+    // Allocate the one bindless set. The set itself is owned by the pool
+    // (no FREE_DESCRIPTOR_SET flag), so we keep the raw handle and let
+    // the pool's destructor reclaim it.
     {
+        VkDescriptorSetLayout layout_raw = *bindless_set_layout_;
         VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        ai.descriptorPool     = bindless_pool_;
+        ai.descriptorPool     = *bindless_pool_;
         ai.descriptorSetCount = 1;
-        ai.pSetLayouts        = &bindless_set_layout_;
+        ai.pSetLayouts        = &layout_raw;
         check(vkAllocateDescriptorSets(dev_.handle(), &ai, &bindless_set_),
               "bindless desc set");
     }
 
     // Pipeline layout: one bindless descriptor set + 256-byte push constant range.
     {
+        VkDescriptorSetLayout layout_raw = *bindless_set_layout_;
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pc.offset = 0;
@@ -170,19 +171,18 @@ Renderer::Renderer(SDL_Window* window)
         VkPipelineLayoutCreateInfo ci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         ci.setLayoutCount         = 1;
-        ci.pSetLayouts            = &bindless_set_layout_;
+        ci.pSetLayouts            = &layout_raw;
         ci.pushConstantRangeCount = 1;
         ci.pPushConstantRanges    = &pc;
-        check(vkCreatePipelineLayout(dev_.handle(), &ci, nullptr,
-                                     &pipeline_layout_),
-              "pipeline layout");
+        pipeline_layout_ = ::vk::raii::PipelineLayout(
+            dev_.vk_device(), ::vk::PipelineLayoutCreateInfo(ci));
     }
 
     // Pipeline cache + warm-up
     {
         PipelineCache::Config pc{};
         pc.device       = dev_.handle();
-        pc.layout       = pipeline_layout_;
+        pc.layout       = *pipeline_layout_;
         pc.color_format = swap_.format();
         pc.depth_format = swap_.depth_format();
         pc.vert_spv          = kBasicVertSpv;
@@ -290,11 +290,11 @@ Renderer::~Renderer() {
     tex_mgr_.destroy(dev_.handle(), dev_.allocator());
     quad_ib_.reset();
     pipelines_.destroy();
-    if (pipeline_layout_) vkDestroyPipelineLayout(dev_.handle(), pipeline_layout_, nullptr);
-    if (bindless_pool_)        vkDestroyDescriptorPool(dev_.handle(), bindless_pool_, nullptr);
-    if (bindless_set_layout_)  vkDestroyDescriptorSetLayout(dev_.handle(), bindless_set_layout_, nullptr);
-    if (sampler_lightmap_)     vkDestroySampler(dev_.handle(), sampler_lightmap_, nullptr);
-    if (sampler_diffuse_)      vkDestroySampler(dev_.handle(), sampler_diffuse_, nullptr);
+    // sampler_{diffuse,lightmap}_, bindless_set_layout_, bindless_pool_,
+    // and pipeline_layout_ destruct automatically here — their vk::raii
+    // destructors run in reverse declaration order, which matches the
+    // required Vulkan destroy order (PipelineLayout before DescriptorSet-
+    // Layout before samplers; DescriptorPool reclaims bindless_set_).
     for (auto& f : frames_) f.destroy(dev_.handle(), dev_.allocator());
     swap_.destroy(dev_);
 }
@@ -463,7 +463,7 @@ void Renderer::begin_pass() {
     // Bind the bindless descriptor set once per frame. Every draw reads from
     // it via texture id packed into the flags push constant.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_layout_, 0, 1, &bindless_set_, 0, nullptr);
+                            *pipeline_layout_, 0, 1, &bindless_set_, 0, nullptr);
 }
 
 void Renderer::end_pass() {
@@ -794,7 +794,7 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
 
     PushConstants pc{};
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
-    vkCmdPushConstants(f.cmd, pipeline_layout_,
+    vkCmdPushConstants(f.cmd, *pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
 
@@ -904,7 +904,7 @@ bool Renderer::CBuffCall(int index, bool) {
     PushConstants pc{};
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
 
-    vkCmdPushConstants(f.cmd, pipeline_layout_,
+    vkCmdPushConstants(f.cmd, *pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
 
@@ -1011,7 +1011,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],
                    dc.tint_color[2], dc.tint_color[3]);
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id, &tint);
-    vkCmdPushConstants(f.cmd, pipeline_layout_,
+    vkCmdPushConstants(f.cmd, *pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, 256, &pc);
 
