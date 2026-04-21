@@ -17,17 +17,20 @@ struct PipelineKey {
     uint64_t bits = 0;
 
     // Bit layout:
-    //   [0]    depth_test
-    //   [1]    depth_write
-    //   [2]    blend_enable
-    //   [3]    cull_back
-    //   [4]    stencil_test
-    //   [5]    compact  — 16-byte packed vertex format (decoded in shader)
-    //   [8:15] depth_func    (VkCompareOp)
+    //   [0]     depth_test
+    //   [1]     depth_write
+    //   [2]     blend_enable
+    //   [3]     cull_back
+    //   [4]     stencil_test
+    //   [5]     compact  — 16-byte packed vertex format (decoded in shader)
+    //   [6:7]   reserved for future state bits (alpha-to-coverage, wireframe)
+    //   [8:15]  depth_func    (VkCompareOp; 8 bits but values fit in 4)
     //   [16:23] blend_src    (VkBlendFactor)
     //   [24:31] blend_dst    (VkBlendFactor)
     //   [32:35] color_mask   (4 bits: R,G,B,A)
     //   [36:43] stencil_func (VkCompareOp)
+    //   [44:63] reserved for future shader-permutation / stencil-op bits
+    //
     // Line / triangle topology is a dynamic state
     // (VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY) — it does not affect the pipeline
     // object, so it has no bit here. Stencil compare/write mask and reference
