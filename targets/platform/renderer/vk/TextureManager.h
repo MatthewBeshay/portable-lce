@@ -100,6 +100,12 @@ private:
         VkDeviceSize    ring_begin   = 0;
         VkDeviceSize    ring_end     = 0;
         int             texture_idx  = -1;
+        // Orphan fields: non-empty when TextureManager::free was called
+        // on texture_idx while this upload was still in flight. The slot
+        // handles live here until the fence signals; complete_upload
+        // destroys them instead of publishing into the bindless set.
+        VmaImage        orphan_image;
+        VkImageView     orphan_view  = VK_NULL_HANDLE;
     };
 
     void upload_texture(int idx, int w, int h, const void* pixels);

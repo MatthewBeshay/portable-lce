@@ -135,9 +135,19 @@ void TextureManager::release_fence(VkFence f) {
 }
 
 void TextureManager::complete_upload(PendingUpload& pu) {
-    textures_[pu.texture_idx].ready = true;
-    // Publish the image view into the bindless array now that it's safe to sample.
-    write_slot(pu.texture_idx);
+    if (pu.orphan_image || pu.orphan_view) {
+        // free() was called on this texture while the upload was still
+        // in flight. The fence is now signalled — destroy the handles.
+        // Do NOT write_slot: free() already redirected the bindless
+        // slot to the default view.
+        if (pu.orphan_view)
+            vkDestroyImageView(device_, pu.orphan_view, nullptr);
+        pu.orphan_image.reset();
+    } else {
+        textures_[pu.texture_idx].ready = true;
+        // Publish the image view into the bindless array now that it's safe to sample.
+        write_slot(pu.texture_idx);
+    }
 
     if (pu.staging) {
         // One-shot fallback path — VmaBuffer destructor runs
@@ -295,20 +305,35 @@ void TextureManager::free(int idx, DeletionQueue& deletions) {
     std::lock_guard lk(texture_mutex_);
     if (idx <= 0 || size_t(idx) >= textures_.size()) return;
     if (idx == default_tex_) return;
-    wait_for_upload(idx);
     auto& t = textures_[idx];
-    // Redirect the bindless slot at `idx` to the 1×1 default view before we
-    // queue the real view for deletion. Without this, the slot holds a
-    // handle that's about to be destroyed; if a later frame indexes this
-    // slot (e.g. via a stale tex_id in a display list) the driver samples
-    // a freed image view. PARTIALLY_BOUND only protects against never-
-    // sampled slots, not stale handles.
+
+    // Redirect the bindless slot at `idx` to the 1×1 default view first.
+    // Without this, the slot holds a handle that's about to be destroyed;
+    // if a later frame indexes this slot (e.g. via a stale tex_id in a
+    // display list) the driver samples a freed image view.
+    // PARTIALLY_BOUND only protects against never-sampled slots, not
+    // stale handles.
     if (default_tex_ > 0 && size_t(default_tex_) < textures_.size() &&
         textures_[default_tex_].view) {
         write_slot_with_view(idx, textures_[default_tex_].view);
     }
-    if (t.view || t.image)
+
+    // Non-blocking path: if there's still a pending upload for this
+    // idx, hand the slot handles to that upload's completion — the
+    // upload fence is the correct gate for destruction, not the frame
+    // fence that DeletionQueue waits on. upload_texture drains any
+    // prior pending before starting a new one, so at most one pending
+    // exists here.
+    PendingUpload* pending = nullptr;
+    for (auto& pu : pending_uploads_) {
+        if (pu.texture_idx == idx) { pending = &pu; break; }
+    }
+    if (pending) {
+        pending->orphan_image = std::move(t.image);
+        pending->orphan_view  = t.view;
+    } else if (t.view || t.image) {
         deletions.push_view_image(device_, t.view, std::move(t.image));
+    }
     t = {};
 }
 
