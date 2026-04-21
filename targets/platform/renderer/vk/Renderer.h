@@ -127,6 +127,15 @@ public:
     void StateSetLightDirection(int idx, float x, float y, float z) override;
     void StateSetLightEnable(int, bool) override {}
     void StateSetViewport(int viewport_type) override;
+    // Legacy GL toggled glEnable(GL_CLIP_PLANE0..n) here around clouds /
+    // rain rendering to reduce fill rate via user-defined clip planes.
+    // In Vulkan the rasterizer already clips to the viewport + depth
+    // (VK_PIPELINE_STAGE_CLIPPING) automatically, so enabling or disabling
+    // this flag has no work to do at the API level. If a specific plane
+    // equation is ever needed (water-surface clip, shadow-frustum clip),
+    // that is a new feature requiring VkPhysicalDeviceFeatures::
+    // shaderClipDistance + gl_ClipDistance[] output in the vertex shader —
+    // not a reinstatement of this toggle.
     void StateSetEnableViewportClipPlanes(bool) override {}
     void StateSetStencil(int, uint8_t, uint8_t, uint8_t) override {}
     void StateSetForceLOD(int lod) override {
