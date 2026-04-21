@@ -25,29 +25,36 @@ layout(push_constant) uniform PC {
     vec4 fog_colour;
     float alpha_ref;
     float inv_gamma;
-    // flags packs:
-    //   [0]     textured
-    //   [1]     alpha_test
-    //   [2]     lm_active
-    //   [4:15]  tex_id    (12 bits — sampled image slot for diffuse)
-    //   [16:27] lm_tex_id (12 bits — sampled image slot for lightmap)
+    // See FLAG_* / *_SHIFT / *_MASK macros below for packed layout.
     uint flags;
     uint global_lm_packed;
 } pc;
 
+// PushConstants::flags bit layout (keep in sync with VertexFormats.h).
+#define FLAG_TEXTURED       (1u << 0)
+#define FLAG_ALPHA_TEST     (1u << 1)
+#define FLAG_LIGHTMAP       (1u << 2)
+#define FLAG_FORCE_LOD      (1u << 3)
+#define TEX_ID_SHIFT        4u
+#define TEX_ID_MASK         0xFFFu
+#define LM_TEX_ID_SHIFT     16u
+#define LM_TEX_ID_MASK      0xFFFu
+#define FORCE_LOD_SHIFT     28u
+#define FORCE_LOD_MASK      0xFu
+
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    uint tex_id    = (pc.flags >> 4u)  & 0xFFFu;
-    uint lm_tex_id = (pc.flags >> 16u) & 0xFFFu;
+    uint tex_id    = (pc.flags >> TEX_ID_SHIFT)    & TEX_ID_MASK;
+    uint lm_tex_id = (pc.flags >> LM_TEX_ID_SHIFT) & LM_TEX_ID_MASK;
 
     vec4 tex;
-    if ((pc.flags & 1u) != 0u) {
-        if ((pc.flags & 8u) != 0u) {
-            // Forced LOD — StateSetForceLOD maps flags[28:31] → mipmap
-            // level. Used by ItemInHandRenderer / ItemRenderer for
-            // fixed-mip item textures (32×32 / 64×64 swap).
-            float lod = float((pc.flags >> 28u) & 0xFu);
+    if ((pc.flags & FLAG_TEXTURED) != 0u) {
+        if ((pc.flags & FLAG_FORCE_LOD) != 0u) {
+            // Forced LOD — StateSetForceLOD packs the level into
+            // flags[28:31]. Used by ItemInHandRenderer / ItemRenderer
+            // for fixed-mip item textures (32×32 / 64×64 swap).
+            float lod = float((pc.flags >> FORCE_LOD_SHIFT) & FORCE_LOD_MASK);
             tex = textureLod(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv, lod);
         } else {
             tex = texture(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv);
@@ -57,10 +64,10 @@ void main() {
     }
     vec4 c = tex * v_color;
 
-    if ((pc.flags & 2u) != 0u && c.a < pc.alpha_ref)
+    if ((pc.flags & FLAG_ALPHA_TEST) != 0u && c.a < pc.alpha_ref)
         discard;
 
-    if ((pc.flags & 4u) != 0u)
+    if ((pc.flags & FLAG_LIGHTMAP) != 0u)
         c.rgb *= texture(sampler2D(u_images[nonuniformEXT(lm_tex_id)], u_lightmap_sampler), v_uv1).rgb;
 
     if (pc.fog_params.x > 0.5)

@@ -81,7 +81,11 @@ void main() {
         v_uv1 = lm / 256.0;
     }
 
-    // Vertex color — sentinel (RGB all zero) means use state_colour tint.
+    // Vertex color — sentinel (RGB all zero) means "untinted, use the
+    // state_colour push-constant". In the compact RGB565 encoding this
+    // corresponds to the producer emitting int16(-32768) as the colour
+    // field (all colour bits cleared after the +32768 bias). Chunk mesh
+    // builders reserve that encoding for the untinted path.
     bool sentinel = all(equal(a_color.rgb, vec3(0.0)));
     vec4 col = sentinel ? pc.state_colour : a_color;
 
