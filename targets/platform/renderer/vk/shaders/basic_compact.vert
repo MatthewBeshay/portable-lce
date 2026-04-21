@@ -15,6 +15,20 @@
 layout(location = 0) in ivec4 a_packed0;  // (pos.x, pos.y, pos.z, color_5_6_5)
 layout(location = 1) in ivec4 a_packed1;  // (uv.x, uv.y, lm.u, lm.v)
 
+// Same FrameUBO block as basic.vert — see that file for layout notes.
+layout(set = 1, binding = 0, std140) uniform FrameUBO {
+    vec4 light0_dir;
+    vec4 light1_dir;
+    vec4 light_diffuse;
+    vec4 light_ambient;
+    vec4 fog_params;
+    vec4 fog_colour;
+    uint global_lm_packed;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+} frame;
+
 // Same push constant block as basic.vert — see that file for layout notes.
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -22,17 +36,10 @@ layout(push_constant) uniform PC {
     vec4 nm1;
     vec4 nm2;
     vec4 chunk_lit;
-    vec4 l0;
-    vec4 l1;
-    vec4 ldiff;
-    vec4 lamb;
-    vec4 fog_params;
+    vec4 tex_mv;            // tex_offset_y + mv_translation.xyz
     vec4 state_colour;
-    vec4 fog_colour;
     float alpha_ref;
-    float inv_gamma;
     uint flags;
-    uint global_lm_packed;
 } pc;
 
 layout(location = 0) out vec2  v_uv;
@@ -66,15 +73,15 @@ void main() {
 
     // Texture UV transform
     vec2 tex_scale  = vec2(pc.nm0.w, pc.nm1.w);
-    vec2 tex_offset = vec2(pc.nm2.w, pc.l0.w);
+    vec2 tex_offset = vec2(pc.nm2.w, pc.tex_mv.x);
     v_uv = a_uv * tex_scale + tex_offset;
 
     // Lightmap UV
     {
         vec2 lm;
         if (a_lm_raw.x <= -500) {
-            lm = vec2(float(pc.global_lm_packed & 0xFFFFu),
-                      float(pc.global_lm_packed >> 16u));
+            lm = vec2(float(frame.global_lm_packed & 0xFFFFu),
+                      float(frame.global_lm_packed >> 16u));
         } else {
             lm = vec2(a_lm_raw);
         }
@@ -93,27 +100,27 @@ void main() {
     if (pc.chunk_lit.w > 0.5 && dot(raw_n, raw_n) > 0.001) {
         mat3 nm = mat3(pc.nm0.xyz, pc.nm1.xyz, pc.nm2.xyz);
         vec3 n = normalize(nm * raw_n);
-        float d0 = max(dot(n, pc.l0.xyz), 0.0);
-        float d1 = max(dot(n, pc.l1.xyz), 0.0);
-        col.rgb *= pc.lamb.xyz +
-                   pc.ldiff.xyz * clamp(d0 + d1, 0.0, 1.0);
+        float d0 = max(dot(n, frame.light0_dir.xyz), 0.0);
+        float d1 = max(dot(n, frame.light1_dir.xyz), 0.0);
+        col.rgb *= frame.light_ambient.xyz +
+                   frame.light_diffuse.xyz * clamp(d0 + d1, 0.0, 1.0);
     }
     v_color = col;
 
     // Per-vertex radial fog
     mat3 nm = mat3(pc.nm0.xyz, pc.nm1.xyz, pc.nm2.xyz);
-    vec3 mv_t = vec3(pc.l1.w, pc.ldiff.w, pc.lamb.w);
+    vec3 mv_t = pc.tex_mv.yzw;
     float e_dist = length(nm * world + mv_t);
 
-    int fog_mode = int(pc.fog_params.x);
+    int fog_mode = int(frame.fog_params.x);
     if (fog_mode == 1)
-        v_fog_factor = clamp((pc.fog_params.z - e_dist) /
-                             max(pc.fog_params.z - pc.fog_params.y, 1e-4),
+        v_fog_factor = clamp((frame.fog_params.z - e_dist) /
+                             max(frame.fog_params.z - frame.fog_params.y, 1e-4),
                              0.0, 1.0);
     else if (fog_mode == 2)
-        v_fog_factor = clamp(exp(-pc.fog_params.w * e_dist), 0.0, 1.0);
+        v_fog_factor = clamp(exp(-frame.fog_params.w * e_dist), 0.0, 1.0);
     else if (fog_mode == 3) {
-        float d = pc.fog_params.w * e_dist;
+        float d = frame.fog_params.w * e_dist;
         v_fog_factor = clamp(exp(-d * d), 0.0, 1.0);
     } else
         v_fog_factor = 1.0;

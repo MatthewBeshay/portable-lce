@@ -81,6 +81,11 @@ public:
     VkDeviceSize transient_pos()  const { return transient_offset_; }
     VkDeviceSize transient_size() const { return transient_size_; }
 
+    /// Write the per-frame UBO (lights, fog, gamma, global lightmap) into
+    /// this frame's persistently-mapped buffer. Called once per StartFrame,
+    /// before any draws reference set=1 binding=0.
+    void write_frame_ubo(const void* src, size_t bytes);
+
     // Public handles for direct access
     VkCommandPool   pool         = VK_NULL_HANDLE;
     VkCommandBuffer cmd          = VK_NULL_HANDLE;
@@ -88,9 +93,12 @@ public:
     VkSemaphore     sem_done     = VK_NULL_HANDLE;
     VkFence         fence        = VK_NULL_HANDLE;
     VmaBuffer       transient;   // host-visible, persistently mapped
+    VmaBuffer       frame_ubo;   // host-visible, persistently mapped
+    VkDescriptorSet frame_ubo_set = VK_NULL_HANDLE;  // owned by Renderer's pool
     DeletionQueue   deletions;
 
     VkBuffer transient_vb() const { return transient.handle(); }
+    VkBuffer frame_ubo_buf() const { return frame_ubo.handle(); }
 
     FrameContext() = default;
     FrameContext(const FrameContext&) = delete;
@@ -105,6 +113,10 @@ private:
     VkDeviceSize transient_offset_   = 0;
     VkDeviceSize transient_size_     = 0;
     VkDeviceSize pending_grow_bytes_ = 0;  // >0 means begin() will reallocate
+
+    // Per-frame UBO — persistently mapped; renderer writes it at StartFrame.
+    std::byte*   frame_ubo_mapped_   = nullptr;
+    VkDeviceSize frame_ubo_size_     = 0;
 
     // GPU timestamp query state. One pool per FrameContext (2 queries:
     // begin + end of the frame's command buffer). A query is read back

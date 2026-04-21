@@ -190,6 +190,10 @@ private:
         ::vk::raii::Sampler{nullptr}, ::vk::raii::Sampler{nullptr}};
     ::vk::raii::DescriptorSetLayout bindless_set_layout_{nullptr};
     ::vk::raii::DescriptorPool      bindless_pool_{nullptr};
+    // Per-frame UBO descriptor: one set layout, one pool, N sets (one
+    // per FrameContext, each permanently bound to that frame's UBO buffer).
+    ::vk::raii::DescriptorSetLayout frame_ubo_layout_{nullptr};
+    ::vk::raii::DescriptorPool      frame_ubo_pool_{nullptr};
     ::vk::raii::PipelineLayout      pipeline_layout_{nullptr};
     VkDescriptorSet                 bindless_set_ = VK_NULL_HANDLE;
 

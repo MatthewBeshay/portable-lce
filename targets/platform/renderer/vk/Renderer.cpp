@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "FrameUBO.h"
 #include "VkCheck.h"
 #include "VertexFormats.h"
 #include "platform/fs/fs.h"
@@ -69,7 +70,7 @@ Renderer::Renderer(SDL_Window* window)
     //   [3] linear  + clamp_to_edge (lightmap, UI smoothed icons)
     // Index 3 doubles as the lightmap sampler. Every texture slot picks
     // one index via TextureManager; the shader reads the index from
-    // PushConstants::flags bits [6:7].
+    // PushConstants::flags bits [30:31].
     {
         auto make = [&](::vk::Filter f, ::vk::SamplerAddressMode a,
                         float max_lod) {
@@ -168,17 +169,78 @@ Renderer::Renderer(SDL_Window* window)
               "bindless desc set");
     }
 
-    // Pipeline layout: one bindless descriptor set + 256-byte push constant range.
+    // Per-frame UBO descriptor set layout (set = 1, binding 0, UNIFORM_BUFFER,
+    // visible to both vertex and fragment stages).
     {
-        VkDescriptorSetLayout layout_raw = *bindless_set_layout_;
+        VkDescriptorSetLayoutBinding b{};
+        b.binding         = 0;
+        b.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b.descriptorCount = 1;
+        b.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo ci{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ci.bindingCount = 1;
+        ci.pBindings    = &b;
+        frame_ubo_layout_ = ::vk::raii::DescriptorSetLayout(
+            dev_.vk_device(), ::vk::DescriptorSetLayoutCreateInfo(ci));
+    }
+
+    // Pool for the per-frame UBO sets (one per FrameContext).
+    {
+        VkDescriptorPoolSize ps{};
+        ps.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        ps.descriptorCount = kFramesInFlight;
+        VkDescriptorPoolCreateInfo ci{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        ci.maxSets       = kFramesInFlight;
+        ci.poolSizeCount = 1;
+        ci.pPoolSizes    = &ps;
+        frame_ubo_pool_ = ::vk::raii::DescriptorPool(
+            dev_.vk_device(), ::vk::DescriptorPoolCreateInfo(ci));
+    }
+
+    // Allocate one frame-UBO set per FrameContext and wire each to that
+    // frame's host-visible UBO buffer. The binding never changes after
+    // this — only the buffer's CPU-mapped contents get updated per frame.
+    for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+        VkDescriptorSetLayout layout_raw = *frame_ubo_layout_;
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool     = *frame_ubo_pool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts        = &layout_raw;
+        check(vkAllocateDescriptorSets(dev_.handle(), &ai,
+                                       &frames_[i].frame_ubo_set),
+              "frame ubo desc set");
+
+        VkDescriptorBufferInfo bi{};
+        bi.buffer = frames_[i].frame_ubo_buf();
+        bi.offset = 0;
+        bi.range  = sizeof(FrameUBO);
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet          = frames_[i].frame_ubo_set;
+        w.dstBinding      = 0;
+        w.descriptorCount = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w.pBufferInfo     = &bi;
+        vkUpdateDescriptorSets(dev_.handle(), 1, &w, 0, nullptr);
+    }
+
+    // Pipeline layout: set 0 bindless images/samplers, set 1 per-frame UBO,
+    // 176-byte push constant range shared by vertex + fragment.
+    {
+        VkDescriptorSetLayout layouts[2] = {
+            *bindless_set_layout_,
+            *frame_ubo_layout_,
+        };
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pc.offset = 0;
-        pc.size   = 256;
+        pc.size   = sizeof(PushConstants);
         VkPipelineLayoutCreateInfo ci{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        ci.setLayoutCount         = 1;
-        ci.pSetLayouts            = &layout_raw;
+        ci.setLayoutCount         = 2;
+        ci.pSetLayouts            = layouts;
         ci.pushConstantRangeCount = 1;
         ci.pPushConstantRanges    = &pc;
         pipeline_layout_ = ::vk::raii::PipelineLayout(
@@ -377,6 +439,24 @@ void Renderer::StartFrame() {
     pso_dirty_    = true;
     pass_active_  = false;
     frame_active_ = true;
+
+    // Fill this frame's UBO from current state. Host-visible mapped
+    // write — no fence needed because we've already waited on this
+    // frame's fence above.
+    {
+        FrameUBO ubo{};
+        ubo.light0_dir    = glm::vec4(light0_dir_eye_, 0.0f);
+        ubo.light1_dir    = glm::vec4(light1_dir_eye_, 0.0f);
+        ubo.light_diffuse = glm::vec4(light_diffuse_, 0.0f);
+        ubo.light_ambient = glm::vec4(light_ambient_, 0.0f);
+        ubo.fog_params    = glm::vec4(fog_mode_f_, fog_start_, fog_end_, fog_density_);
+        ubo.fog_colour    = glm::vec4(fog_colour_[0], fog_colour_[1],
+                                       fog_colour_[2], inv_gamma_);
+        ubo.global_lm_packed =
+            uint32_t(global_lm_uv_[0]) | (uint32_t(global_lm_uv_[1]) << 16);
+        f.write_frame_ubo(&ubo, sizeof(ubo));
+    }
+
     frame().begin_cmd_timestamps();
 }
 
@@ -505,10 +585,12 @@ void Renderer::begin_pass() {
     // culling — the canonical Vulkan configuration. No MVP row negation needed.
     apply_viewport_and_scissor();
 
-    // Bind the bindless descriptor set once per frame. Every draw reads from
-    // it via texture id packed into the flags push constant.
+    // Bind set 0 (bindless images + samplers) and set 1 (per-frame UBO)
+    // once per frame. Every draw reads from set 0 via the tex_id packed
+    // in flags, and set 1 supplies lighting / fog / gamma constants.
+    VkDescriptorSet sets[2] = { bindless_set_, frame().frame_ubo_set };
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            *pipeline_layout_, 0, 1, &bindless_set_, 0, nullptr);
+                            *pipeline_layout_, 0, 2, sets, 0, nullptr);
 }
 
 void Renderer::rebuild_viewport_rects() {
@@ -815,12 +897,10 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
     pc.nm2       = glm::vec4(nm[2], tm[3][0]);
     pc.chunk_lit = glm::vec4(chunk_offset_[0], chunk_offset_[1],
                              chunk_offset_[2], lighting_enabled_ ? 1.0f : 0.0f);
-    pc.l0        = glm::vec4(light0_dir_eye_, tm[3][1]);
-    pc.l1        = glm::vec4(light1_dir_eye_, mv[3][0]);
-    pc.ldiff     = glm::vec4(light_diffuse_,  mv[3][1]);
-    pc.lamb      = glm::vec4(light_ambient_,  mv[3][2]);
-
-    pc.fog_params = glm::vec4(fog_mode_f_, fog_start_, fog_end_, fog_density_);
+    // Per-draw scalars that previously hid in the .w of light/mv-trans
+    // slots now live in their own vec4. Layout: (tex_offset_y,
+    // mv_translation.x, mv_translation.y, mv_translation.z).
+    pc.tex_mv    = glm::vec4(tm[3][1], mv[3][0], mv[3][1], mv[3][2]);
 
     if (tint) {
         pc.state_colour = glm::vec4(state_colour_[0] * (*tint)[0],
@@ -831,10 +911,7 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
         pc.state_colour = glm::vec4(state_colour_[0], state_colour_[1],
                                     state_colour_[2], state_colour_[3]);
     }
-    pc.fog_colour = glm::vec4(fog_colour_[0], fog_colour_[1],
-                              fog_colour_[2], fog_colour_[3]);
     pc.alpha_ref  = alpha_ref_;
-    pc.inv_gamma  = inv_gamma_;
     // flags bit layout:
     //   [0]     textured       (diffuse sample enabled)
     //   [1]     alpha_test
@@ -842,7 +919,8 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
     //   [3]     force_lod_on   (StateSetForceLOD; shader uses textureLod)
     //   [4:15]  tex_id         (12 bits — slot in bindless sampled image array)
     //   [16:27] lm_tex_id      (12 bits — lightmap slot)
-    //   [28:31] force_lod      (4 bits — mipmap LOD level)
+    //   [28:29] force_lod      (2 bits — mipmap LOD level)
+    //   [30:31] sampler_idx    (2 bits — entry into the 4-sampler table)
     uint32_t flags = 0;
     if (textured && texture_enabled_) flags |= 1u;
     if (alpha_test_enabled_)          flags |= 2u;
@@ -853,13 +931,9 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
     }
     flags |= (tex_id    & 0xFFFu) << 4u;
     flags |= (lm_tex_id & 0xFFFu) << 16u;
-    // Sampler index for the diffuse bind (bits [30:31]). 4-entry table
-    // in Renderer::samplers_: 0=nearest+repeat (default), 1=nearest+
-    // clamp, 2=linear+repeat, 3=linear+clamp (lightmap).
     const uint32_t sampler_idx = tex_mgr_.sampler_idx_for(int(tex_id)) & 0x3u;
     flags |= (sampler_idx << 30u);
     pc.flags = flags;
-    pc.global_lm_packed = uint32_t(global_lm_uv_[0]) | (uint32_t(global_lm_uv_[1]) << 16);
 }
 
 // ===================================================================
@@ -964,7 +1038,7 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
     vkCmdPushConstants(f.cmd, *pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, 256, &pc);
+                       0, sizeof(PushConstants), &pc);
 
     if (is_quads) {
         uint32_t qc = uint32_t(count) / 4;
@@ -1184,7 +1258,7 @@ bool Renderer::CBuffCall(int index, bool) {
 
     vkCmdPushConstants(f.cmd, *pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, 256, &pc);
+                       0, sizeof(PushConstants), &pc);
 
     for (auto& sd : draws) {
         // Pipeline may change between subdraws when a display list mixes
@@ -1299,7 +1373,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id, &tint);
     vkCmdPushConstants(f.cmd, *pipeline_layout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, 256, &pc);
+                       0, sizeof(PushConstants), &pc);
 
     vkCmdDraw(f.cmd, tvb.vertex_count, 1, 0, 0);
 

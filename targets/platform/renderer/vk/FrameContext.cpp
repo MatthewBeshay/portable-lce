@@ -57,6 +57,27 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
     // Transient vertex buffer — host-visible, persistently mapped. Grows on demand.
     recreate_transient(alloc, kInitialTransientSize);
 
+    // Per-frame UBO (lights, fog, gamma, global lightmap). Fixed-size block
+    // mapped for CPU writes; the renderer fills it at StartFrame. Sized up
+    // to 256 bytes to give headroom for small future additions without a
+    // re-bind; std140 layout is 112 bytes today.
+    {
+        frame_ubo_size_ = 256;
+        VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size  = frame_ubo_size_;
+        bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        VmaAllocationCreateInfo vai{};
+        vai.usage = VMA_MEMORY_USAGE_AUTO;
+        vai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo info{};
+        VkBuffer      buf = VK_NULL_HANDLE;
+        VmaAllocation a   = nullptr;
+        check(vmaCreateBuffer(alloc, &bci, &vai, &buf, &a, &info), "frame ubo");
+        frame_ubo = VmaBuffer(alloc, buf, a, info.pMappedData);
+        frame_ubo_mapped_ = static_cast<std::byte*>(info.pMappedData);
+    }
+
     // GPU timestamp query pool. 2 queries per frame: begin + end of the
     // primary command buffer. timestamp_period_ns == 0 means disabled
     // (e.g. device reports timestampValidBits == 0 on this queue family).
@@ -77,8 +98,15 @@ void FrameContext::reset_acquire_semaphore(VkDevice dev) {
     check(vkCreateSemaphore(dev, &sci, nullptr, &sem_acquired), "sem acq (reset)");
 }
 
+void FrameContext::write_frame_ubo(const void* src, size_t bytes) {
+    if (!frame_ubo_mapped_ || bytes > frame_ubo_size_) return;
+    std::memcpy(frame_ubo_mapped_, src, bytes);
+}
+
 void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
     deletions.flush();
+    frame_ubo.reset();
+    frame_ubo_mapped_ = nullptr;
     transient.reset();
     if (ts_pool_)     vkDestroyQueryPool(dev, ts_pool_, nullptr);
     ts_pool_  = VK_NULL_HANDLE;

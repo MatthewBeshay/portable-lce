@@ -6,30 +6,39 @@ layout(location = 1) in vec4  v_color;
 layout(location = 2) in float v_fog_factor;
 layout(location = 3) in vec2  v_uv1;       // lightmap UV
 
-// Bindless descriptor set:
+// Bindless descriptor set (set = 0):
 //   binding 0: sampled image array (per texture slot)
 //   binding 1: immutable sampler[4] — one entry per
 //              (nearest|linear) x (repeat|clamp) combination.
 //              Index 3 (linear+clamp, single-mip) doubles as the lightmap
 //              sampler; diffuse samples pick an index from PushConstants::
-//              flags bits [6:7].
+//              flags bits [30:31].
 layout(set = 0, binding = 0) uniform texture2D u_images[];
 layout(set = 0, binding = 1) uniform sampler   u_samplers[4];
+
+// Per-frame UBO (set = 1, binding = 0). See basic.vert for layout notes.
+layout(set = 1, binding = 0, std140) uniform FrameUBO {
+    vec4 light0_dir;
+    vec4 light1_dir;
+    vec4 light_diffuse;
+    vec4 light_ambient;
+    vec4 fog_params;
+    vec4 fog_colour;        // rgb + inv_gamma in .w
+    uint global_lm_packed;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+} frame;
 
 // Same push constant block as vertex shader (shared range).
 layout(push_constant) uniform PC {
     mat4 mvp;
     vec4 nm0, nm1, nm2;
     vec4 chunk_lit;
-    vec4 l0, l1, ldiff, lamb;
-    vec4 fog_params;
+    vec4 tex_mv;
     vec4 state_colour;
-    vec4 fog_colour;
     float alpha_ref;
-    float inv_gamma;
-    // See FLAG_* / *_SHIFT / *_MASK macros below for packed layout.
     uint flags;
-    uint global_lm_packed;
 } pc;
 
 // PushConstants::flags bit layout (keep in sync with VertexFormats.h).
@@ -85,10 +94,10 @@ void main() {
     if ((pc.flags & FLAG_LIGHTMAP) != 0u)
         c.rgb *= texture(sampler2D(u_images[nonuniformEXT(lm_tex_id)], u_samplers[LIGHTMAP_SAMPLER_IDX]), v_uv1).rgb;
 
-    if (pc.fog_params.x > 0.5)
-        c.rgb = mix(pc.fog_colour.rgb, c.rgb, v_fog_factor);
+    if (frame.fog_params.x > 0.5)
+        c.rgb = mix(frame.fog_colour.rgb, c.rgb, v_fog_factor);
 
-    c.rgb = pow(c.rgb, vec3(pc.inv_gamma));
+    c.rgb = pow(c.rgb, vec3(frame.fog_colour.w));  // inv_gamma packed in .w
 
     out_color = c;
 }
