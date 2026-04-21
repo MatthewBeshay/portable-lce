@@ -490,6 +490,21 @@ int TextureManager::ensure_default_lightmap() {
 }
 
 void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
+    // Drain any prior upload for this slot WITHOUT holding texture_mutex_
+    // across the fence wait — other threads would otherwise block on
+    // bind() / resolve_bound_slot / poll_uploads for the duration of
+    // the wait.
+    VkFence prior_fence = VK_NULL_HANDLE;
+    {
+        std::lock_guard lk(texture_mutex_);
+        for (const auto& pu : pending_uploads_) {
+            if (pu.texture_idx == idx) { prior_fence = pu.fence; break; }
+        }
+    }
+    if (prior_fence) {
+        vkWaitForFences(device_, 1, &prior_fence, VK_TRUE, UINT64_MAX);
+    }
+
     // Snapshot the slot under the lock, then drop it for the long image
     // creation path. `reuse` tells the rest of the function whether we can
     // keep the existing VkImage/VkImageView or must allocate fresh ones.
@@ -498,6 +513,8 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     VkImageView old_view = VK_NULL_HANDLE;
     {
         std::lock_guard lk(texture_mutex_);
+        // complete_upload for the fence we waited on; the slot's
+        // image/view/ready state is up to date after this returns.
         wait_for_upload(idx);
         TextureSlot& t = textures_[idx];
         reuse = t.ready && t.width == uint32_t(w) && t.height == uint32_t(h);
