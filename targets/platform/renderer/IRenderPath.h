@@ -130,6 +130,17 @@ enum class FogMode : uint8_t {
     exponential_sq,
 };
 
+enum class TextureFilter : uint8_t {
+    nearest,
+    linear,
+};
+
+enum class TextureWrap : uint8_t {
+    repeat,
+    clamp_to_edge,
+    mirrored_repeat,
+};
+
 enum class MatrixStack : uint8_t {
     modelview,
     projection,
@@ -436,6 +447,12 @@ public:
     /// Enable/disable the lightmap sampler. Replaces the legacy GL pattern
     /// that toggled `GL_TEXTURE_2D` on texture unit 1.
     virtual void StateSetLightmapEnable(bool enable) = 0;
+    /// Set the min/mag sampler filter for the currently-bound texture.
+    /// Replaces the legacy TextureSetParam(GL_TEXTURE_MIN_FILTER, ...) pair.
+    virtual void StateSetTextureFilter(TextureFilter min, TextureFilter mag) = 0;
+    /// Set the S/T wrap modes for the currently-bound texture. Replaces the
+    /// legacy TextureSetParam(GL_TEXTURE_WRAP_S/T, ...) pair.
+    virtual void StateSetTextureWrap(TextureWrap s, TextureWrap t) = 0;
 
     // Chunks
     virtual void SetChunkOffset(float x, float y, float z) = 0;

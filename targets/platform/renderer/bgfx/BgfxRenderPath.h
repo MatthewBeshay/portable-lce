@@ -109,6 +109,8 @@ public:
     void StateSetForceLOD(int lod) override;
     void StateSetTextureEnable(bool enable) override;
     void StateSetLightmapEnable(bool enable) override;
+    void StateSetTextureFilter(rp::TextureFilter min, rp::TextureFilter mag) override;
+    void StateSetTextureWrap(rp::TextureWrap s, rp::TextureWrap t) override;
 
     void SetChunkOffset(float x, float y, float z) override;
 

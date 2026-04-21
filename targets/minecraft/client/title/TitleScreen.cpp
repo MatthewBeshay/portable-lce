@@ -284,10 +284,8 @@ void TitleScreen::renderPanorama(float a) {
 
     RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_TITLE_BG_PANORAMA));
 
-    RenderPath.TextureSetParam(0x2802, 0x2901);
-    RenderPath.TextureSetParam(0x2803, 0x812F);
-    RenderPath.TextureSetParam(0x2801, 0x2601);
-    RenderPath.TextureSetParam(0x2800, 0x2601);
+    RenderPath.StateSetTextureWrap(rp::TextureWrap::repeat, rp::TextureWrap::clamp_to_edge);
+    RenderPath.StateSetTextureFilter(rp::TextureFilter::linear, rp::TextureFilter::linear);
 
     float off = vo * 0.0004f;
 
@@ -348,7 +346,7 @@ void TitleScreen::renderSkybox(float a) {
         width > height ? 120.0f / (float)width : 120.0f / (float)height;
     float sWidth = (float)height * aspect / 256.0f;
     float sHeight = (float)width * aspect / 256.0f;
-    RenderPath.TextureSetParam(0x2800, 0x2601);
+    RenderPath.StateSetTextureFilter(rp::TextureFilter::linear, rp::TextureFilter::linear);
     t->color(1.0f, 1.0f, 1.0f, 1.0f);
     t->vertexUV(0.0f, height, 0.0f, (0.5f - sWidth), (0.5f + sHeight));
     t->vertexUV(width, height, 0.0f, (0.5f - sWidth), (0.5f - sHeight));

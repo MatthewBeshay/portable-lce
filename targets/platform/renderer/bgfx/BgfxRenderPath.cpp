@@ -1075,6 +1075,27 @@ void BgfxRenderPath::TextureSetParam(int param, int value) {
     }
 }
 
+void BgfxRenderPath::StateSetTextureFilter(rp::TextureFilter min,
+                                           rp::TextureFilter mag) {
+    const int min_gl = (min == rp::TextureFilter::linear) ? 0x2601 : 0x2600;
+    const int mag_gl = (mag == rp::TextureFilter::linear) ? 0x2601 : 0x2600;
+    TextureSetParam(0x2801, min_gl);
+    TextureSetParam(0x2800, mag_gl);
+}
+
+void BgfxRenderPath::StateSetTextureWrap(rp::TextureWrap s, rp::TextureWrap t) {
+    auto to_gl = [](rp::TextureWrap w) {
+        switch (w) {
+            case rp::TextureWrap::repeat:          return 0x2901;
+            case rp::TextureWrap::clamp_to_edge:   return 0x812F;
+            case rp::TextureWrap::mirrored_repeat: return 0x8370;
+        }
+        return 0x2901;
+    };
+    TextureSetParam(0x2802, to_gl(s));
+    TextureSetParam(0x2803, to_gl(t));
+}
+
 void BgfxRenderPath::TextureData(int width, int height, void* data, int level,
                                  int) {
     if (level > 0) return;

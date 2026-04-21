@@ -146,6 +146,10 @@ public:
     }
     void StateSetTextureEnable(bool e) override;
     void StateSetLightmapEnable(bool e) override;
+    // No-ops: bindless layout uses an immutable sampler shared by all
+    // diffuse textures. See TextureManager::set_param.
+    void StateSetTextureFilter(rp::TextureFilter, rp::TextureFilter) override {}
+    void StateSetTextureWrap(rp::TextureWrap, rp::TextureWrap) override {}
     void StateSetVertexTextureUV(float u, float v) override { global_lm_uv_ = {u,v}; }
 
     void SetChunkOffset(float x, float y, float z) override { chunk_offset_ = {x,y,z}; }

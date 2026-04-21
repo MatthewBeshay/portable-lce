@@ -677,33 +677,15 @@ void Textures::loadTexture(BufferedImage* img, int id, bool blur, bool clamp) {
     int iMipLevels = 1;
     RenderPath.TextureBind(id);
 
-    if (MIPMAP) {
-        // Linux/PC port: force 0x2600 to avoid mip-level distance blurring
-        // and keep Minecraft textures pixel-crisp at all distances.
-        RenderPath.TextureSetParam(0x2801, 0x2600);
-        RenderPath.TextureSetParam(0x2800, 0x2600);
-        /*
-         * RenderPath.TextureSetParam(GL_TEXTURE_MIN_LOD, 0);
-         * RenderPath.TextureSetParam(GL_TEXTURE_MAX_LOD, 4);
-         * RenderPath.TextureSetParam(GL_TEXTURE_BASE_LEVEL, 0);
-         * RenderPath.TextureSetParam(GL_TEXTURE_MAX_LEVEL, 4);
-         */
-    } else {
-        RenderPath.TextureSetParam(0x2801, 0x2600);
-        RenderPath.TextureSetParam(0x2800, 0x2600);
-    }
+    // Linux/PC port: force nearest to avoid mip-level distance blurring
+    // and keep Minecraft textures pixel-crisp at all distances.
+    RenderPath.StateSetTextureFilter(rp::TextureFilter::nearest, rp::TextureFilter::nearest);
     if (blur) {
-        RenderPath.TextureSetParam(0x2801, 0x2601);
-        RenderPath.TextureSetParam(0x2800, 0x2601);
+        RenderPath.StateSetTextureFilter(rp::TextureFilter::linear, rp::TextureFilter::linear);
     }
-
-    if (clamp) {
-        RenderPath.TextureSetParam(0x2802, 0x812F);
-        RenderPath.TextureSetParam(0x2803, 0x812F);
-    } else {
-        RenderPath.TextureSetParam(0x2802, 0x2901);
-        RenderPath.TextureSetParam(0x2803, 0x2901);
-    }
+    RenderPath.StateSetTextureWrap(
+        clamp ? rp::TextureWrap::clamp_to_edge : rp::TextureWrap::repeat,
+        clamp ? rp::TextureWrap::clamp_to_edge : rp::TextureWrap::repeat);
 
     int w = img->getWidth();
     int h = img->getHeight();
@@ -837,14 +819,8 @@ void Textures::replaceTexture(std::vector<int>& rawPixels, int w, int h,
                               int id) {
     bind(id);
 
-    // Removed in Java
-    {
-        RenderPath.TextureSetParam(0x2801, 0x2600);
-        RenderPath.TextureSetParam(0x2800, 0x2600);
-    }
-
-    RenderPath.TextureSetParam(0x2802, 0x2901);
-    RenderPath.TextureSetParam(0x2803, 0x2901);
+    RenderPath.StateSetTextureFilter(rp::TextureFilter::nearest, rp::TextureFilter::nearest);
+    RenderPath.StateSetTextureWrap(rp::TextureWrap::repeat, rp::TextureWrap::repeat);
 
     if (options != nullptr && options->anaglyph3d) {
         rawPixels = anaglyph(rawPixels);
@@ -894,14 +870,8 @@ void Textures::replaceTextureDirect(const std::vector<int>& rawPixels, int w,
                                     int h, int id) {
     RenderPath.TextureBind(id);
 
-    // Remove in Java
-    {
-        RenderPath.TextureSetParam(0x2801, 0x2600);
-        RenderPath.TextureSetParam(0x2800, 0x2600);
-    }
-
-    RenderPath.TextureSetParam(0x2802, 0x2901);
-    RenderPath.TextureSetParam(0x2803, 0x2901);
+    RenderPath.StateSetTextureFilter(rp::TextureFilter::nearest, rp::TextureFilter::nearest);
+    RenderPath.StateSetTextureWrap(rp::TextureWrap::repeat, rp::TextureWrap::repeat);
 
     RenderPath.TextureDataUpdate(0, 0, w, h,
                                        const_cast<int*>(rawPixels.data()), 0);
@@ -914,14 +884,8 @@ void Textures::replaceTextureDirect(const std::vector<short>& rawPixels, int w,
                                     int h, int id) {
     RenderPath.TextureBind(id);
 
-    // Remove in Java
-    {
-        RenderPath.TextureSetParam(0x2801, 0x2600);
-        RenderPath.TextureSetParam(0x2800, 0x2600);
-    }
-
-    RenderPath.TextureSetParam(0x2802, 0x2901);
-    RenderPath.TextureSetParam(0x2803, 0x2901);
+    RenderPath.StateSetTextureFilter(rp::TextureFilter::nearest, rp::TextureFilter::nearest);
+    RenderPath.StateSetTextureWrap(rp::TextureWrap::repeat, rp::TextureWrap::repeat);
 
     RenderPath.TextureDataUpdate(0, 0, w, h,
                                        const_cast<short*>(rawPixels.data()), 0);
