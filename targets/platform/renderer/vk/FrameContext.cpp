@@ -80,7 +80,10 @@ void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     // the fence has signaled — no GPU work is still reading from the old buffer.
     if (pending_grow_bytes_ > 0) {
         VkDeviceSize new_size = transient_size_ * 2;
-        while (new_size < pending_grow_bytes_) new_size *= 2;
+        // Cap the doubling inside the loop so a pathological request larger
+        // than kMaxTransientSize cannot wrap VkDeviceSize before the clamp.
+        while (new_size < pending_grow_bytes_ && new_size < kMaxTransientSize)
+            new_size *= 2;
         new_size = std::min(new_size, kMaxTransientSize);
         if (new_size > transient_size_) {
             std::fprintf(stderr, "[vk] transient VB grew from %llu to %llu bytes\n",
