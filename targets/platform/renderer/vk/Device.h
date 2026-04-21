@@ -3,6 +3,7 @@
 #include <vulkan/vulkan_raii.hpp>
 #include <vma/vk_mem_alloc.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 
@@ -68,6 +69,20 @@ public:
     /// Callers multiply by (end - begin) to get elapsed nanoseconds.
     float timestamp_period_ns() const { return timestamp_period_ns_; }
 
+    /// Shared upload timeline semaphore. TextureManager signals a
+    /// monotonically-increasing value per upload; consumers poll
+    /// vkGetSemaphoreCounterValue(device, handle(), ...) once and
+    /// compare against the per-upload stored value. Replaces the
+    /// per-upload VkFence + fence_pool that preceded it.
+    VkSemaphore upload_timeline() const { return upload_timeline_; }
+
+    /// Atomically reserve the next timeline value for an upload. The
+    /// returned value is the one to pass as the signal value in the
+    /// upload's submit info.
+    uint64_t next_upload_timeline_value() const {
+        return ++upload_timeline_counter_;
+    }
+
 private:
     ::vk::raii::Context              ctx_;
     ::vk::raii::Instance             instance_{nullptr};
@@ -81,6 +96,9 @@ private:
     mutable std::mutex             queue_mutex_;  // guards submit2
     bool                           wide_lines_enabled_ = false;
     float                          timestamp_period_ns_ = 0.0f;
+    ::vk::raii::Semaphore          upload_timeline_raii_{nullptr};
+    VkSemaphore                    upload_timeline_     = VK_NULL_HANDLE;
+    mutable std::atomic<uint64_t>  upload_timeline_counter_{0};
 };
 
 }  // namespace plce::vk

@@ -125,18 +125,20 @@ found:
             !v12_supported.runtimeDescriptorArray ||
             !v12_supported.shaderSampledImageArrayNonUniformIndexing ||
             !v12_supported.descriptorBindingSampledImageUpdateAfterBind ||
-            !v12_supported.descriptorBindingPartiallyBound) {
+            !v12_supported.descriptorBindingPartiallyBound ||
+            !v12_supported.timelineSemaphore) {
             throw std::runtime_error(
                 "vk renderer requires Vulkan 1.2 descriptor-indexing features: "
                 "descriptorIndexing, runtimeDescriptorArray, "
                 "shaderSampledImageArrayNonUniformIndexing, "
                 "descriptorBindingSampledImageUpdateAfterBind, "
-                "descriptorBindingPartiallyBound — physical device reports "
-                "one or more as unsupported");
+                "descriptorBindingPartiallyBound, timelineSemaphore — "
+                "physical device reports one or more as unsupported");
         }
     }
 
-    // Vulkan 1.2 features — descriptor indexing for bindless textures.
+    // Vulkan 1.2 features — descriptor indexing for bindless textures,
+    // timeline semaphores for upload completion tracking.
     vkhpp::PhysicalDeviceVulkan12Features v12;
     v12.descriptorIndexing                                    = VK_TRUE;
     v12.runtimeDescriptorArray                                = VK_TRUE;
@@ -145,6 +147,7 @@ found:
     v12.descriptorBindingPartiallyBound                       = VK_TRUE;
     v12.descriptorBindingVariableDescriptorCount              = VK_TRUE;
     v12.descriptorBindingUpdateUnusedWhilePending             = VK_TRUE;
+    v12.timelineSemaphore                                     = VK_TRUE;
 
     // Vulkan 1.3 features. Dynamic rendering + synchronization 2 are used
     // throughout; extendedDynamicState (topology, depth bias, etc.) is core
@@ -180,6 +183,22 @@ found:
     vkhpp::DeviceCreateInfo dci({}, qci, {}, dev_exts, &feats, &v13);
     device_ = vkhpp::raii::Device(physical_, dci);
     queue_ = (*device_).getQueue(queue_family_, 0);
+
+    // --- Upload timeline semaphore ---
+    // Shared monotonic counter for async texture uploads. Replaces the
+    // per-upload VkFence + fence pool in TextureManager; a single
+    // vkGetSemaphoreCounterValue read at poll time lets the caller
+    // compare against every pending upload's stored value in O(n)
+    // memory, O(1) kernel calls.
+    {
+        vkhpp::SemaphoreTypeCreateInfo ti;
+        ti.semaphoreType = vkhpp::SemaphoreType::eTimeline;
+        ti.initialValue  = 0;
+        vkhpp::SemaphoreCreateInfo sci;
+        sci.pNext = &ti;
+        upload_timeline_raii_ = vkhpp::raii::Semaphore(device_, sci);
+        upload_timeline_      = *upload_timeline_raii_;
+    }
 
     // --- VMA ---
     VmaAllocatorCreateInfo ai{};

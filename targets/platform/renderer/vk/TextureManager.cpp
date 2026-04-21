@@ -20,7 +20,6 @@ void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
 
     textures_.reserve(256);
     pending_uploads_.reserve(16);
-    fence_pool_.reserve(16);
 
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
@@ -60,8 +59,6 @@ void TextureManager::destroy(VkDevice device, VmaAllocator /*allocator*/) {
     staging_ring_map_ = nullptr;
 
     if (upload_pool_) vkDestroyCommandPool(device, upload_pool_, nullptr);
-    for (VkFence f : fence_pool_) vkDestroyFence(device, f, nullptr);
-    fence_pool_.clear();
 
     // Destroy image views here; VmaImage destructors run inside textures_'
     // destructor (or clear()) and take care of the images themselves.
@@ -107,39 +104,15 @@ TextureManager::ring_reserve(VkDeviceSize bytes) {
 }
 
 // ===================================================================
-// FENCE POOL
+// TIMELINE-BASED UPLOAD COMPLETION
 // ===================================================================
-
-VkFence TextureManager::acquire_fence() {
-    // Dedicated mutex: fence_pool_ lives outside the texture state, and
-    // acquire_fence is called from worker-thread upload paths without
-    // texture_mutex_ held while release_fence runs under texture_mutex_.
-    {
-        std::lock_guard lk(fence_pool_mutex_);
-        if (!fence_pool_.empty()) {
-            VkFence f = fence_pool_.back();
-            fence_pool_.pop_back();
-            return f;
-        }
-    }
-    // Slow path (pool empty) — create a fresh fence outside the lock.
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    VkFence f = VK_NULL_HANDLE;
-    check(vkCreateFence(device_, &fci, nullptr, &f), "upload fence");
-    return f;
-}
-
-void TextureManager::release_fence(VkFence f) {
-    std::lock_guard lk(fence_pool_mutex_);
-    fence_pool_.push_back(f);
-}
 
 void TextureManager::complete_upload(PendingUpload& pu) {
     if (pu.orphan_image || pu.orphan_view) {
         // free() was called on this texture while the upload was still
-        // in flight. The fence is now signalled — destroy the handles.
-        // Do NOT write_slot: free() already redirected the bindless
-        // slot to the default view.
+        // in flight. The timeline has reached pu.timeline_value — safe
+        // to destroy. Do NOT write_slot: free() already redirected the
+        // bindless slot to the default view.
         if (pu.orphan_view)
             vkDestroyImageView(device_, pu.orphan_view, nullptr);
         pu.orphan_image.reset();
@@ -160,10 +133,9 @@ void TextureManager::complete_upload(PendingUpload& pu) {
         // erase it only after complete_upload returns), so scan every
         // OTHER entry and clamp tail to the minimum ring_begin among
         // them. This ensures the tail never passes the start of a
-        // reservation whose GPU copy is still in flight — the fence
-        // signal order on the graphics queue can differ from the
-        // reservation order if two workers submit between their own
-        // ring_reserve and submit2 calls.
+        // reservation whose GPU copy is still in flight — timeline
+        // signal order can differ from reservation order if two workers
+        // submit between their own ring_reserve and submit2 calls.
         VkDeviceSize new_tail = staging_ring_head_;
         for (const auto& other : pending_uploads_) {
             if (&other == &pu) continue;
@@ -179,14 +151,19 @@ void TextureManager::complete_upload(PendingUpload& pu) {
         std::lock_guard pool_lk(upload_pool_mutex_);
         vkFreeCommandBuffers(device_, upload_pool_, 1, &pu.cmd);
     }
-    vkResetFences(device_, 1, &pu.fence);
-    release_fence(pu.fence);
+    // No fence to release — timeline semaphore is shared + monotonic.
 }
 
 void TextureManager::poll_uploads() {
     std::lock_guard lk(texture_mutex_);
+    if (pending_uploads_.empty()) return;
+    // One kernel call polls every pending upload at once. Replaces the
+    // per-fence vkGetFenceStatus loop.
+    uint64_t current = 0;
+    if (vkGetSemaphoreCounterValue(device_, dev_->upload_timeline(), &current) != VK_SUCCESS)
+        return;
     for (auto it = pending_uploads_.begin(); it != pending_uploads_.end(); ) {
-        if (vkGetFenceStatus(device_, it->fence) == VK_SUCCESS) {
+        if (it->timeline_value <= current) {
             complete_upload(*it);
             it = pending_uploads_.erase(it);
         } else {
@@ -199,7 +176,12 @@ void TextureManager::wait_for_upload(int texture_idx) {
     // Caller holds texture_mutex_.
     for (auto it = pending_uploads_.begin(); it != pending_uploads_.end(); ++it) {
         if (it->texture_idx == texture_idx) {
-            vkWaitForFences(device_, 1, &it->fence, VK_TRUE, UINT64_MAX);
+            VkSemaphore sem = dev_->upload_timeline();
+            VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            wi.semaphoreCount = 1;
+            wi.pSemaphores    = &sem;
+            wi.pValues        = &it->timeline_value;
+            vkWaitSemaphores(device_, &wi, UINT64_MAX);
             complete_upload(*it);
             pending_uploads_.erase(it);
             return;
@@ -210,13 +192,17 @@ void TextureManager::wait_for_upload(int texture_idx) {
 void TextureManager::wait_all_uploads() {
     std::lock_guard lk(texture_mutex_);
     if (pending_uploads_.empty()) return;
-    // Single vkWaitForFences with all fences — the driver batches the
-    // wait internally, one syscall instead of N.
-    std::vector<VkFence> fences;
-    fences.reserve(pending_uploads_.size());
-    for (const auto& pu : pending_uploads_) fences.push_back(pu.fence);
-    vkWaitForFences(device_, uint32_t(fences.size()), fences.data(),
-                    VK_TRUE, UINT64_MAX);
+    // Wait for the highest pending timeline value — once the counter
+    // reaches it, every earlier submit has also completed.
+    uint64_t max_value = 0;
+    for (const auto& pu : pending_uploads_)
+        if (pu.timeline_value > max_value) max_value = pu.timeline_value;
+    VkSemaphore sem = dev_->upload_timeline();
+    VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wi.semaphoreCount = 1;
+    wi.pSemaphores    = &sem;
+    wi.pValues        = &max_value;
+    vkWaitSemaphores(device_, &wi, UINT64_MAX);
     for (auto& pu : pending_uploads_) complete_upload(pu);
     pending_uploads_.clear();
 }
@@ -487,21 +473,26 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         vkEndCommandBuffer(cmd);
     }
 
-    VkFence fence = acquire_fence();
+    const uint64_t tv = dev_->next_upload_timeline_value();
+    VkSemaphoreSubmitInfo sig{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    sig.semaphore = dev_->upload_timeline();
+    sig.value     = tv;
+    sig.stageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
     VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     csi.commandBuffer = cmd;
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-    check(dev_->submit2(1, &sub, fence), "tex update submit");
+    sub.commandBufferInfoCount   = 1; sub.pCommandBufferInfos   = &csi;
+    sub.signalSemaphoreInfoCount = 1; sub.pSignalSemaphoreInfos = &sig;
+    check(dev_->submit2(1, &sub, VK_NULL_HANDLE), "tex update submit");
 
     std::lock_guard lk(texture_mutex_);
     PendingUpload pu;
-    pu.fence       = fence;
-    pu.cmd         = cmd;
-    pu.staging     = std::move(oneshot_staging);
-    pu.ring_begin  = ring_begin;
-    pu.ring_end    = ring_end;
-    pu.texture_idx = idx;
+    pu.timeline_value = tv;
+    pu.cmd            = cmd;
+    pu.staging        = std::move(oneshot_staging);
+    pu.ring_begin     = ring_begin;
+    pu.ring_end       = ring_end;
+    pu.texture_idx    = idx;
     pending_uploads_.push_back(std::move(pu));
     textures_[idx].ready = false;
 }
@@ -524,22 +515,26 @@ int TextureManager::ensure_default_lightmap() {
     return idx;
 }
 
-// Snapshot the upload fence for `idx` under texture_mutex_, release the
-// mutex, wait on the fence outside, then re-acquire to finalise via
-// wait_for_upload. Same shape as upload_texture's prior-drain path —
-// avoids blocking other threads on texture_mutex_ for the duration of
-// the fence wait. At worst wait_for_upload does a tiny zero-wait poll
-// if the upload already completed.
+// Snapshot the upload's timeline value for `idx` under texture_mutex_,
+// release the mutex, wait on the shared timeline outside, then
+// re-acquire to finalise via wait_for_upload. Same shape as
+// upload_texture's prior-drain path — avoids blocking other threads on
+// texture_mutex_ for the duration of the wait.
 void TextureManager::drain_pending_for(int idx) {
-    VkFence pending = VK_NULL_HANDLE;
+    uint64_t pending_value = 0;
     {
         std::lock_guard lk(texture_mutex_);
         for (const auto& pu : pending_uploads_) {
-            if (pu.texture_idx == idx) { pending = pu.fence; break; }
+            if (pu.texture_idx == idx) { pending_value = pu.timeline_value; break; }
         }
     }
-    if (pending) {
-        vkWaitForFences(device_, 1, &pending, VK_TRUE, UINT64_MAX);
+    if (pending_value != 0) {
+        VkSemaphore sem = dev_->upload_timeline();
+        VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        wi.semaphoreCount = 1;
+        wi.pSemaphores    = &sem;
+        wi.pValues        = &pending_value;
+        vkWaitSemaphores(device_, &wi, UINT64_MAX);
     }
     std::lock_guard lk(texture_mutex_);
     wait_for_upload(idx);
@@ -547,18 +542,22 @@ void TextureManager::drain_pending_for(int idx) {
 
 void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     // Drain any prior upload for this slot WITHOUT holding texture_mutex_
-    // across the fence wait — other threads would otherwise block on
-    // bind() / resolve_bound_slot / poll_uploads for the duration of
-    // the wait.
-    VkFence prior_fence = VK_NULL_HANDLE;
+    // across the wait — other threads would otherwise block on
+    // bind() / resolve_bound_slot / poll_uploads for the duration.
+    uint64_t prior_value = 0;
     {
         std::lock_guard lk(texture_mutex_);
         for (const auto& pu : pending_uploads_) {
-            if (pu.texture_idx == idx) { prior_fence = pu.fence; break; }
+            if (pu.texture_idx == idx) { prior_value = pu.timeline_value; break; }
         }
     }
-    if (prior_fence) {
-        vkWaitForFences(device_, 1, &prior_fence, VK_TRUE, UINT64_MAX);
+    if (prior_value != 0) {
+        VkSemaphore sem = dev_->upload_timeline();
+        VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        wi.semaphoreCount = 1;
+        wi.pSemaphores    = &sem;
+        wi.pValues        = &prior_value;
+        vkWaitSemaphores(device_, &wi, UINT64_MAX);
     }
 
     // Snapshot the slot under the lock, then drop it for the long image
@@ -770,21 +769,26 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         vkEndCommandBuffer(cmd);
     }
 
-    VkFence fence = acquire_fence();
+    const uint64_t tv = dev_->next_upload_timeline_value();
+    VkSemaphoreSubmitInfo sig{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    sig.semaphore = dev_->upload_timeline();
+    sig.value     = tv;
+    sig.stageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
     VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     csi.commandBuffer = cmd;
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
-    check(dev_->submit2(1, &sub, fence), "texture upload submit");
+    sub.commandBufferInfoCount   = 1; sub.pCommandBufferInfos   = &csi;
+    sub.signalSemaphoreInfoCount = 1; sub.pSignalSemaphoreInfos = &sig;
+    check(dev_->submit2(1, &sub, VK_NULL_HANDLE), "texture upload submit");
 
     std::lock_guard lk(texture_mutex_);
     PendingUpload pu;
-    pu.fence       = fence;
-    pu.cmd         = cmd;
-    pu.staging     = std::move(oneshot_staging);
-    pu.ring_begin  = ring_begin;
-    pu.ring_end    = ring_end;
-    pu.texture_idx = idx;
+    pu.timeline_value = tv;
+    pu.cmd            = cmd;
+    pu.staging        = std::move(oneshot_staging);
+    pu.ring_begin     = ring_begin;
+    pu.ring_end       = ring_end;
+    pu.texture_idx    = idx;
     pending_uploads_.push_back(std::move(pu));
 }
 

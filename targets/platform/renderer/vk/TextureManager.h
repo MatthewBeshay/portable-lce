@@ -82,7 +82,10 @@ public:
 
 private:
     struct PendingUpload {
-        VkFence         fence        = VK_NULL_HANDLE;
+        // Completion value on the Device's shared upload timeline
+        // semaphore. The upload is complete when vkGetSemaphoreCounter-
+        // Value(device, upload_timeline_) >= this value.
+        uint64_t        timeline_value = 0;
         VkCommandBuffer cmd          = VK_NULL_HANDLE;
         // One-shot fallback path: populated when the upload did not fit in
         // the persistent staging ring. VmaBuffer destructor runs when
@@ -134,14 +137,12 @@ private:
     /// freed slots at the 1×1 default texture before deleting the old view).
     void write_slot_with_view(int idx, VkImageView view);
 
-    VkFence acquire_fence();
-    void    release_fence(VkFence);
     void    complete_upload(PendingUpload& pu);
     void    wait_for_upload(int texture_idx);
     void    wait_all_uploads();
     // Shared drain pattern for ensure_default_* — snapshot any pending
-    // upload fence for `idx` under the mutex, wait on it outside, then
-    // re-acquire to finalise via wait_for_upload.
+    // upload's timeline value for `idx` under the mutex, wait on it
+    // outside, then re-acquire to finalise via wait_for_upload.
     void    drain_pending_for(int idx);
 
     const Device* dev_       = nullptr;  // non-owning; guarded submits
@@ -183,8 +184,6 @@ private:
     mutable std::mutex staging_ring_mutex_;
 
     std::vector<PendingUpload> pending_uploads_;
-    std::vector<VkFence>       fence_pool_;
-    mutable std::mutex         fence_pool_mutex_;
 
     std::vector<TextureSlot> textures_;
     int default_tex_  = 0;
