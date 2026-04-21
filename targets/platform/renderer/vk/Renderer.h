@@ -98,7 +98,6 @@ public:
     void TextureSetTextureLevels(int) override {}
     void TextureData(int w, int h, void* data, int level, int format) override;
     void TextureDataUpdate(int xo, int yo, int w, int h, void* data, int lvl) override;
-    void TextureSetParam(int param, int value) override;
     [[nodiscard]] int TextureGetTextureLevels() override { return 1; }
 
     // -- State --

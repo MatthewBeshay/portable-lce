@@ -506,14 +506,6 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     textures_[idx].ready = false;
 }
 
-void TextureManager::set_param(int /*param*/, int /*value*/) {
-    // No-op under the bindless layout: diffuse textures all share the
-    // immutable diffuse sampler baked into the descriptor set layout
-    // (Renderer.cpp). Per-texture filter/wrap variations are unsupported
-    // by design. If a caller needs them, add a second sampler binding
-    // and a selector bit in the push constant — not a silent store.
-}
-
 int TextureManager::ensure_default_texture() {
     int idx = create();
     uint32_t pixel = 0xFFFFFFFF;

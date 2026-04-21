@@ -981,124 +981,43 @@ void BgfxRenderPath::TextureBindVertex(int idx, bool scaleLight) {
 
 void BgfxRenderPath::TextureSetTextureLevels(int) {}
 
-void BgfxRenderPath::TextureSetParam(int param, int value) {
-    // translate OpenGL sampler params to bgfx sampler flags
-
-    constexpr int GL_TEXTURE_MIN_FILTER = 0x2801;
-    constexpr int GL_TEXTURE_MAG_FILTER = 0x2800;
-    constexpr int GL_TEXTURE_WRAP_S = 0x2802;
-    constexpr int GL_TEXTURE_WRAP_T = 0x2803;
-    constexpr int GL_NEAREST = 0x2600;
-    constexpr int GL_LINEAR = 0x2601;
-    constexpr int GL_NEAREST_MIPMAP_NEAREST = 0x2700;
-    constexpr int GL_LINEAR_MIPMAP_NEAREST = 0x2701;
-    constexpr int GL_NEAREST_MIPMAP_LINEAR = 0x2702;
-    constexpr int GL_LINEAR_MIPMAP_LINEAR = 0x2703;
-    constexpr int GL_REPEAT = 0x2901;
-    constexpr int GL_CLAMP_TO_EDGE = 0x812F;
-    constexpr int GL_MIRRORED_REPEAT = 0x8370;
-
-    if (state_.bound_texture < 0) return;
-
-    auto& pending = gl_tex_to_bgfx_[state_.bound_texture];
-
-    uint32_t& f = pending.sampler_flags;
-
-    switch (param) {
-        case GL_TEXTURE_MIN_FILTER:
-            f &= ~(BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT);
-            switch (value) {
-                case GL_NEAREST:
-                    f |= BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT;
-                    break;
-                case GL_LINEAR:
-                    f |= BGFX_SAMPLER_MIP_POINT;
-                    break;
-                case GL_NEAREST_MIPMAP_NEAREST:
-                    f |= BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT;
-                    break;
-                case GL_LINEAR_MIPMAP_NEAREST:
-                    f |= BGFX_SAMPLER_MIP_POINT;
-                    break;
-                case GL_NEAREST_MIPMAP_LINEAR:
-                    f |= BGFX_SAMPLER_MIN_POINT;
-                    break;
-                case GL_LINEAR_MIPMAP_LINEAR:
-                    // both point bits already cleared above
-                    break;
-                default:
-                    break;
-            }
-            break;
-
-        case GL_TEXTURE_MAG_FILTER:
-            f &= ~BGFX_SAMPLER_MAG_POINT;
-            if (value == GL_NEAREST) f |= BGFX_SAMPLER_MAG_POINT;
-            // bgfx default is bilinear mag
-            break;
-
-        case GL_TEXTURE_WRAP_S:
-            f &= ~(BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_U_MIRROR);
-            switch (value) {
-                case GL_CLAMP_TO_EDGE:
-                    f |= BGFX_SAMPLER_U_CLAMP;
-                    break;
-                case GL_MIRRORED_REPEAT:
-                    f |= BGFX_SAMPLER_U_MIRROR;
-                    break;
-                case GL_REPEAT:
-                default:
-                    // bgfx default is wrap
-                    break;
-            }
-            break;
-
-        case GL_TEXTURE_WRAP_T:
-            f &= ~(BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_V_MIRROR);
-            switch (value) {
-                case GL_CLAMP_TO_EDGE:
-                    f |= BGFX_SAMPLER_V_CLAMP;
-                    break;
-                case GL_MIRRORED_REPEAT:
-                    f |= BGFX_SAMPLER_V_MIRROR;
-                    break;
-                case GL_REPEAT:
-                default:
-                    break;
-            }
-            break;
-
-        default:
-            break;
-    }
-
-    auto it = gl_tex_to_bgfx_.find(state_.bound_texture);
-    if (it != gl_tex_to_bgfx_.end()) {
-        it->second.sampler_flags = f;
-        if (state_.bound_texture == it->first)
-            state_.bound_texture_sampler_flags = f;
-    }
-}
-
 void BgfxRenderPath::StateSetTextureFilter(rp::TextureFilter min,
                                            rp::TextureFilter mag) {
-    const int min_gl = (min == rp::TextureFilter::linear) ? 0x2601 : 0x2600;
-    const int mag_gl = (mag == rp::TextureFilter::linear) ? 0x2601 : 0x2600;
-    TextureSetParam(0x2801, min_gl);
-    TextureSetParam(0x2800, mag_gl);
+    if (state_.bound_texture < 0) return;
+    auto& pending = gl_tex_to_bgfx_[state_.bound_texture];
+    uint32_t& f = pending.sampler_flags;
+
+    // Min: bgfx encodes "nearest" via MIN_POINT | MIP_POINT, "linear" via
+    // MIP_POINT only (linear min, nearest mip). We don't expose mipmap
+    // filter variants at the rp layer, so pick MIP_POINT always —
+    // matches the previous TextureSetParam path for TFLT_NEAREST/LINEAR.
+    f &= ~(BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MIP_POINT);
+    f |= BGFX_SAMPLER_MIP_POINT;
+    if (min == rp::TextureFilter::nearest) f |= BGFX_SAMPLER_MIN_POINT;
+
+    // Mag: bgfx default is bilinear; MAG_POINT forces nearest.
+    f &= ~BGFX_SAMPLER_MAG_POINT;
+    if (mag == rp::TextureFilter::nearest) f |= BGFX_SAMPLER_MAG_POINT;
+
+    if (state_.bound_texture == state_.bound_texture)
+        state_.bound_texture_sampler_flags = f;
 }
 
 void BgfxRenderPath::StateSetTextureWrap(rp::TextureWrap s, rp::TextureWrap t) {
-    auto to_gl = [](rp::TextureWrap w) {
-        switch (w) {
-            case rp::TextureWrap::repeat:          return 0x2901;
-            case rp::TextureWrap::clamp_to_edge:   return 0x812F;
-            case rp::TextureWrap::mirrored_repeat: return 0x8370;
-        }
-        return 0x2901;
-    };
-    TextureSetParam(0x2802, to_gl(s));
-    TextureSetParam(0x2803, to_gl(t));
+    if (state_.bound_texture < 0) return;
+    auto& pending = gl_tex_to_bgfx_[state_.bound_texture];
+    uint32_t& f = pending.sampler_flags;
+
+    // bgfx default is wrap; flag bits switch to clamp or mirror.
+    f &= ~(BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_U_MIRROR);
+    if (s == rp::TextureWrap::clamp_to_edge)   f |= BGFX_SAMPLER_U_CLAMP;
+    else if (s == rp::TextureWrap::mirrored_repeat) f |= BGFX_SAMPLER_U_MIRROR;
+
+    f &= ~(BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_V_MIRROR);
+    if (t == rp::TextureWrap::clamp_to_edge)   f |= BGFX_SAMPLER_V_CLAMP;
+    else if (t == rp::TextureWrap::mirrored_repeat) f |= BGFX_SAMPLER_V_MIRROR;
+
+    state_.bound_texture_sampler_flags = f;
 }
 
 void BgfxRenderPath::TextureData(int width, int height, void* data, int level,

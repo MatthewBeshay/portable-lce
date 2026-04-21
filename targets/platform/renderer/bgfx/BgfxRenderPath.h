@@ -73,7 +73,6 @@ public:
                      int format) override;
     void TextureDataUpdate(int xoff, int yoff, int w, int h, void* data,
                            int level) override;
-    void TextureSetParam(int param, int value) override;
 
     void StateSetColour(float r, float g, float b, float a) override;
     void StateSetDepthMask(bool enable) override;

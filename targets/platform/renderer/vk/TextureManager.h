@@ -34,9 +34,9 @@ struct TextureSlot {
 ///
 /// Per-texture sampler variation is NOT supported: every diffuse texture uses
 /// the immutable diffuse sampler baked into the layout (nearest, mipmap-linear,
-/// repeat). TextureSetParam is therefore a no-op with a diagnostic log; adding
-/// per-texture samplers would require a second sampler binding and a selector
-/// bit in the push constant.
+/// repeat). Callers that would customise per-texture sampler state are
+/// silently ignored; adding per-texture samplers would require a second
+/// sampler binding and a selector bit in the push constant.
 class Device;  // forward decl
 
 class TextureManager {
@@ -55,7 +55,6 @@ public:
     void bind_vertex(int idx) { lightmap_tex_ = idx; }
     void data(int w, int h, const void* pixels, int level);
     void data_update(int xo, int yo, int w, int h, const void* data, int level);
-    void set_param(int param, int value);
 
     /// Poll pending upload fences, mark completed textures ready, free staging.
     /// Called once per frame from Renderer::StartFrame.

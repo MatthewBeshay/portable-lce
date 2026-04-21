@@ -79,11 +79,24 @@ void Texture::_init(const std::string& name, int mode, int width, int height,
     if (mode != TM_CONTAINER) {
         glId = glGenTextures();
 
+        // Translate the legacy GL filter/wrap enums the callers still pass
+        // (Texture::TFLT_NEAREST, Texture::WM_WRAP, etc.) into the typed
+        // renderer semantics. Unknown values are left as the backend's
+        // default (nearest, repeat) — only the values actually used in
+        // the codebase are mapped.
+        const rp::TextureFilter min_f = (minFilter == 0x2601)
+                                            ? rp::TextureFilter::linear
+                                            : rp::TextureFilter::nearest;
+        const rp::TextureFilter mag_f = (magFilter == 0x2601)
+                                            ? rp::TextureFilter::linear
+                                            : rp::TextureFilter::nearest;
+        const rp::TextureWrap wrap =
+            (wrapMode == 0x812F || wrapMode == 0x2900)
+                ? rp::TextureWrap::clamp_to_edge
+                : rp::TextureWrap::repeat;
         RenderPath.TextureBind(glId);
-        RenderPath.TextureSetParam(0x2801, minFilter);
-        RenderPath.TextureSetParam(0x2800, magFilter);
-        RenderPath.TextureSetParam(0x2802, wrapMode);
-        RenderPath.TextureSetParam(0x2803, wrapMode);
+        RenderPath.StateSetTextureFilter(min_f, mag_f);
+        RenderPath.StateSetTextureWrap(wrap, wrap);
     } else {
         glId = -1;
     }

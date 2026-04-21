@@ -404,7 +404,6 @@ public:
                              int format = 0) = 0;
     virtual void TextureDataUpdate(int xoff, int yoff, int w, int h, void* data,
                                    int level) = 0;
-    virtual void TextureSetParam(int param, int value) = 0;
 
     // Render state
     virtual void StateSetColour(float r, float g, float b, float a) = 0;
