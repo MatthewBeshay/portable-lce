@@ -619,7 +619,6 @@ int main(int argc, const char* argv[]) {
         ui.CheckMenuDisplayed();
         // has the game defined profile data been changed (by a profile load)
         if (app.uiGameDefinedDataChangedBitmask != 0) {
-            void* pData;
             for (int i = 0; i < XUSER_MAX_COUNT; i++) {
                 if (app.uiGameDefinedDataChangedBitmask & (1 << i)) {
                     // reset the changed flag
@@ -636,12 +635,10 @@ int main(int argc, const char* argv[]) {
                         app.ActionDebugMask(i, true);
                     }
 #endif
-                    // clear the stats first - there could have beena signout
-                    // and sign back in in the menus need to clear the player
-                    // stats - can't assume it'll be done in setlevel - we may
-                    // not be in the game
+                    // Desktop has no console profile-data blob to parse, so
+                    // only clear the per-player stats; original xbox code
+                    // fed a profile buffer here via parse().
                     pMinecraft->stats[i]->clear();
-                    pMinecraft->stats[i]->parse(pData);
                 }
             }
 
