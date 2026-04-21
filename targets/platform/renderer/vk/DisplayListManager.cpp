@@ -193,6 +193,9 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
     cb.vb_size = needed;
 
     std::memcpy(info.pMappedData, combined.data(), needed);
+    // Flush is a no-op on coherent memory; required on non-coherent
+    // iGPU / mobile paths where the GPU would otherwise read stale data.
+    vmaFlushAllocation(allocator, cb.vb.allocation(), 0, needed);
     cb.uploaded = true;
 }
 

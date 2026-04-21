@@ -232,6 +232,7 @@ Renderer::Renderer(SDL_Window* window)
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         check(vmaCreateBuffer(dev_.allocator(), &sci, &sai, &stg, &sa, &si), "quad ib staging");
         std::memcpy(si.pMappedData, indices.data(), bytes);
+        vmaFlushAllocation(dev_.allocator(), sa, 0, bytes);
 
         VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -356,6 +357,7 @@ void Renderer::Present() {
     auto& f = frame();
     ensure_pass();
     end_pass();
+    f.flush_transient_writes(dev_.allocator());
     f.end_cmd();
 
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};

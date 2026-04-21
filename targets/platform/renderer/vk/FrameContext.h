@@ -33,6 +33,15 @@ public:
     /// End command buffer recording.
     void end_cmd() { vkEndCommandBuffer(cmd); }
 
+    /// Flush the range of the transient VB that was written this frame.
+    /// No-op on coherent memory; required before the GPU reads the data
+    /// on non-coherent iGPU / mobile paths. Call once per frame from
+    /// Renderer::Present before submit2.
+    void flush_transient_writes(VmaAllocator alloc) {
+        if (transient_offset_ == 0 || !transient) return;
+        vmaFlushAllocation(alloc, transient.allocation(), 0, transient_offset_);
+    }
+
     /// Destroy and recreate sem_acquired. Used on swapchain recreation:
     /// after a VK_SUBOPTIMAL_KHR return, vkAcquireNextImageKHR has already
     /// signaled the semaphore, and calling acquire a second time with the

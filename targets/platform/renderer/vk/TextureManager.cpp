@@ -400,6 +400,15 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         src_buf = oneshot_staging.handle();
     }
     std::memcpy(src_map, data, bytes);
+    // Flush is a no-op when the allocation happens to be coherent (the
+    // desktop-typical case); on non-coherent memory — some iGPUs, some
+    // mobile — it's required before the GPU reads the range.
+    if (res) {
+        vmaFlushAllocation(allocator_, staging_ring_.allocation(),
+                           src_offset, bytes);
+    } else {
+        vmaFlushAllocation(allocator_, oneshot_staging.allocation(), 0, bytes);
+    }
 
     VkCommandBuffer cmd;
     {
@@ -610,6 +619,13 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         src_buf = oneshot_staging.handle();
     }
     std::memcpy(src_map, pixels, bytes);
+    // See data_update for rationale — no-op on coherent memory.
+    if (res) {
+        vmaFlushAllocation(allocator_, staging_ring_.allocation(),
+                           src_offset, bytes);
+    } else {
+        vmaFlushAllocation(allocator_, oneshot_staging.allocation(), 0, bytes);
+    }
 
     VkCommandBuffer cmd;
     {
