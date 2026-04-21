@@ -74,7 +74,7 @@ void DisplayListManager::clear(int index, std::vector<VmaBuffer>& pending,
 }
 
 int DisplayListManager::size(int index) {
-    std::lock_guard lk(display_list_mutex_);
+    std::shared_lock<std::shared_mutex> lk(display_list_mutex_);
     if (index < 0 || size_t(index) >= display_lists_.size()) return 0;
     return display_lists_[index].valid ? 1 : 0;
 }
@@ -117,12 +117,35 @@ bool DisplayListManager::is_recording() const {
 
 DisplayListManager::PreparedHandle DisplayListManager::prepare(
         int index, DeletionQueue& deletions, VmaAllocator allocator) {
-    std::unique_lock<std::mutex> lk(display_list_mutex_);
+    // Fast path: already uploaded. Multiple CBuffCall readers can hold a
+    // shared lock in parallel without serialising on the mutex.
+    {
+        std::shared_lock<std::shared_mutex> sk(display_list_mutex_);
+        if (index < 0 || size_t(index) >= display_lists_.size()) return {};
+        const auto& cb = display_lists_[index];
+        if (!cb.valid || cb.draws.empty()) return {};
+        if (cb.uploaded) {
+            return PreparedHandle(std::move(sk), &cb);
+        }
+    }
+    // Slow path: upload needed. Take the writer lock.
+    {
+        std::unique_lock<std::shared_mutex> uk(display_list_mutex_);
+        if (index < 0 || size_t(index) >= display_lists_.size()) return {};
+        auto& cb = display_lists_[index];
+        if (!cb.valid || cb.draws.empty()) return {};
+        if (!cb.uploaded) {
+            upload(cb, deletions, allocator);
+            if (!cb.uploaded) return {};
+        }
+    }
+    // Re-acquire shared lock for the returned handle. A writer could
+    // clear() the buffer between the two locks; re-verify.
+    std::shared_lock<std::shared_mutex> sk(display_list_mutex_);
     if (index < 0 || size_t(index) >= display_lists_.size()) return {};
-    auto& cb = display_lists_[index];
-    if (!cb.valid || cb.draws.empty()) return {};
-    if (!cb.uploaded) { upload(cb, deletions, allocator); if (!cb.uploaded) return {}; }
-    return PreparedHandle(std::move(lk), &cb);
+    const auto& cb2 = display_lists_[index];
+    if (!cb2.valid || !cb2.uploaded) return {};
+    return PreparedHandle(std::move(sk), &cb2);
 }
 
 void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
@@ -168,12 +191,11 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
         } else if (d.primType == 0x0006) {
             // Fan -> triangles
             if (vert_count < 3) continue;
-            int fan_count = vert_count;
-            auto fan_data = fan_to_list(src, fan_count);
-            if (fan_count == 0) continue;
+            auto fan = fan_to_list(src, vert_count);
+            if (fan.vertex_count == 0) continue;
             uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(), fan_data.begin(), fan_data.end());
-            cb.gpu_draws.push_back({byte_off, uint32_t(fan_count), 0x0004, /*compact=*/false});
+            combined.insert(combined.end(), fan.data.begin(), fan.data.end());
+            cb.gpu_draws.push_back({byte_off, uint32_t(fan.vertex_count), 0x0004, /*compact=*/false});
         } else {
             uint32_t byte_off = uint32_t(combined.size());
             combined.insert(combined.end(), src, src + sz);

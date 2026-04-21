@@ -246,6 +246,10 @@ private:
 
     rp::ViewportLayout viewport_layout_ = rp::ViewportLayout::fullscreen;
     bool               viewport_dirty_  = false;
+    // Pre-computed image-space rects for every ViewportLayout, rebuilt at
+    // swapchain create + resize. apply_viewport_and_scissor indexes this
+    // array instead of re-deriving the rect per dirty tick.
+    std::array<VkRect2D, 9> viewport_rects_{};
     std::array<float, 2> global_lm_uv_{240, 240};
 
     // Matrix stacks. Depth starts at 1 (identity). The game pushes at most
@@ -295,6 +299,9 @@ private:
     // (image-space rect) for the current viewport_layout_ and swapchain
     // extent. Applied when viewport_dirty_ or at begin_pass.
     void apply_viewport_and_scissor();
+    // Populate viewport_rects_ from the current swapchain extent. Cheap
+    // pure-CPU work — called from resize() and after swapchain create.
+    void rebuild_viewport_rects();
 };
 
 }  // namespace plce::vk

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <shared_mutex>
 #include <vector>
 
 #include "DeletionQueue.h"
@@ -53,12 +54,14 @@ public:
 
     /// RAII handle returned by prepare(): keeps the manager mutex locked
     /// for its lifetime so the caller can read the DisplayList's VB and
-    /// sub-draws directly without copying them out. Unlock happens at
-    /// scope exit.
+    /// sub-draws directly without copying them out. prepare() takes a
+    /// shared lock on the fast path (already uploaded) so multiple
+    /// CBuffCall readers proceed in parallel; the slow path (upload
+    /// needed) temporarily escalates to an exclusive lock then downgrades.
     class PreparedHandle {
     public:
         PreparedHandle() = default;
-        PreparedHandle(std::unique_lock<std::mutex> lk, const DisplayList* dl)
+        PreparedHandle(std::shared_lock<std::shared_mutex> lk, const DisplayList* dl)
             : lock_(std::move(lk)), dl_(dl) {}
 
         PreparedHandle(const PreparedHandle&) = delete;
@@ -71,8 +74,8 @@ public:
         [[nodiscard]] const std::vector<DisplayListSubDraw>& draws() const noexcept { return dl_->gpu_draws; }
 
     private:
-        std::unique_lock<std::mutex> lock_;
-        const DisplayList*           dl_ = nullptr;
+        std::shared_lock<std::shared_mutex> lock_;
+        const DisplayList*                  dl_ = nullptr;
     };
 
     /// Locks the manager, uploads the display list if needed, and returns a
@@ -91,7 +94,10 @@ private:
 
     std::vector<DisplayList> display_lists_;
     int next_display_list_ = 1;
-    mutable std::mutex display_list_mutex_;
+    // shared_mutex so many CBuffCall readers can hold PreparedHandles in
+    // parallel. Writers (start/end/clear/create/delete_all) still take
+    // the lock exclusively.
+    mutable std::shared_mutex display_list_mutex_;
 };
 
 }  // namespace plce::vk

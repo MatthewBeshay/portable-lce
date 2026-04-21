@@ -55,6 +55,7 @@ Renderer::Renderer(SDL_Window* window)
 #else
     swap_.create(dev_, 0, 0, VK_PRESENT_MODE_MAILBOX_KHR);
 #endif
+    rebuild_viewport_rects();
 
     for (auto& f : frames_)
         f.create(dev_.handle(), dev_.allocator(), dev_.queue_family());
@@ -484,52 +485,42 @@ void Renderer::begin_pass() {
                             *pipeline_layout_, 0, 1, &bindless_set_, 0, nullptr);
 }
 
-void Renderer::apply_viewport_and_scissor() {
-    // Translate the current viewport_layout_ into an image-space
-    // rectangle, then emit a Vulkan viewport with negative height so
-    // the existing game-space (Y-up) coordinate system keeps working
-    // under CCW-front-face + back-face cull.
+void Renderer::rebuild_viewport_rects() {
     const uint32_t W = swap_.extent().width;
     const uint32_t H = swap_.extent().height;
-    int32_t  rx = 0, ry = 0;
-    uint32_t rw = W, rh = H;
-    switch (viewport_layout_) {
-        case rp::ViewportLayout::fullscreen:
-            break;
-        case rp::ViewportLayout::split_top:
-            rh = H / 2; break;
-        case rp::ViewportLayout::split_bottom:
-            ry = int32_t(H / 2); rh = H - H / 2; break;
-        case rp::ViewportLayout::split_left:
-            rw = W / 2; break;
-        case rp::ViewportLayout::split_right:
-            rx = int32_t(W / 2); rw = W - W / 2; break;
-        case rp::ViewportLayout::quadrant_top_left:
-            rw = W / 2; rh = H / 2; break;
-        case rp::ViewportLayout::quadrant_top_right:
-            rx = int32_t(W / 2); rw = W - W / 2; rh = H / 2; break;
-        case rp::ViewportLayout::quadrant_bottom_left:
-            ry = int32_t(H / 2); rw = W / 2; rh = H - H / 2; break;
-        case rp::ViewportLayout::quadrant_bottom_right:
-            rx = int32_t(W / 2); ry = int32_t(H / 2);
-            rw = W - W / 2; rh = H - H / 2; break;
-    }
+    auto rect = [](int32_t x, int32_t y, uint32_t w, uint32_t h) {
+        return VkRect2D{{x, y}, {w, h}};
+    };
+    // Order matches rp::ViewportLayout enum.
+    viewport_rects_[int(rp::ViewportLayout::fullscreen)]            = rect(0, 0, W, H);
+    viewport_rects_[int(rp::ViewportLayout::split_top)]             = rect(0, 0, W, H / 2);
+    viewport_rects_[int(rp::ViewportLayout::split_bottom)]          = rect(0, int32_t(H / 2), W, H - H / 2);
+    viewport_rects_[int(rp::ViewportLayout::split_left)]            = rect(0, 0, W / 2, H);
+    viewport_rects_[int(rp::ViewportLayout::split_right)]           = rect(int32_t(W / 2), 0, W - W / 2, H);
+    viewport_rects_[int(rp::ViewportLayout::quadrant_top_left)]     = rect(0, 0, W / 2, H / 2);
+    viewport_rects_[int(rp::ViewportLayout::quadrant_top_right)]    = rect(int32_t(W / 2), 0, W - W / 2, H / 2);
+    viewport_rects_[int(rp::ViewportLayout::quadrant_bottom_left)]  = rect(0, int32_t(H / 2), W / 2, H - H / 2);
+    viewport_rects_[int(rp::ViewportLayout::quadrant_bottom_right)] = rect(int32_t(W / 2), int32_t(H / 2), W - W / 2, H - H / 2);
+}
+
+void Renderer::apply_viewport_and_scissor() {
+    // Index into the pre-computed rect table. Y-flip is applied on the
+    // viewport emit (negative height) so the existing game-space (Y-up)
+    // coordinate system keeps working under CCW-front-face + back-face
+    // cull.
+    const VkRect2D& r = viewport_rects_[int(viewport_layout_)];
 
     VkViewport vp{};
-    vp.x        = float(rx);
-    vp.y        = float(ry + int32_t(rh));  // negative-height Y-flip: y = bottom
-    vp.width    = float(rw);
-    vp.height   = -float(rh);
+    vp.x        = float(r.offset.x);
+    vp.y        = float(r.offset.y + int32_t(r.extent.height));  // negative-height Y-flip
+    vp.width    = float(r.extent.width);
+    vp.height   = -float(r.extent.height);
     vp.minDepth = 0.0f;
     vp.maxDepth = 1.0f;
 
-    VkRect2D sc{};
-    sc.offset = {rx, ry};
-    sc.extent = {rw, rh};
-
     VkCommandBuffer cmd = frame().cmd;
     vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdSetScissor(cmd, 0, 1, &r);
     viewport_dirty_ = false;
 }
 
@@ -610,6 +601,8 @@ void Renderer::resize(uint32_t w, uint32_t h) {
     fb_.aspect = fb_.height > 0 ? float(fb_.width) / float(fb_.height) : 1.0f;
     fb_.is_widescreen = fb_.aspect > 1.5f;
     fb_.is_hi_def     = fb_.height >= 720;
+    rebuild_viewport_rects();
+    viewport_dirty_ = true;
 }
 
 // ===================================================================
@@ -845,12 +838,15 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     // on CPU since it's uncommon and the compact format never uses it).
     const bool is_compact = (vType == 1);
     const void* vdata = data;
-    std::vector<std::byte> fan_expanded;
     if (!is_compact && primType == 0x0006) {
-        fan_expanded = fan_to_list(vdata, count);
-        if (count == 0) return;
-        vdata = fan_expanded.data();
+        auto fan = fan_to_list(vdata, count);
+        if (fan.vertex_count == 0) return;
+        vdata = fan.data.data();
+        count = fan.vertex_count;
         primType = 0x0004;
+        // fan.data is a view into a thread-local scratch; it stays valid
+        // until this function returns since we don't call fan_to_list
+        // again before memcpy-ing into the transient VB below.
     }
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
