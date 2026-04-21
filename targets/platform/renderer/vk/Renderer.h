@@ -126,7 +126,7 @@ public:
     void StateSetLightAmbientColour(float r, float g, float b) override { light_ambient_ = {r,g,b}; }
     void StateSetLightDirection(int idx, float x, float y, float z) override;
     void StateSetLightEnable(int, bool) override {}
-    void StateSetViewport(int) override {}
+    void StateSetViewport(int viewport_type) override;
     void StateSetEnableViewportClipPlanes(bool) override {}
     void StateSetStencil(int, uint8_t, uint8_t, uint8_t) override {}
     void StateSetForceLOD(int lod) override {
@@ -224,6 +224,9 @@ private:
     int  active_tex_unit_  = 0;
     bool texture_enabled_  = true;
     uint32_t force_lod_    = 0xFFu;  // 0xFF = disabled; otherwise 0..15 mipmap LOD
+
+    rp::ViewportLayout viewport_layout_ = rp::ViewportLayout::fullscreen;
+    bool               viewport_dirty_  = false;
     std::array<float, 2> global_lm_uv_{240, 240};
 
     // Matrix stacks. Depth starts at 1 (identity). The game pushes at most
@@ -269,6 +272,10 @@ private:
     void fill_push_constants(void* out, bool textured, bool lm_active,
                              uint32_t tex_id, uint32_t lm_tex_id,
                              const glm::vec4* tint = nullptr);
+    // Compute Vk viewport (with Y-flip via negative height) and scissor
+    // (image-space rect) for the current viewport_layout_ and swapchain
+    // extent. Applied when viewport_dirty_ or at begin_pass.
+    void apply_viewport_and_scissor();
 };
 
 }  // namespace plce::vk

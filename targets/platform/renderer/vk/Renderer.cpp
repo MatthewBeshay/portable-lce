@@ -455,17 +455,75 @@ void Renderer::begin_pass() {
     // Y-flip via negative viewport height (VK_KHR_maintenance1, core in 1.1).
     // Geometry in game space (Y-up) renders with CCW front faces and back-face
     // culling — the canonical Vulkan configuration. No MVP row negation needed.
-    const float w = float(swap_.extent().width);
-    const float h = float(swap_.extent().height);
-    VkViewport vp{0.0f, h, w, -h, 0.0f, 1.0f};
-    VkRect2D sc_r{{0,0}, swap_.extent()};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor(cmd, 0, 1, &sc_r);
+    apply_viewport_and_scissor();
 
     // Bind the bindless descriptor set once per frame. Every draw reads from
     // it via texture id packed into the flags push constant.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             *pipeline_layout_, 0, 1, &bindless_set_, 0, nullptr);
+}
+
+void Renderer::apply_viewport_and_scissor() {
+    // Translate the current viewport_layout_ into an image-space
+    // rectangle, then emit a Vulkan viewport with negative height so
+    // the existing game-space (Y-up) coordinate system keeps working
+    // under CCW-front-face + back-face cull.
+    const uint32_t W = swap_.extent().width;
+    const uint32_t H = swap_.extent().height;
+    int32_t  rx = 0, ry = 0;
+    uint32_t rw = W, rh = H;
+    switch (viewport_layout_) {
+        case rp::ViewportLayout::fullscreen:
+            break;
+        case rp::ViewportLayout::split_top:
+            rh = H / 2; break;
+        case rp::ViewportLayout::split_bottom:
+            ry = int32_t(H / 2); rh = H - H / 2; break;
+        case rp::ViewportLayout::split_left:
+            rw = W / 2; break;
+        case rp::ViewportLayout::split_right:
+            rx = int32_t(W / 2); rw = W - W / 2; break;
+        case rp::ViewportLayout::quadrant_top_left:
+            rw = W / 2; rh = H / 2; break;
+        case rp::ViewportLayout::quadrant_top_right:
+            rx = int32_t(W / 2); rw = W - W / 2; rh = H / 2; break;
+        case rp::ViewportLayout::quadrant_bottom_left:
+            ry = int32_t(H / 2); rw = W / 2; rh = H - H / 2; break;
+        case rp::ViewportLayout::quadrant_bottom_right:
+            rx = int32_t(W / 2); ry = int32_t(H / 2);
+            rw = W - W / 2; rh = H - H / 2; break;
+    }
+
+    VkViewport vp{};
+    vp.x        = float(rx);
+    vp.y        = float(ry + int32_t(rh));  // negative-height Y-flip: y = bottom
+    vp.width    = float(rw);
+    vp.height   = -float(rh);
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+
+    VkRect2D sc{};
+    sc.offset = {rx, ry};
+    sc.extent = {rw, rh};
+
+    VkCommandBuffer cmd = frame().cmd;
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    viewport_dirty_ = false;
+}
+
+void Renderer::StateSetViewport(int viewport_type) {
+    // Caller passes the ViewportLayout enum cast to int (see
+    // Minecraft.cpp:1636). Values outside the enum clamp to fullscreen.
+    rp::ViewportLayout layout = rp::ViewportLayout::fullscreen;
+    if (viewport_type >= 0 &&
+        viewport_type <= int(rp::ViewportLayout::quadrant_bottom_right)) {
+        layout = static_cast<rp::ViewportLayout>(viewport_type);
+    }
+    if (layout != viewport_layout_) {
+        viewport_layout_ = layout;
+        viewport_dirty_  = true;
+    }
 }
 
 void Renderer::end_pass() {
@@ -793,6 +851,7 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
         pso_dirty_ = false;
     }
     vkCmdSetPrimitiveTopology(f.cmd, topo);
+    if (viewport_dirty_) apply_viewport_and_scissor();
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetLineWidth(f.cmd, line_width_);
 
@@ -908,6 +967,7 @@ bool Renderer::CBuffCall(int index, bool) {
     auto& f = frame();
     ensure_pass();
 
+    if (viewport_dirty_) apply_viewport_and_scissor();
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetLineWidth(f.cmd, line_width_);
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
@@ -1001,6 +1061,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
                           pipelines_.get(pso_key_));
         last_bound_pso_ = pso_key_; pso_dirty_ = false;
     }
+    if (viewport_dirty_) apply_viewport_and_scissor();
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetLineWidth(f.cmd, line_width_);
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
