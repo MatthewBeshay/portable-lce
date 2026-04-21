@@ -1,6 +1,6 @@
 #pragma once
 
-#include <functional>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -14,25 +14,25 @@ namespace plce::vk {
 /// Deferred destruction queue. Resources are pushed during rendering and
 /// destroyed when the owning frame's fence signals (guaranteed no GPU access).
 /// Not thread-safe — must only be accessed from the thread that owns the frame.
+///
+/// Only typed overloads are exposed; the previous `push(std::function<void()>)`
+/// form was deleted along with its `std::function` heap allocation once all
+/// callers had migrated to `push_buffer` / `push_image` / `push_view_image`.
 class DeletionQueue {
 public:
-    void push(std::function<void()>&& fn) {
-        entries_.push_back({Tag::generic, nullptr, {}, nullptr, VK_NULL_HANDLE, nullptr, std::move(fn)});
-    }
-
     void push_buffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation a) {
-        entries_.push_back({Tag::buffer, alloc, {.buffer = buf}, a, VK_NULL_HANDLE, nullptr, {}});
+        entries_.push_back({Tag::buffer, alloc, {.buffer = buf}, a, VK_NULL_HANDLE, nullptr});
     }
 
     void push_image(VmaAllocator alloc, VkImage img, VmaAllocation a) {
-        entries_.push_back({Tag::image, alloc, {.image = img}, a, VK_NULL_HANDLE, nullptr, {}});
+        entries_.push_back({Tag::image, alloc, {.image = img}, a, VK_NULL_HANDLE, nullptr});
     }
 
     /// Destroy an image + view pair allocated from VMA. This is the common
     /// shape for TextureManager::free — no std::function allocation.
     void push_view_image(VkDevice dev, VkImageView view,
                          VmaAllocator alloc, VkImage img, VmaAllocation a) {
-        entries_.push_back({Tag::view_image, alloc, {.image = img}, a, view, dev, {}});
+        entries_.push_back({Tag::view_image, alloc, {.image = img}, a, view, dev});
     }
 
     /// Ownership-transferring overloads for the VMA RAII wrappers. The
@@ -63,7 +63,6 @@ public:
                     if (e.handle.image) vmaDestroyImage(e.alloc, e.handle.image, e.vma_alloc);
                     break;
                 }
-                case Tag::generic:    if (e.fn) e.fn(); break;
             }
         }
         entries_.clear();
@@ -78,7 +77,7 @@ public:
     DeletionQueue& operator=(DeletionQueue&&) noexcept = default;
 
 private:
-    enum class Tag : uint8_t { buffer, image, view_image, generic };
+    enum class Tag : uint8_t { buffer, image, view_image };
     union Handle { VkBuffer buffer; VkImage image; };
     struct Entry {
         Tag           tag;
@@ -87,7 +86,6 @@ private:
         VmaAllocation vma_alloc = nullptr;
         VkImageView   view      = VK_NULL_HANDLE;  // view_image only
         VkDevice      device    = nullptr;          // view_image only
-        std::function<void()> fn;                   // generic only
     };
     std::vector<Entry> entries_;
 };
