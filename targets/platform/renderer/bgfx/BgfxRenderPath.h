@@ -268,6 +268,9 @@ private:
         float lightmap_transform[4] = {1.0, 1.0, 0.0, 0.0};
         bool use_lightmap = false;
         bgfx::TextureHandle bound_lightmap = BGFX_INVALID_HANDLE;
+        // Legacy GL glActiveTexture target. Entity rendering flips this to
+        // unit 1 to toggle the lightmap on/off via StateSetTextureEnable.
+        int active_texture_unit = 0;
     };
 
     std::mutex cbuf_mtx_;
