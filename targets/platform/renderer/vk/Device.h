@@ -63,6 +63,11 @@ public:
     /// that reject values > 1.0.
     bool wide_lines_enabled() const { return wide_lines_enabled_; }
 
+    /// Nanoseconds per tick of VkQueryType::TIMESTAMP on the graphics
+    /// queue, or 0.0 if timestamps are unsupported on this queue family.
+    /// Callers multiply by (end - begin) to get elapsed nanoseconds.
+    float timestamp_period_ns() const { return timestamp_period_ns_; }
+
 private:
     ::vk::raii::Context              ctx_;
     ::vk::raii::Instance             instance_{nullptr};
@@ -75,6 +80,7 @@ private:
     VmaAllocator                   allocator_    = nullptr;
     mutable std::mutex             queue_mutex_;  // guards submit2
     bool                           wide_lines_enabled_ = false;
+    float                          timestamp_period_ns_ = 0.0f;
 };
 
 }  // namespace plce::vk

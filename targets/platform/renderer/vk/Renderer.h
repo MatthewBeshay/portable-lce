@@ -195,6 +195,10 @@ private:
 
     // -- Per-frame state --
     uint32_t frame_idx_     = 0;
+    // GPU timestamp accumulation for the 1-Hz log. Reset each tick.
+    double   gpu_ms_accum_  = 0.0;
+    uint32_t gpu_ms_count_  = 0;
+    uint64_t next_gpu_log_frame_ = 0;
     uint32_t acquired_img_  = 0;
     bool     frame_active_  = false;
     bool     pass_active_   = false;

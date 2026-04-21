@@ -58,7 +58,8 @@ Renderer::Renderer(SDL_Window* window)
     rebuild_viewport_rects();
 
     for (auto& f : frames_)
-        f.create(dev_.handle(), dev_.allocator(), dev_.queue_family());
+        f.create(dev_.handle(), dev_.allocator(), dev_.queue_family(),
+                 dev_.timestamp_period_ns());
 
     // Immutable samplers — diffuse uses nearest+mipmap+repeat (Minecraft default),
     // lightmap uses linear+clamp with a single LOD. These are baked into the
@@ -346,6 +347,24 @@ void Renderer::StartFrame() {
 
     f.begin(dev_.handle(), dev_.allocator());
 
+    // Accumulate the GPU-time measurement that f.begin() just read back
+    // and emit a one-line log every ~60 frames. Only active when the
+    // device supports timestamps (timestamp_period_ns() > 0).
+    if (dev_.timestamp_period_ns() > 0.0f) {
+        const double ms = f.last_frame_gpu_ms();
+        if (ms > 0.0) { gpu_ms_accum_ += ms; ++gpu_ms_count_; }
+        // Log ~once per second at 60 fps.
+        static uint64_t frame_counter = 0;
+        ++frame_counter;
+        if (frame_counter >= next_gpu_log_frame_ && gpu_ms_count_ > 0) {
+            std::fprintf(stderr, "[vk] gpu avg %.2f ms (%u frames)\n",
+                         gpu_ms_accum_ / gpu_ms_count_, gpu_ms_count_);
+            gpu_ms_accum_ = 0.0;
+            gpu_ms_count_ = 0;
+            next_gpu_log_frame_ = frame_counter + 60;
+        }
+    }
+
     // Reset pipeline state to safe defaults each frame.
     // Prevents stale blend/depth state from a previous frame's draw
     // leaking into the next frame's terrain draws (causes flashing).
@@ -353,6 +372,7 @@ void Renderer::StartFrame() {
     pso_dirty_    = true;
     pass_active_  = false;
     frame_active_ = true;
+    frame().begin_cmd_timestamps();
 }
 
 void Renderer::Present() {
@@ -360,6 +380,7 @@ void Renderer::Present() {
     auto& f = frame();
     ensure_pass();
     end_pass();
+    f.end_cmd_timestamps();
     f.flush_transient_writes(dev_.allocator());
     f.end_cmd();
 

@@ -163,6 +163,20 @@ found:
     feats.wideLines      = supported.wideLines;
     wide_lines_enabled_  = supported.wideLines == VK_TRUE;
 
+    // Timestamp support. The timestampPeriod property is nanoseconds per
+    // tick; timestampValidBits on the queue family reports how many bits
+    // of the 64-bit counter are meaningful (0 means the queue does not
+    // support timestamps). FrameContext checks this before emitting
+    // vkCmdWriteTimestamp.
+    {
+        auto props = physical_.getProperties();
+        auto qfs   = physical_.getQueueFamilyProperties();
+        if (queue_family_ < qfs.size() &&
+            qfs[queue_family_].timestampValidBits > 0) {
+            timestamp_period_ns_ = props.limits.timestampPeriod;
+        }
+    }
+
     vkhpp::DeviceCreateInfo dci({}, qci, {}, dev_exts, &feats, &v13);
     device_ = vkhpp::raii::Device(physical_, dci);
     queue_ = (*device_).getQueue(queue_family_, 0);

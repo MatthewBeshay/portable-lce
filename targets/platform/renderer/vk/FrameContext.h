@@ -23,12 +23,25 @@ public:
     static constexpr VkDeviceSize kInitialTransientSize = 8ull  * 1024 * 1024;  // 8 MB
     static constexpr VkDeviceSize kMaxTransientSize     = 64ull * 1024 * 1024;  // 64 MB ceiling
 
-    void create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family);
+    void create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family,
+                float timestamp_period_ns = 0.0f);
     void destroy(VkDevice dev, VmaAllocator alloc);
 
     /// Wait for this frame's fence, flush deletions, reset for new recording.
     /// Grows the transient buffer if a previous frame recorded an overflow.
+    /// If GPU timestamp queries are enabled, reads back the last frame's
+    /// timestamps and accumulates them; caller can poll via frame_gpu_ms().
     void begin(VkDevice dev, VmaAllocator alloc);
+
+    /// Record a begin/end timestamp pair into the frame's query pool.
+    /// begin_cmd_timestamps() is called at the top of command recording,
+    /// end_cmd_timestamps() just before vkEndCommandBuffer.
+    void begin_cmd_timestamps();
+    void end_cmd_timestamps();
+
+    /// Most recent completed frame's whole-GPU-time in milliseconds, or 0
+    /// if no measurement is available yet.
+    [[nodiscard]] double last_frame_gpu_ms() const { return last_gpu_ms_; }
 
     /// End command buffer recording.
     void end_cmd() { vkEndCommandBuffer(cmd); }
@@ -92,6 +105,18 @@ private:
     VkDeviceSize transient_offset_   = 0;
     VkDeviceSize transient_size_     = 0;
     VkDeviceSize pending_grow_bytes_ = 0;  // >0 means begin() will reallocate
+
+    // GPU timestamp query state. One pool per FrameContext (2 queries:
+    // begin + end of the frame's command buffer). A query is read back
+    // in begin() of the next iteration through this slot — by then the
+    // fence has signalled, so the query is guaranteed to be available.
+    // timestamp_period_ns_ == 0 disables the feature.
+    VkDevice    ts_device_           = VK_NULL_HANDLE;
+    VkQueryPool ts_pool_              = VK_NULL_HANDLE;
+    float       ts_period_ns_         = 0.0f;
+    bool        ts_queries_recorded_  = false;   // any begin_cmd_timestamps() yet?
+    bool        ts_queries_pending_   = false;   // prev-pass wrote; not yet read back
+    double      last_gpu_ms_          = 0.0;
 };
 
 }  // namespace plce::vk

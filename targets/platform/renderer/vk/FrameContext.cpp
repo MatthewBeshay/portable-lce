@@ -26,7 +26,8 @@ void FrameContext::recreate_transient(VmaAllocator alloc, VkDeviceSize new_size)
     transient_size_ = new_size;
 }
 
-void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family) {
+void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family,
+                          float timestamp_period_ns) {
     // Command pool + primary command buffer. No RESET_COMMAND_BUFFER_BIT —
     // we reset the whole pool once per frame instead of the single CB,
     // which is cheaper in the driver and scales to additional CBs later
@@ -55,6 +56,19 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
 
     // Transient vertex buffer — host-visible, persistently mapped. Grows on demand.
     recreate_transient(alloc, kInitialTransientSize);
+
+    // GPU timestamp query pool. 2 queries per frame: begin + end of the
+    // primary command buffer. timestamp_period_ns == 0 means disabled
+    // (e.g. device reports timestampValidBits == 0 on this queue family).
+    ts_device_     = dev;
+    ts_period_ns_  = timestamp_period_ns;
+    if (ts_period_ns_ > 0.0f) {
+        VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        qci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        qci.queryCount = 2;
+        check(vkCreateQueryPool(dev, &qci, nullptr, &ts_pool_),
+              "timestamp query pool");
+    }
 }
 
 void FrameContext::reset_acquire_semaphore(VkDevice dev) {
@@ -66,6 +80,8 @@ void FrameContext::reset_acquire_semaphore(VkDevice dev) {
 void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
     deletions.flush();
     transient.reset();
+    if (ts_pool_)     vkDestroyQueryPool(dev, ts_pool_, nullptr);
+    ts_pool_  = VK_NULL_HANDLE;
     if (fence)        vkDestroyFence(dev, fence, nullptr);
     if (sem_done)     vkDestroySemaphore(dev, sem_done, nullptr);
     if (sem_acquired) vkDestroySemaphore(dev, sem_acquired, nullptr);
@@ -74,6 +90,21 @@ void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
 
 void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX);
+
+    // Read back the last-frame timestamps from this slot's query pool.
+    // The fence has signalled, so the queries are guaranteed available.
+    if (ts_pool_ && ts_queries_pending_ && ts_period_ns_ > 0.0f) {
+        uint64_t ts[2] = {0, 0};
+        VkResult r = vkGetQueryPoolResults(
+            dev, ts_pool_, 0, 2, sizeof(ts), ts, sizeof(uint64_t),
+            VK_QUERY_RESULT_64_BIT);
+        if (r == VK_SUCCESS) {
+            const double ns = double(ts[1] - ts[0]) * ts_period_ns_;
+            last_gpu_ms_ = ns / 1'000'000.0;
+        }
+        ts_queries_pending_ = false;
+    }
+
     deletions.flush();
 
     // Grow the transient buffer if a prior frame overflowed. Safe here because
@@ -101,6 +132,26 @@ void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
+
+    // Reset the query pool each frame; vkCmdResetQueryPool records into
+    // the command buffer so it is guaranteed to run before the
+    // subsequent vkCmdWriteTimestamp on the GPU.
+    if (ts_pool_) {
+        vkCmdResetQueryPool(cmd, ts_pool_, 0, 2);
+    }
+    ts_queries_recorded_ = false;
+}
+
+void FrameContext::begin_cmd_timestamps() {
+    if (!ts_pool_) return;
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ts_pool_, 0);
+    ts_queries_recorded_ = true;
+}
+
+void FrameContext::end_cmd_timestamps() {
+    if (!ts_pool_ || !ts_queries_recorded_) return;
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ts_pool_, 1);
+    ts_queries_pending_ = true;
 }
 
 }  // namespace plce::vk
