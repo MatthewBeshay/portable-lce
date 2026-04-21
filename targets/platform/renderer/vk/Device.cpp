@@ -107,6 +107,35 @@ found:
 
     std::array dev_exts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
+    // Query the physical device's 1.2 feature set so we request only what
+    // it actually supports. The bindless path in basic.frag uses
+    // nonuniformEXT(tex_id) — if a driver advertises the descriptor-
+    // indexing extension but reports shaderSampledImageArrayNonUniform-
+    // Indexing = VK_FALSE, enabling it here either fails vkCreateDevice
+    // on strict drivers or silently misrenders on lax ones. Refuse up
+    // front with a clear message.
+    {
+        VkPhysicalDeviceVulkan12Features v12_supported{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceFeatures2 feats2_query{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        feats2_query.pNext = &v12_supported;
+        vkGetPhysicalDeviceFeatures2(*physical_, &feats2_query);
+        if (!v12_supported.descriptorIndexing ||
+            !v12_supported.runtimeDescriptorArray ||
+            !v12_supported.shaderSampledImageArrayNonUniformIndexing ||
+            !v12_supported.descriptorBindingSampledImageUpdateAfterBind ||
+            !v12_supported.descriptorBindingPartiallyBound) {
+            throw std::runtime_error(
+                "vk renderer requires Vulkan 1.2 descriptor-indexing features: "
+                "descriptorIndexing, runtimeDescriptorArray, "
+                "shaderSampledImageArrayNonUniformIndexing, "
+                "descriptorBindingSampledImageUpdateAfterBind, "
+                "descriptorBindingPartiallyBound — physical device reports "
+                "one or more as unsupported");
+        }
+    }
+
     // Vulkan 1.2 features — descriptor indexing for bindless textures.
     vkhpp::PhysicalDeviceVulkan12Features v12;
     v12.descriptorIndexing                                    = VK_TRUE;
