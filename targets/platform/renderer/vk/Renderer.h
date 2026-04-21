@@ -66,27 +66,12 @@ public:
     void DrawVertices(int primType, int count, void* data, int vType) override;
 
     // -- Resources --
-    [[nodiscard]] rp::MeshHandle create_mesh(const rp::MeshDesc&) override { return rp::kInvalidMesh; }
-    void update_mesh(rp::MeshHandle, const rp::MeshDesc&) override {}
-    void destroy_mesh(rp::MeshHandle) override {}
-
-    [[nodiscard]] rp::TextureHandle create_texture(const rp::TextureDesc&) override { return rp::kInvalidTexture; }
-    void update_texture(rp::TextureHandle, const rp::TextureRegion&) override {}
-    void destroy_texture(rp::TextureHandle) override {}
-
     [[nodiscard]] rp::MaterialHandle create_material(const rp::MaterialDesc&) override;
-    void update_material(rp::MaterialHandle, const rp::MaterialDesc&) override {}
-    void destroy_material(rp::MaterialHandle) override {}
 
     [[nodiscard]] std::pair<rp::TransientVertexBuffer, std::span<std::byte>>
     alloc_transient_vertices(uint32_t count, rp::VertexLayout layout,
                              rp::PrimitiveType prim) override;
 
-    void read_framebuffer(const rp::TextureReadback&) override {}
-    [[nodiscard]] rp::ResourceFootprint query_resource_footprint() const override { return {}; }
-    void seal_static_resource_tier() override {}
-    void begin_atomic_resource_batch() override {}
-    void end_atomic_resource_batch() override {}
     void push_debug_event(const char*) override;
     void pop_debug_event() override;
     void tick() override {}

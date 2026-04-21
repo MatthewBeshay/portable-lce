@@ -398,21 +398,8 @@ public:
 
     // -- Persistent resources (thread-transparent) --------------------------
 
-    [[nodiscard]] virtual MeshHandle create_mesh(const MeshDesc& desc) = 0;
-    virtual void update_mesh(MeshHandle h, const MeshDesc& desc) = 0;
-    virtual void destroy_mesh(MeshHandle h) = 0;
-
-    [[nodiscard]] virtual TextureHandle create_texture(
-        const TextureDesc& desc) = 0;
-    virtual void update_texture(TextureHandle h,
-                                const TextureRegion& region) = 0;
-    virtual void destroy_texture(TextureHandle h) = 0;
-
     [[nodiscard]] virtual MaterialHandle create_material(
         const MaterialDesc& desc) = 0;
-    virtual void update_material(MaterialHandle h,
-                                 const MaterialDesc& desc) = 0;
-    virtual void destroy_material(MaterialHandle h) = 0;
 
     // -- Transient vertex buffer (thread-transparent, frame-scoped) ---------
 
@@ -428,15 +415,6 @@ public:
     // -- Queries ------------------------------------------------------------
 
     [[nodiscard]] virtual const FrameFramebuffer& framebuffer() const = 0;
-    virtual void read_framebuffer(const TextureReadback& req) = 0;
-    [[nodiscard]] virtual ResourceFootprint query_resource_footprint()
-        const = 0;
-
-    // -- Resource management ------------------------------------------------
-
-    virtual void seal_static_resource_tier() = 0;
-    virtual void begin_atomic_resource_batch() = 0;
-    virtual void end_atomic_resource_batch() = 0;
 
     // -- Debug markers ------------------------------------------------------
 
@@ -636,37 +614,6 @@ static_assert(sizeof(WorldStandardVertex) == 32);
 inline TextureHandle texture_handle_from_gl_id(int gl_id) {
     return {static_cast<uint32_t>(gl_id), 1};
 }
-
-// ---------------------------------------------------------------------------
-// ScopedResourceBatch - RAII wrapper for atomic update groups
-// ---------------------------------------------------------------------------
-
-class ScopedResourceBatch {
-public:
-    explicit ScopedResourceBatch(IRenderPath& path) : path_(&path) {
-        path_->begin_atomic_resource_batch();
-    }
-    ~ScopedResourceBatch() {
-        if (path_) path_->end_atomic_resource_batch();
-    }
-
-    ScopedResourceBatch(const ScopedResourceBatch&) = delete;
-    ScopedResourceBatch& operator=(const ScopedResourceBatch&) = delete;
-    ScopedResourceBatch(ScopedResourceBatch&& o) noexcept : path_(o.path_) {
-        o.path_ = nullptr;
-    }
-    ScopedResourceBatch& operator=(ScopedResourceBatch&& o) noexcept {
-        if (this != &o) {
-            if (path_) path_->end_atomic_resource_batch();
-            path_ = o.path_;
-            o.path_ = nullptr;
-        }
-        return *this;
-    }
-
-private:
-    IRenderPath* path_;
-};
 
 // ---------------------------------------------------------------------------
 // Global render path accessor

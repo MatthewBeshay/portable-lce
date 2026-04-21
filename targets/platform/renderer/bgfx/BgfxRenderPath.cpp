@@ -679,42 +679,6 @@ void BgfxRenderPath::DrawVertices(int primType, int count, void* data,
 
 // MARK: Resource methods
 
-MeshHandle BgfxRenderPath::create_mesh(const MeshDesc&) { return kInvalidMesh; }
-void BgfxRenderPath::update_mesh(MeshHandle, const MeshDesc&) {}
-void BgfxRenderPath::destroy_mesh(MeshHandle) {}
-
-TextureHandle BgfxRenderPath::create_texture(const TextureDesc& desc) {
-    auto th = bgfx::createTexture2D(desc.width, desc.height, false, 1,
-                                    bgfx::TextureFormat::RGBA8, 0);  // no mem
-
-    if (!desc.initial_data.empty()) {
-        auto mem =
-            bgfx::copy(desc.initial_data.data(), desc.initial_data.size());
-        bgfx::updateTexture2D(th, 0, 0, 0, 0, desc.width, desc.height, mem);
-    }
-
-    for (uint32_t i = 0; i < textures_.size(); ++i) {
-        if (!textures_[i].occupied) {
-            textures_[i] = {th, ++textures_[i].generation, desc.width,
-                            desc.height, true};
-            return {i, textures_[i].generation};
-        }
-    }
-    uint32_t idx = (uint32_t)textures_.size();
-    textures_.push_back({th, 1, desc.width, desc.height, true});
-    return {idx, 1};
-}
-
-void BgfxRenderPath::update_texture(TextureHandle, const TextureRegion&) {}
-
-void BgfxRenderPath::destroy_texture(TextureHandle h) {
-    if (h.index < textures_.size() &&
-        textures_[h.index].generation == h.generation) {
-        bgfx::destroy(textures_[h.index].bgfx_handle);
-        textures_[h.index].occupied = false;
-    }
-}
-
 MaterialHandle BgfxRenderPath::create_material(const MaterialDesc& desc) {
     for (uint32_t i = 0; i < materials_.size(); ++i) {
         if (!materials_[i].occupied) {
@@ -725,19 +689,6 @@ MaterialHandle BgfxRenderPath::create_material(const MaterialDesc& desc) {
     uint32_t idx = (uint32_t)materials_.size();
     materials_.push_back({desc, 1, true});
     return {idx, 1};
-}
-
-void BgfxRenderPath::update_material(MaterialHandle h,
-                                     const MaterialDesc& desc) {
-    if (h.index < materials_.size() &&
-        materials_[h.index].generation == h.generation)
-        materials_[h.index].desc = desc;
-}
-
-void BgfxRenderPath::destroy_material(MaterialHandle h) {
-    if (h.index < materials_.size() &&
-        materials_[h.index].generation == h.generation)
-        materials_[h.index].occupied = false;
 }
 
 std::pair<TransientVertexBuffer, std::span<std::byte>>
@@ -788,13 +739,6 @@ void BgfxRenderPath::resize(uint32_t w, uint32_t h) {
 }
 
 const FrameFramebuffer& BgfxRenderPath::framebuffer() const { return fb_; }
-void BgfxRenderPath::read_framebuffer(const TextureReadback&) {}
-ResourceFootprint BgfxRenderPath::query_resource_footprint() const {
-    return {};
-}
-void BgfxRenderPath::seal_static_resource_tier() {}
-void BgfxRenderPath::begin_atomic_resource_batch() {}
-void BgfxRenderPath::end_atomic_resource_batch() {}
 void BgfxRenderPath::push_debug_event(const char*) {}
 void BgfxRenderPath::pop_debug_event() {}
 void BgfxRenderPath::tick() {}

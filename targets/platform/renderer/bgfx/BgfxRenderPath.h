@@ -20,21 +20,8 @@ public:
 
     // MARK: new APIs
 
-    [[nodiscard]] rp::MeshHandle create_mesh(const rp::MeshDesc& desc) override;
-    void update_mesh(rp::MeshHandle h, const rp::MeshDesc& desc) override;
-    void destroy_mesh(rp::MeshHandle h) override;
-
-    [[nodiscard]] rp::TextureHandle create_texture(
-        const rp::TextureDesc& desc) override;
-    void update_texture(rp::TextureHandle h,
-                        const rp::TextureRegion& region) override;
-    void destroy_texture(rp::TextureHandle h) override;
-
     [[nodiscard]] rp::MaterialHandle create_material(
         const rp::MaterialDesc& desc) override;
-    void update_material(rp::MaterialHandle h,
-                         const rp::MaterialDesc& desc) override;
-    void destroy_material(rp::MaterialHandle h) override;
 
     [[nodiscard]] std::pair<rp::TransientVertexBuffer, std::span<std::byte>>
     alloc_transient_vertices(uint32_t vertex_count, rp::VertexLayout layout,
@@ -43,12 +30,6 @@ public:
     void render_frame(const rp::FrameDesc& frame) override;
     void resize(uint32_t w, uint32_t h) override;
     [[nodiscard]] const rp::FrameFramebuffer& framebuffer() const override;
-    void read_framebuffer(const rp::TextureReadback& req) override;
-    [[nodiscard]] rp::ResourceFootprint query_resource_footprint()
-        const override;
-    void seal_static_resource_tier() override;
-    void begin_atomic_resource_batch() override;
-    void end_atomic_resource_batch() override;
     void push_debug_event(const char* name) override;
     void pop_debug_event() override;
     void tick() override;
