@@ -896,15 +896,20 @@ bool BgfxRenderPath::CBuffCall(int index, bool) {
     bgfx::setUniform(u_fragParams_, fragP);
     bgfx::setUniform(u_fogColor_, state_.fog_color);
 
-    if (hasTexture) bgfx::setTexture(0, s_tex0_, texHandle, texSamplerFlags);
-    if (state_.use_lightmap && bgfx::isValid(state_.bound_lightmap)) {
-        bgfx::setTexture(1, s_tex1_, state_.bound_lightmap,
-                         BGFX_SAMPLER_MIN_ANISOTROPIC |
-                             BGFX_SAMPLER_MAG_ANISOTROPIC |
-                             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-    }
-
+    // bgfx::submit consumes the sampler bindings, so they must be set per
+    // draw call. Without this, only the first draw in a CBuffer got a
+    // texture and subsequent draws fell through to whatever bgfx had bound
+    // previously — entity models (169+ draws per mob) would show a stale
+    // terrain atlas or cycle textures randomly.
     for (const auto& dc : cb.draws) {
+        if (hasTexture) bgfx::setTexture(0, s_tex0_, texHandle, texSamplerFlags);
+        if (state_.use_lightmap && bgfx::isValid(state_.bound_lightmap)) {
+            bgfx::setTexture(1, s_tex1_, state_.bound_lightmap,
+                             BGFX_SAMPLER_MIN_ANISOTROPIC |
+                                 BGFX_SAMPLER_MAG_ANISOTROPIC |
+                                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        }
+
         uint64_t primBits = 0;
         if (dc.prim == 0x0005)
             primBits = BGFX_STATE_PT_TRISTRIP;
