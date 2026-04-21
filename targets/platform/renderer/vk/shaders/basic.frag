@@ -43,7 +43,15 @@ void main() {
 
     vec4 tex;
     if ((pc.flags & 1u) != 0u) {
-        tex = texture(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv);
+        if ((pc.flags & 8u) != 0u) {
+            // Forced LOD — StateSetForceLOD maps flags[28:31] → mipmap
+            // level. Used by ItemInHandRenderer / ItemRenderer for
+            // fixed-mip item textures (32×32 / 64×64 swap).
+            float lod = float((pc.flags >> 28u) & 0xFu);
+            tex = textureLod(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv, lod);
+        } else {
+            tex = texture(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv);
+        }
     } else {
         tex = vec4(1.0);
     }

@@ -129,7 +129,11 @@ public:
     void StateSetViewport(int) override {}
     void StateSetEnableViewportClipPlanes(bool) override {}
     void StateSetStencil(int, uint8_t, uint8_t, uint8_t) override {}
-    void StateSetForceLOD(int) override {}
+    void StateSetForceLOD(int lod) override {
+        // -1 = auto (disabled). Otherwise clamp to 0..15 — shader reads a
+        // 4-bit field from the flags push constant. Callers use 0..2.
+        force_lod_ = (lod < 0) ? 0xFFu : uint32_t(lod) & 0xFu;
+    }
     void StateSetTextureEnable(bool e) override;
     void StateSetActiveTexture(int gl_enum) override;
     void StateSetVertexTextureUV(float u, float v) override { global_lm_uv_ = {u,v}; }
@@ -219,6 +223,7 @@ private:
 
     int  active_tex_unit_  = 0;
     bool texture_enabled_  = true;
+    uint32_t force_lod_    = 0xFFu;  // 0xFF = disabled; otherwise 0..15 mipmap LOD
     std::array<float, 2> global_lm_uv_{240, 240};
 
     // Matrix stacks. Depth starts at 1 (identity). The game pushes at most

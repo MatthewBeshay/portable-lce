@@ -701,12 +701,18 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
     //   [0]     textured       (diffuse sample enabled)
     //   [1]     alpha_test
     //   [2]     lm_active      (lightmap modulation enabled)
+    //   [3]     force_lod_on   (StateSetForceLOD; shader uses textureLod)
     //   [4:15]  tex_id         (12 bits — slot in bindless sampled image array)
     //   [16:27] lm_tex_id      (12 bits — lightmap slot)
+    //   [28:31] force_lod      (4 bits — mipmap LOD level)
     uint32_t flags = 0;
     if (textured && texture_enabled_) flags |= 1u;
     if (alpha_test_enabled_)          flags |= 2u;
     if (lm_active)                    flags |= 4u;
+    if (force_lod_ != 0xFFu) {
+        flags |= 8u;
+        flags |= (force_lod_ & 0xFu) << 28u;
+    }
     flags |= (tex_id    & 0xFFFu) << 4u;
     flags |= (lm_tex_id & 0xFFFu) << 16u;
     pc.flags = flags;
