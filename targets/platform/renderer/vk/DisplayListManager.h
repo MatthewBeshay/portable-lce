@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "DeletionQueue.h"
+#include "VmaResources.h"
 
 namespace plce::vk {
 
@@ -28,22 +29,19 @@ struct DisplayListSubDraw {
 struct DisplayList {
     std::vector<DisplayListDraw> draws;
     std::vector<DisplayListSubDraw> gpu_draws;
-    VkBuffer      vb = VK_NULL_HANDLE;
-    VmaAllocation alloc = nullptr;
-    uint32_t      vb_size = 0;
+    VmaBuffer vb;
+    uint32_t  vb_size = 0;
     bool valid = false, uploaded = false;
 };
-
-struct PendingDestroy { VkBuffer buf; VmaAllocation alloc; };
 
 class DisplayListManager {
 public:
     void init();
 
     int create(int n);
-    void delete_all(std::vector<PendingDestroy>& pending, std::mutex& pending_mutex);
+    void delete_all(std::vector<VmaBuffer>& pending, std::mutex& pending_mutex);
     void start(int index);
-    void clear(int index, std::vector<PendingDestroy>& pending, std::mutex& pending_mutex);
+    void clear(int index, std::vector<VmaBuffer>& pending, std::mutex& pending_mutex);
     int size(int index);
     void end();
 

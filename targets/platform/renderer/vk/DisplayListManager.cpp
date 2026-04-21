@@ -25,12 +25,14 @@ int DisplayListManager::create(int n) {
     return first;
 }
 
-void DisplayListManager::delete_all(std::vector<PendingDestroy>& pending,
+void DisplayListManager::delete_all(std::vector<VmaBuffer>& pending,
                                      std::mutex& pending_mutex) {
     std::lock_guard lk(display_list_mutex_);
-    { std::lock_guard lk2(pending_mutex);
-      for (auto& cb : display_lists_)
-          if (cb.vb) pending.push_back({cb.vb, cb.alloc}); }
+    {
+        std::lock_guard lk2(pending_mutex);
+        for (auto& cb : display_lists_)
+            if (cb.vb) pending.push_back(std::move(cb.vb));
+    }
     display_lists_.clear();
     next_display_list_ = 1;
     t_rec.id = -1; t_rec.draws.clear();
@@ -38,17 +40,17 @@ void DisplayListManager::delete_all(std::vector<PendingDestroy>& pending,
 
 void DisplayListManager::start(int index) { t_rec.id = index; t_rec.draws.clear(); }
 
-void DisplayListManager::clear(int index, std::vector<PendingDestroy>& pending,
+void DisplayListManager::clear(int index, std::vector<VmaBuffer>& pending,
                                 std::mutex& pending_mutex) {
     std::lock_guard lk(display_list_mutex_);
     if (index < 0 || size_t(index) >= display_lists_.size()) return;
     auto& cb = display_lists_[index];
     cb.draws.clear(); cb.gpu_draws.clear();
     if (cb.vb) {
-        { std::lock_guard lk2(pending_mutex);
-          pending.push_back({cb.vb, cb.alloc}); }
-        cb.vb = VK_NULL_HANDLE; cb.alloc = nullptr; cb.vb_size = 0;
+        std::lock_guard lk2(pending_mutex);
+        pending.push_back(std::move(cb.vb));
     }
+    cb.vb_size = 0;
     cb.valid = cb.uploaded = false;
 }
 
@@ -92,7 +94,7 @@ DisplayListManager::Snapshot DisplayListManager::prepare(int index,
     auto& cb = display_lists_[index];
     if (!cb.valid || cb.draws.empty()) return {};
     if (!cb.uploaded) { upload(cb, deletions, allocator); if (!cb.uploaded) return {}; }
-    return {cb.vb, cb.gpu_draws};
+    return {cb.vb.handle(), cb.gpu_draws};
 }
 
 void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
@@ -155,8 +157,7 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
     // the GPU reading the previous frame's data. Old buffer is deferred-
     // destroyed after the GPU is done. Direct memcpy eliminates staging
     // buffer, command buffer submission, and vkQueueWaitIdle entirely.
-    if (cb.vb)
-        deletions.push_buffer(allocator, cb.vb, cb.alloc);
+    if (cb.vb) deletions.push_buffer(std::move(cb.vb));
 
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size  = needed;
@@ -166,8 +167,11 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
     ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo info{};
-    check(vmaCreateBuffer(allocator, &bi, &ai, &cb.vb, &cb.alloc, &info),
+    VkBuffer      buf   = VK_NULL_HANDLE;
+    VmaAllocation a     = nullptr;
+    check(vmaCreateBuffer(allocator, &bi, &ai, &buf, &a, &info),
           "display list vb");
+    cb.vb      = VmaBuffer(allocator, buf, a, info.pMappedData);
     cb.vb_size = needed;
 
     std::memcpy(info.pMappedData, combined.data(), needed);

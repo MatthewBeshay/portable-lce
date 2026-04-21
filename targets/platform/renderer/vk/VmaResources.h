@@ -40,6 +40,7 @@ public:
 
     [[nodiscard]] VkBuffer      handle()     const noexcept { return buffer_; }
     [[nodiscard]] VmaAllocation allocation() const noexcept { return allocation_; }
+    [[nodiscard]] VmaAllocator  allocator()  const noexcept { return alloc_; }
     [[nodiscard]] void*         mapped()     const noexcept { return mapped_; }
     [[nodiscard]] explicit operator bool()   const noexcept { return buffer_ != VK_NULL_HANDLE; }
 
@@ -52,6 +53,23 @@ public:
         buffer_ = VK_NULL_HANDLE;
         allocation_ = nullptr;
         mapped_ = nullptr;
+    }
+
+    /// Transfer ownership of the raw handles out of the wrapper. The wrapper
+    /// is left empty; the caller is responsible for destruction (typically
+    /// by handing the handles to DeletionQueue for fence-gated teardown).
+    struct Raw {
+        VmaAllocator  allocator;
+        VkBuffer      buffer;
+        VmaAllocation allocation;
+    };
+    [[nodiscard]] Raw release() noexcept {
+        Raw r{alloc_, buffer_, allocation_};
+        alloc_ = nullptr;
+        buffer_ = VK_NULL_HANDLE;
+        allocation_ = nullptr;
+        mapped_ = nullptr;
+        return r;
     }
 
 private:
@@ -94,6 +112,7 @@ public:
 
     [[nodiscard]] VkImage       handle()     const noexcept { return image_; }
     [[nodiscard]] VmaAllocation allocation() const noexcept { return allocation_; }
+    [[nodiscard]] VmaAllocator  allocator()  const noexcept { return alloc_; }
     [[nodiscard]] explicit operator bool()   const noexcept { return image_ != VK_NULL_HANDLE; }
 
     void reset() noexcept {
@@ -103,6 +122,21 @@ public:
         alloc_ = nullptr;
         image_ = VK_NULL_HANDLE;
         allocation_ = nullptr;
+    }
+
+    /// Transfer ownership of the raw handles out of the wrapper. See
+    /// VmaBuffer::release for the use case.
+    struct Raw {
+        VmaAllocator  allocator;
+        VkImage       image;
+        VmaAllocation allocation;
+    };
+    [[nodiscard]] Raw release() noexcept {
+        Raw r{alloc_, image_, allocation_};
+        alloc_ = nullptr;
+        image_ = VK_NULL_HANDLE;
+        allocation_ = nullptr;
+        return r;
     }
 
 private:

@@ -1,10 +1,13 @@
 #pragma once
 
 #include <functional>
+#include <utility>
 #include <vector>
 
 #include <vma/vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
+
+#include "VmaResources.h"
 
 namespace plce::vk {
 
@@ -30,6 +33,24 @@ public:
     void push_view_image(VkDevice dev, VkImageView view,
                          VmaAllocator alloc, VkImage img, VmaAllocation a) {
         entries_.push_back({Tag::view_image, alloc, {.image = img}, a, view, dev, {}});
+    }
+
+    /// Ownership-transferring overloads for the VMA RAII wrappers. The
+    /// wrapper is left empty; destruction happens at flush() time.
+    void push_buffer(VmaBuffer&& buf) {
+        if (!buf) return;
+        auto r = buf.release();
+        push_buffer(r.allocator, r.buffer, r.allocation);
+    }
+    void push_image(VmaImage&& img) {
+        if (!img) return;
+        auto r = img.release();
+        push_image(r.allocator, r.image, r.allocation);
+    }
+    void push_view_image(VkDevice dev, VkImageView view, VmaImage&& img) {
+        if (!img && !view) return;
+        auto r = img.release();
+        push_view_image(dev, view, r.allocator, r.image, r.allocation);
     }
 
     void flush() noexcept {

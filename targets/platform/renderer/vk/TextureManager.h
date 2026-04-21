@@ -16,11 +16,10 @@
 namespace plce::vk {
 
 struct TextureSlot {
-    VkImage       image = VK_NULL_HANDLE;
-    VmaAllocation alloc = nullptr;
-    VkImageView   view  = VK_NULL_HANDLE;
-    uint32_t      width = 0, height = 0;
-    bool          ready = false;
+    VmaImage    image;       // VMA-owned; destructs via vmaDestroyImage
+    VkImageView view  = VK_NULL_HANDLE;
+    uint32_t    width = 0, height = 0;
+    bool        ready = false;
 };
 
 /// Bindless texture manager: one descriptor set holds a sampled-image array
@@ -84,12 +83,13 @@ public:
 
 private:
     struct PendingUpload {
-        VkFence         fence         = VK_NULL_HANDLE;
-        VkCommandBuffer cmd           = VK_NULL_HANDLE;
+        VkFence         fence        = VK_NULL_HANDLE;
+        VkCommandBuffer cmd          = VK_NULL_HANDLE;
         // One-shot fallback path: populated when the upload did not fit in
-        // the persistent staging ring. Destroyed in complete_upload.
-        VkBuffer        staging_buf   = VK_NULL_HANDLE;
-        VmaAllocation   staging_alloc = nullptr;
+        // the persistent staging ring. VmaBuffer destructor runs when
+        // pending_uploads_ erases the entry, so complete_upload does not
+        // need an explicit vmaDestroyBuffer.
+        VmaBuffer       staging;
         // Ring path: monotonic byte counters for the range reserved by
         // this upload. complete_upload uses the MIN of ring_begin across
         // all still-pending uploads to advance staging_ring_tail_ — so
@@ -97,9 +97,9 @@ private:
         // flight, even if fences signal in a different order than
         // reservations were made. ring_end == 0 means this upload took
         // the one-shot fallback.
-        VkDeviceSize    ring_begin    = 0;
-        VkDeviceSize    ring_end      = 0;
-        int             texture_idx   = -1;
+        VkDeviceSize    ring_begin   = 0;
+        VkDeviceSize    ring_end     = 0;
+        int             texture_idx  = -1;
     };
 
     void upload_texture(int idx, int w, int h, const void* pixels);

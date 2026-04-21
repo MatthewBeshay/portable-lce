@@ -286,9 +286,7 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
     if (auto blob = pipelines_.save_cache(); !blob.empty())
         (void)PlatformFilesystem.writeFile(pipeline_cache_path(), blob.data(), blob.size());
-    for (auto& pd : pending_destroys_)
-        vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
-    pending_destroys_.clear();
+    pending_destroys_.clear();  // VmaBuffer destructors run vmaDestroyBuffer
     tex_mgr_.destroy(dev_.handle(), dev_.allocator());
     quad_ib_.reset();
     pipelines_.destroy();
@@ -328,9 +326,7 @@ void Renderer::StartFrame() {
     // Safe now because the fence wait guarantees the GPU is done.
     {
         std::lock_guard lk(pending_destroy_mutex_);
-        for (auto& pd : pending_destroys_)
-            vmaDestroyBuffer(dev_.allocator(), pd.buf, pd.alloc);
-        pending_destroys_.clear();
+        pending_destroys_.clear();  // VmaBuffer destructors run vmaDestroyBuffer
     }
 
     VkResult acq = vkAcquireNextImageKHR(dev_.handle(), swap_.handle(),

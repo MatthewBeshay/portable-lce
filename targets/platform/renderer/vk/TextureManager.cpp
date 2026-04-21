@@ -53,7 +53,7 @@ void TextureManager::init(const Device& dev, VkDescriptorSet bindless_set) {
     bound_tex_   = default_tex_;
 }
 
-void TextureManager::destroy(VkDevice device, VmaAllocator allocator) {
+void TextureManager::destroy(VkDevice device, VmaAllocator /*allocator*/) {
     wait_all_uploads();
 
     staging_ring_.reset();
@@ -63,10 +63,12 @@ void TextureManager::destroy(VkDevice device, VmaAllocator allocator) {
     for (VkFence f : fence_pool_) vkDestroyFence(device, f, nullptr);
     fence_pool_.clear();
 
+    // Destroy image views here; VmaImage destructors run inside textures_'
+    // destructor (or clear()) and take care of the images themselves.
     for (auto& t : textures_) {
-        if (t.view)  vkDestroyImageView(device, t.view, nullptr);
-        if (t.image) vmaDestroyImage(allocator, t.image, t.alloc);
+        if (t.view) vkDestroyImageView(device, t.view, nullptr);
     }
+    textures_.clear();
 }
 
 // ===================================================================
@@ -137,9 +139,11 @@ void TextureManager::complete_upload(PendingUpload& pu) {
     // Publish the image view into the bindless array now that it's safe to sample.
     write_slot(pu.texture_idx);
 
-    if (pu.staging_buf) {
-        // One-shot fallback path — destroy the private staging buffer.
-        vmaDestroyBuffer(allocator_, pu.staging_buf, pu.staging_alloc);
+    if (pu.staging) {
+        // One-shot fallback path — VmaBuffer destructor runs
+        // vmaDestroyBuffer when `pu` is erased from pending_uploads_
+        // by the caller (poll_uploads / wait_for_upload / wait_all_uploads).
+        // No explicit destroy here.
     } else if (pu.ring_end != 0) {
         // Ring path — advance the tail. pu is still live in
         // pending_uploads_ at this point (poll_uploads / wait_for_upload
@@ -299,7 +303,7 @@ void TextureManager::free(int idx, DeletionQueue& deletions) {
         write_slot_with_view(idx, textures_[default_tex_].view);
     }
     if (t.view || t.image)
-        deletions.push_view_image(device_, t.view, allocator_, t.image, t.alloc);
+        deletions.push_view_image(device_, t.view, std::move(t.image));
     t = {};
 }
 
@@ -347,7 +351,7 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         if (!textures_[idx].ready) return;
         tw = textures_[idx].width;
         th = textures_[idx].height;
-        image = textures_[idx].image;
+        image = textures_[idx].image.handle();
     }
 
     if (xo == 0 && yo == 0 && uint32_t(w) == tw && uint32_t(h) == th) {
@@ -362,13 +366,12 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     // Source: ring first, fall back to a one-shot vmaCreateBuffer if the
     // update doesn't fit.
     std::optional<RingReservation> res = ring_reserve(bytes);
-    std::byte*    src_map       = nullptr;
-    VkBuffer      src_buf       = VK_NULL_HANDLE;
-    VkDeviceSize  src_offset    = 0;
-    VkDeviceSize  ring_begin    = 0;
-    VkDeviceSize  ring_end      = 0;
-    VkBuffer      oneshot_buf   = VK_NULL_HANDLE;
-    VmaAllocation oneshot_alloc = nullptr;
+    std::byte*   src_map    = nullptr;
+    VkBuffer     src_buf    = VK_NULL_HANDLE;
+    VkDeviceSize src_offset = 0;
+    VkDeviceSize ring_begin = 0;
+    VkDeviceSize ring_end   = 0;
+    VmaBuffer    oneshot_staging;  // move-only; non-empty iff ring fell back
     if (res) {
         src_map    = staging_ring_map_ + res->offset;
         src_buf    = staging_ring_.handle();
@@ -383,11 +386,13 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         stg_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo stg_info{};
-        check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &oneshot_buf,
-                              &oneshot_alloc, &stg_info),
+        VkBuffer      buf   = VK_NULL_HANDLE;
+        VmaAllocation a     = nullptr;
+        check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &buf, &a, &stg_info),
               "tex update staging (fallback)");
+        oneshot_staging = VmaBuffer(allocator_, buf, a, stg_info.pMappedData);
         src_map = static_cast<std::byte*>(stg_info.pMappedData);
-        src_buf = oneshot_buf;
+        src_buf = oneshot_staging.handle();
     }
     std::memcpy(src_map, data, bytes);
 
@@ -442,8 +447,14 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
     check(dev_->submit2(1, &sub, fence), "tex update submit");
 
     std::lock_guard lk(texture_mutex_);
-    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc,
-                                ring_begin, ring_end, idx});
+    PendingUpload pu;
+    pu.fence       = fence;
+    pu.cmd         = cmd;
+    pu.staging     = std::move(oneshot_staging);
+    pu.ring_begin  = ring_begin;
+    pu.ring_end    = ring_end;
+    pu.texture_idx = idx;
+    pending_uploads_.push_back(std::move(pu));
     textures_[idx].ready = false;
 }
 
@@ -478,34 +489,32 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     // creation path. `reuse` tells the rest of the function whether we can
     // keep the existing VkImage/VkImageView or must allocate fresh ones.
     bool reuse;
-    VkImage old_image = VK_NULL_HANDLE;
-    VmaAllocation old_alloc = nullptr;
-    VkImageView   old_view  = VK_NULL_HANDLE;
+    VmaImage    old_image;        // takes ownership when not reusing
+    VkImageView old_view = VK_NULL_HANDLE;
     {
         std::lock_guard lk(texture_mutex_);
         wait_for_upload(idx);
         TextureSlot& t = textures_[idx];
         reuse = t.ready && t.width == uint32_t(w) && t.height == uint32_t(h);
         if (t.ready && !reuse) {
-            old_image = t.image;
-            old_alloc = t.alloc;
+            old_image = std::move(t.image);
             old_view  = t.view;
             t = {};
         }
         t.width = uint32_t(w);
         t.height = uint32_t(h);
     }
-    // Destroy the old image handles outside the lock. Safe because
-    // wait_for_upload above guarantees no fence still references them.
-    if (old_view)  vkDestroyImageView(device_, old_view, nullptr);
-    if (old_image) vmaDestroyImage(allocator_, old_image, old_alloc);
+    // Destroy the old handles outside the lock. Safe because wait_for_upload
+    // above guarantees no fence still references them. old_image destructs
+    // automatically when it goes out of scope.
+    if (old_view) vkDestroyImageView(device_, old_view, nullptr);
+    old_image.reset();
 
     uint32_t mips = 1;
     { uint32_t d = std::max(uint32_t(w), uint32_t(h)); while (d > 1) { d >>= 1; ++mips; } }
 
-    VkImage       new_image = VK_NULL_HANDLE;
-    VmaAllocation new_alloc = nullptr;
-    VkImageView   new_view  = VK_NULL_HANDLE;
+    VmaImage    new_image;
+    VkImageView new_view = VK_NULL_HANDLE;
     if (!reuse) {
         VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ici.imageType = VK_IMAGE_TYPE_2D;
@@ -518,28 +527,30 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                         VK_IMAGE_USAGE_SAMPLED_BIT;
         VmaAllocationCreateInfo ai{}; ai.usage = VMA_MEMORY_USAGE_AUTO;
-        check(vmaCreateImage(allocator_, &ici, &ai, &new_image, &new_alloc, nullptr),
+        VkImage       img_raw = VK_NULL_HANDLE;
+        VmaAllocation img_alloc = nullptr;
+        check(vmaCreateImage(allocator_, &ici, &ai, &img_raw, &img_alloc, nullptr),
               "texture image");
+        new_image = VmaImage(allocator_, img_raw, img_alloc);
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vci.image = new_image; vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.image = new_image.handle(); vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = VK_FORMAT_R8G8B8A8_UNORM;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
         check(vkCreateImageView(device_, &vci, nullptr, &new_view), "texture view");
 
         std::lock_guard lk(texture_mutex_);
         TextureSlot& t = textures_[idx];
-        t.image = new_image;
-        t.alloc = new_alloc;
+        t.image = std::move(new_image);
         t.view  = new_view;
     }
     // Capture the image handle for the command buffer recording below. Under
     // reuse this is the existing image; under the !reuse path it's the one we
-    // just created and stored.
+    // just stored into the slot.
     VkImage upload_image;
     {
         std::lock_guard lk(texture_mutex_);
-        upload_image = textures_[idx].image;
+        upload_image = textures_[idx].image.handle();
     }
 
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
@@ -548,13 +559,12 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     // Source: ring first, fall back to a one-shot vmaCreateBuffer if the
     // upload doesn't fit or the ring is momentarily full.
     std::optional<RingReservation> res = ring_reserve(bytes);
-    std::byte*    src_map       = nullptr;
-    VkBuffer      src_buf       = VK_NULL_HANDLE;
-    VkDeviceSize  src_offset    = 0;
-    VkDeviceSize  ring_begin    = 0;
-    VkDeviceSize  ring_end      = 0;
-    VkBuffer      oneshot_buf   = VK_NULL_HANDLE;
-    VmaAllocation oneshot_alloc = nullptr;
+    std::byte*   src_map    = nullptr;
+    VkBuffer     src_buf    = VK_NULL_HANDLE;
+    VkDeviceSize src_offset = 0;
+    VkDeviceSize ring_begin = 0;
+    VkDeviceSize ring_end   = 0;
+    VmaBuffer    oneshot_staging;  // move-only; non-empty iff ring fell back
     if (res) {
         src_map    = staging_ring_map_ + res->offset;
         src_buf    = staging_ring_.handle();
@@ -569,11 +579,13 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
         stg_ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo stg_info{};
-        check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &oneshot_buf,
-                              &oneshot_alloc, &stg_info),
+        VkBuffer      buf   = VK_NULL_HANDLE;
+        VmaAllocation a     = nullptr;
+        check(vmaCreateBuffer(allocator_, &stg_bi, &stg_ai, &buf, &a, &stg_info),
               "texture staging (fallback)");
+        oneshot_staging = VmaBuffer(allocator_, buf, a, stg_info.pMappedData);
         src_map = static_cast<std::byte*>(stg_info.pMappedData);
-        src_buf = oneshot_buf;
+        src_buf = oneshot_staging.handle();
     }
     std::memcpy(src_map, pixels, bytes);
 
@@ -678,8 +690,14 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
     check(dev_->submit2(1, &sub, fence), "texture upload submit");
 
     std::lock_guard lk(texture_mutex_);
-    pending_uploads_.push_back({fence, cmd, oneshot_buf, oneshot_alloc,
-                                ring_begin, ring_end, idx});
+    PendingUpload pu;
+    pu.fence       = fence;
+    pu.cmd         = cmd;
+    pu.staging     = std::move(oneshot_staging);
+    pu.ring_begin  = ring_begin;
+    pu.ring_end    = ring_end;
+    pu.texture_idx = idx;
+    pending_uploads_.push_back(std::move(pu));
 }
 
 namespace {

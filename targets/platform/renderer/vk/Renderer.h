@@ -237,8 +237,9 @@ private:
 
     // Thread-safe deferred buffer destruction. Worker threads push here
     // instead of accessing frame().deletions (which is main-thread only).
-    std::vector<PendingDestroy> pending_destroys_;
-    std::mutex pending_destroy_mutex_;
+    // VmaBuffer destructor runs vmaDestroyBuffer on clear().
+    std::vector<VmaBuffer> pending_destroys_;
+    std::mutex             pending_destroy_mutex_;
 
     // Framebuffer info
     rp::FrameFramebuffer fb_{};
