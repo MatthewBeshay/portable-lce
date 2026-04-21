@@ -31,7 +31,14 @@ public:
     VkSwapchainKHR handle()       const { return swapchain_; }
     VkFormat       format()       const { return format_; }
     VkExtent2D     extent()       const { return extent_; }
-    VkFormat       depth_format() const { return kDepthFormat; }
+    VkFormat       depth_format() const { return depth_format_; }
+    /// True when depth_format() carries a stencil component (D32_SFLOAT_S8_UINT
+    /// or D24_UNORM_S8_UINT). Renderer consults this for barrier aspect bits
+    /// and stencil attachment wiring.
+    bool           has_stencil()  const {
+        return depth_format_ == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+               depth_format_ == VK_FORMAT_D24_UNORM_S8_UINT;
+    }
     VkImage        depth_image()  const { return depth_image_.handle(); }
     VkImageView    depth_view()   const { return depth_view_; }
 
@@ -42,6 +49,9 @@ public:
 private:
     void create_depth(const Device& dev);
     void destroy_depth(const Device& dev);
+    // Pick a depth(+stencil) format supported by the physical device.
+    // Preference: D32_SFLOAT_S8_UINT → D24_UNORM_S8_UINT → D32_SFLOAT.
+    static VkFormat pick_depth_format(const Device& dev);
 
     VkSwapchainKHR           swapchain_   = VK_NULL_HANDLE;
     VkFormat                 format_      = VK_FORMAT_UNDEFINED;
@@ -50,7 +60,7 @@ private:
     std::vector<VkImage>     images_;
     std::vector<VkImageView> views_;
 
-    static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+    VkFormat    depth_format_ = VK_FORMAT_D32_SFLOAT;
     VmaImage    depth_image_;
     VkImageView depth_view_ = VK_NULL_HANDLE;
 };

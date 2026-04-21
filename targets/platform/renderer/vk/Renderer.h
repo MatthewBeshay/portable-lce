@@ -137,7 +137,8 @@ public:
     // shaderClipDistance + gl_ClipDistance[] output in the vertex shader —
     // not a reinstatement of this toggle.
     void StateSetEnableViewportClipPlanes(bool) override {}
-    void StateSetStencil(int, uint8_t, uint8_t, uint8_t) override {}
+    void StateSetStencil(int func, uint8_t ref, uint8_t funcMask,
+                         uint8_t writeMask) override;
     void StateSetForceLOD(int lod) override {
         // -1 = auto (disabled). Otherwise clamp to 0..15 — shader reads a
         // 4-bit field from the flags push constant. Callers use 0..2.
@@ -229,6 +230,12 @@ private:
     float depth_bias_constant_ = 0;
     float depth_bias_slope_    = 0;
     float line_width_          = 1.0f;
+
+    // Stencil dynamic state (vkCmdSetStencilReference / CompareMask /
+    // WriteMask). Pipeline-side enable + compareOp live in pso_key_.
+    uint8_t stencil_ref_          = 0;
+    uint8_t stencil_compare_mask_ = 0xFF;
+    uint8_t stencil_write_mask_   = 0xFF;
 
     int  active_tex_unit_  = 0;
     bool texture_enabled_  = true;

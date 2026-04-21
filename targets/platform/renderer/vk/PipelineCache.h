@@ -22,45 +22,54 @@ struct PipelineKey {
     //   [1]    depth_write
     //   [2]    blend_enable
     //   [3]    cull_back
+    //   [4]    stencil_test
     //   [5]    compact  — 16-byte packed vertex format (decoded in shader)
-    //   [8:15] depth_func   (VkCompareOp, 8 bits reserved)
-    //   [16:23] blend_src   (VkBlendFactor)
-    //   [24:31] blend_dst   (VkBlendFactor)
-    //   [32:35] color_mask  (4 bits: R,G,B,A)
+    //   [8:15] depth_func    (VkCompareOp)
+    //   [16:23] blend_src    (VkBlendFactor)
+    //   [24:31] blend_dst    (VkBlendFactor)
+    //   [32:35] color_mask   (4 bits: R,G,B,A)
+    //   [36:43] stencil_func (VkCompareOp)
     // Line / triangle topology is a dynamic state
     // (VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY) — it does not affect the pipeline
-    // object, so it has no bit here.
+    // object, so it has no bit here. Stencil compare/write mask and reference
+    // are also dynamic.
     enum : uint64_t {
         kDepthTestShift   = 0,  kDepthTestMask   = 1ull << 0,
         kDepthWriteShift  = 1,  kDepthWriteMask  = 1ull << 1,
         kBlendEnableShift = 2,  kBlendEnableMask = 1ull << 2,
         kCullBackShift    = 3,  kCullBackMask    = 1ull << 3,
+        kStencilTestShift = 4,  kStencilTestMask = 1ull << 4,
         kCompactShift     = 5,  kCompactMask     = 1ull << 5,
         kDepthFuncShift   = 8,  kDepthFuncMask   = 0xFFull << 8,
         kBlendSrcShift    = 16, kBlendSrcMask    = 0xFFull << 16,
         kBlendDstShift    = 24, kBlendDstMask    = 0xFFull << 24,
         kColorMaskShift   = 32, kColorMaskMask   = 0xFull << 32,
+        kStencilFuncShift = 36, kStencilFuncMask = 0xFFull << 36,
     };
 
     constexpr bool depth_test()   const { return bits & kDepthTestMask; }
     constexpr bool depth_write()  const { return bits & kDepthWriteMask; }
     constexpr bool blend_enable() const { return bits & kBlendEnableMask; }
     constexpr bool cull_back()    const { return bits & kCullBackMask; }
+    constexpr bool stencil_test() const { return bits & kStencilTestMask; }
     constexpr bool compact()      const { return bits & kCompactMask; }
-    constexpr uint8_t depth_func() const { return uint8_t((bits & kDepthFuncMask) >> kDepthFuncShift); }
-    constexpr uint8_t blend_src()  const { return uint8_t((bits & kBlendSrcMask) >> kBlendSrcShift); }
-    constexpr uint8_t blend_dst()  const { return uint8_t((bits & kBlendDstMask) >> kBlendDstShift); }
-    constexpr uint8_t color_mask() const { return uint8_t((bits & kColorMaskMask) >> kColorMaskShift); }
+    constexpr uint8_t depth_func()   const { return uint8_t((bits & kDepthFuncMask)   >> kDepthFuncShift); }
+    constexpr uint8_t blend_src()    const { return uint8_t((bits & kBlendSrcMask)    >> kBlendSrcShift); }
+    constexpr uint8_t blend_dst()    const { return uint8_t((bits & kBlendDstMask)    >> kBlendDstShift); }
+    constexpr uint8_t color_mask()   const { return uint8_t((bits & kColorMaskMask)   >> kColorMaskShift); }
+    constexpr uint8_t stencil_func() const { return uint8_t((bits & kStencilFuncMask) >> kStencilFuncShift); }
 
     void set_depth_test(bool v)   { bits = (bits & ~kDepthTestMask)   | (uint64_t(v) << kDepthTestShift); }
     void set_depth_write(bool v)  { bits = (bits & ~kDepthWriteMask)  | (uint64_t(v) << kDepthWriteShift); }
     void set_blend_enable(bool v) { bits = (bits & ~kBlendEnableMask) | (uint64_t(v) << kBlendEnableShift); }
     void set_cull_back(bool v)    { bits = (bits & ~kCullBackMask)    | (uint64_t(v) << kCullBackShift); }
+    void set_stencil_test(bool v) { bits = (bits & ~kStencilTestMask) | (uint64_t(v) << kStencilTestShift); }
     void set_compact(bool v)      { bits = (bits & ~kCompactMask)     | (uint64_t(v) << kCompactShift); }
-    void set_depth_func(uint8_t v){ bits = (bits & ~kDepthFuncMask)   | (uint64_t(v) << kDepthFuncShift); }
-    void set_blend_src(uint8_t v) { bits = (bits & ~kBlendSrcMask)    | (uint64_t(v) << kBlendSrcShift); }
-    void set_blend_dst(uint8_t v) { bits = (bits & ~kBlendDstMask)    | (uint64_t(v) << kBlendDstShift); }
-    void set_color_mask(uint8_t v){ bits = (bits & ~kColorMaskMask)   | (uint64_t(v & 0xF) << kColorMaskShift); }
+    void set_depth_func(uint8_t v)  { bits = (bits & ~kDepthFuncMask)   | (uint64_t(v) << kDepthFuncShift); }
+    void set_blend_src(uint8_t v)   { bits = (bits & ~kBlendSrcMask)    | (uint64_t(v) << kBlendSrcShift); }
+    void set_blend_dst(uint8_t v)   { bits = (bits & ~kBlendDstMask)    | (uint64_t(v) << kBlendDstShift); }
+    void set_color_mask(uint8_t v)  { bits = (bits & ~kColorMaskMask)   | (uint64_t(v & 0xF) << kColorMaskShift); }
+    void set_stencil_func(uint8_t v){ bits = (bits & ~kStencilFuncMask) | (uint64_t(v) << kStencilFuncShift); }
 
     constexpr PipelineKey() {
         // Default: depth test+write on, CMP=LESS_OR_EQUAL(3), blend=SRC_ALPHA/ONE_MINUS_SRC_ALPHA, color mask RGBA
@@ -88,6 +97,7 @@ public:
         VkPipelineLayout layout                  = VK_NULL_HANDLE;
         VkFormat         color_format            = VK_FORMAT_UNDEFINED;
         VkFormat         depth_format            = VK_FORMAT_UNDEFINED;
+        VkFormat         stencil_format          = VK_FORMAT_UNDEFINED;
         const uint32_t*  vert_spv                = nullptr;
         size_t           vert_size               = 0;
         const uint32_t*  frag_spv                = nullptr;

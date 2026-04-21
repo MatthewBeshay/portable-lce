@@ -47,13 +47,16 @@ struct PipelineBuild {
     VkPipelineDepthStencilStateCreateInfo     ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineColorBlendAttachmentState       att{};
     VkPipelineColorBlendStateCreateInfo       cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    VkDynamicState                            dyn_states[6]{
+    VkDynamicState                            dyn_states[9]{
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
         VK_DYNAMIC_STATE_DEPTH_BIAS,
         VK_DYNAMIC_STATE_LINE_WIDTH,
+        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_REFERENCE,
     };
     VkPipelineDynamicStateCreateInfo          dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     VkPipelineRenderingCreateInfo             prci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
@@ -99,6 +102,15 @@ void populate(const PipelineCache::Config& cfg, const PipelineKey& key,
     b.ds.depthTestEnable  = key.depth_test()  ? VK_TRUE : VK_FALSE;
     b.ds.depthWriteEnable = key.depth_write() ? VK_TRUE : VK_FALSE;
     b.ds.depthCompareOp   = VkCompareOp(key.depth_func());
+    b.ds.stencilTestEnable = key.stencil_test() ? VK_TRUE : VK_FALSE;
+    // Stencil ops: fail=KEEP, pass=REPLACE (writeMask gates the actual
+    // write), depthFail=KEEP. compare/write masks and reference are
+    // dynamic (vkCmdSetStencilCompareMask / WriteMask / Reference).
+    b.ds.front.failOp      = VK_STENCIL_OP_KEEP;
+    b.ds.front.passOp      = VK_STENCIL_OP_REPLACE;
+    b.ds.front.depthFailOp = VK_STENCIL_OP_KEEP;
+    b.ds.front.compareOp   = VkCompareOp(key.stencil_func());
+    b.ds.back              = b.ds.front;
 
     const uint8_t cmask = key.color_mask();
     b.att.blendEnable         = key.blend_enable() ? VK_TRUE : VK_FALSE;
@@ -122,6 +134,9 @@ void populate(const PipelineCache::Config& cfg, const PipelineKey& key,
     b.prci.colorAttachmentCount    = 1;
     b.prci.pColorAttachmentFormats = &cfg.color_format;
     b.prci.depthAttachmentFormat   = cfg.depth_format;
+    b.prci.stencilAttachmentFormat = cfg.stencil_format;
+    // Note: b.prci.pNext left null; pipeline rendering struct is
+    // chained into VkGraphicsPipelineCreateInfo below via b.gci.pNext.
 
     b.gci.pNext               = &b.prci;
     b.gci.stageCount          = 2;

@@ -118,10 +118,31 @@ void Swapchain::resize(const Device& dev, uint32_t w, uint32_t h) {
     if (old_sc) vkDestroySwapchainKHR(dev.handle(), old_sc, nullptr);
 }
 
+VkFormat Swapchain::pick_depth_format(const Device& dev) {
+    // Prefer a format that includes a stencil aspect so stencil features
+    // (StateSetStencil) work without a second reformat later. D32_SFLOAT
+    // stays as a last resort — stencil paths will then be wired into the
+    // first depth format that carries a stencil aspect.
+    const VkFormat candidates[] = {
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT,
+    };
+    for (VkFormat f : candidates) {
+        VkFormatProperties p{};
+        vkGetPhysicalDeviceFormatProperties(dev.physical(), f, &p);
+        if (p.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return f;
+    }
+    return VK_FORMAT_D32_SFLOAT;
+}
+
 void Swapchain::create_depth(const Device& dev) {
+    depth_format_ = pick_depth_format(dev);
+
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType   = VK_IMAGE_TYPE_2D;
-    ici.format      = kDepthFormat;
+    ici.format      = depth_format_;
     ici.extent      = {extent_.width, extent_.height, 1};
     ici.mipLevels   = 1;
     ici.arrayLayers = 1;
@@ -137,11 +158,14 @@ void Swapchain::create_depth(const Device& dev) {
           "depth image");
     depth_image_ = VmaImage(dev.allocator(), img, alloc);
 
+    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (has_stencil()) aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image    = depth_image_.handle();
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format   = kDepthFormat;
-    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    vi.format   = depth_format_;
+    vi.subresourceRange = {aspect, 0, 1, 0, 1};
     check(vkCreateImageView(dev.handle(), &vi, nullptr, &depth_view_),
           "depth view");
 }

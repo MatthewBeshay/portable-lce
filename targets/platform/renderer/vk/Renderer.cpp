@@ -184,7 +184,9 @@ Renderer::Renderer(SDL_Window* window)
         pc.device       = dev_.handle();
         pc.layout       = *pipeline_layout_;
         pc.color_format = swap_.format();
-        pc.depth_format = swap_.depth_format();
+        pc.depth_format   = swap_.depth_format();
+        pc.stencil_format = swap_.has_stencil() ? swap_.depth_format()
+                                                : VK_FORMAT_UNDEFINED;
         pc.vert_spv          = kBasicVertSpv;
         pc.vert_size         = sizeof(kBasicVertSpv);
         pc.frag_spv          = kBasicFragSpv;
@@ -416,14 +418,20 @@ void Renderer::begin_pass() {
     bars[0].image         = swap_.image(acquired_img_);
     bars[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+    const bool has_stencil = swap_.has_stencil();
+    VkImageAspectFlags ds_aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (has_stencil) ds_aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+
     bars[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     bars[1].srcStageMask  = VK_PIPELINE_STAGE_2_NONE;
     bars[1].dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
     bars[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     bars[1].oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-    bars[1].newLayout     = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    bars[1].newLayout     = has_stencil
+                              ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                              : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     bars[1].image         = swap_.depth_image();
-    bars[1].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    bars[1].subresourceRange = {ds_aspect, 0, 1, 0, 1};
 
     VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dep.imageMemoryBarrierCount = 2;
@@ -439,10 +447,22 @@ void Renderer::begin_pass() {
 
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     depth.imageView   = swap_.depth_view();
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.imageLayout = has_stencil
+                          ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                          : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     depth.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depth.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depth.clearValue.depthStencil.depth = 1.0f;
+
+    // Stencil attachment — share the same view (combined depth+stencil
+    // format). Clear to 0, don't-care on store. Only wired when the
+    // swapchain picked a format with a stencil aspect.
+    VkRenderingAttachmentInfo stencil{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    stencil.imageView   = swap_.depth_view();
+    stencil.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    stencil.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    stencil.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    stencil.clearValue.depthStencil.stencil = 0;
 
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.renderArea      = {{0, 0}, swap_.extent()};
@@ -450,6 +470,7 @@ void Renderer::begin_pass() {
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments    = &color;
     ri.pDepthAttachment     = &depth;
+    if (has_stencil) ri.pStencilAttachment = &stencil;
     vkCmdBeginRendering(cmd, &ri);
 
     // Y-flip via negative viewport height (VK_KHR_maintenance1, core in 1.1).
@@ -693,6 +714,26 @@ void Renderer::StateSetAlphaTestEnable(bool e) { alpha_test_enabled_ = e; }
 void Renderer::StateSetDepthSlopeAndBias(float slope, float bias) {
     depth_bias_slope_ = slope; depth_bias_constant_ = bias;
 }
+void Renderer::StateSetStencil(int func, uint8_t ref, uint8_t funcMask,
+                               uint8_t writeMask) {
+    // Legacy GL compare constants 0x0200..0x0207 map directly to VkCompareOp
+    // 0..7 (NEVER/LESS/EQUAL/LEQUAL/GREATER/NOTEQUAL/GEQUAL/ALWAYS). Any
+    // out-of-range value falls back to ALWAYS.
+    int offset = func - 0x0200;
+    uint8_t vk_func = (offset >= 0 && offset <= 7) ? uint8_t(offset)
+                                                   : uint8_t(VK_COMPARE_OP_ALWAYS);
+    if (!pso_key_.stencil_test()) {
+        pso_key_.set_stencil_test(true);
+        pso_dirty_ = true;
+    }
+    if (pso_key_.stencil_func() != vk_func) {
+        pso_key_.set_stencil_func(vk_func);
+        pso_dirty_ = true;
+    }
+    stencil_ref_          = ref;
+    stencil_compare_mask_ = funcMask;
+    stencil_write_mask_   = writeMask;
+}
 void Renderer::StateSetLightDirection(int idx, float x, float y, float z) {
     glm::vec3 d = glm::normalize(glm::mat3(mv_stack_.top()) * glm::vec3(x,y,z));
     if (idx == 0) light0_dir_eye_ = d; else light1_dir_eye_ = d;
@@ -854,6 +895,11 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     if (viewport_dirty_) apply_viewport_and_scissor();
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetLineWidth(f.cmd, line_width_);
+    if (pso_key_.stencil_test()) {
+        vkCmdSetStencilCompareMask(f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_compare_mask_);
+        vkCmdSetStencilWriteMask  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_write_mask_);
+        vkCmdSetStencilReference  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_ref_);
+    }
 
     // Dynamic depth bias
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
@@ -970,6 +1016,11 @@ bool Renderer::CBuffCall(int index, bool) {
     if (viewport_dirty_) apply_viewport_and_scissor();
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetLineWidth(f.cmd, line_width_);
+    if (pso_key_.stencil_test()) {
+        vkCmdSetStencilCompareMask(f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_compare_mask_);
+        vkCmdSetStencilWriteMask  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_write_mask_);
+        vkCmdSetStencilReference  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_ref_);
+    }
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
     bool textured  = false;
@@ -1064,6 +1115,11 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     if (viewport_dirty_) apply_viewport_and_scissor();
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
     vkCmdSetLineWidth(f.cmd, line_width_);
+    if (pso_key_.stencil_test()) {
+        vkCmdSetStencilCompareMask(f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_compare_mask_);
+        vkCmdSetStencilWriteMask  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_write_mask_);
+        vkCmdSetStencilReference  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_ref_);
+    }
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
