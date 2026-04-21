@@ -945,6 +945,109 @@ void Renderer::SetWindowSize(int w, int h) { SDL_SetWindowSize(window_, w, h); }
 void Renderer::SetFullscreen(bool fs) {
     SDL_SetWindowFullscreen(window_, fs ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 }
+void Renderer::ReadPixels(int x, int y, int w, int h, void* buf) {
+    // Synchronous readback of the most recently acquired swapchain image.
+    // Intended to be called between Present and the next StartFrame so
+    // the image is in PRESENT_SRC_KHR layout; any other call site will
+    // generate validation errors because this function does not track
+    // mid-frame transitions. `buf` receives w*h*4 bytes in the
+    // swapchain's native byte order (B8G8R8A8 on our config).
+    if (!buf || w <= 0 || h <= 0) return;
+    const VkDeviceSize bytes = VkDeviceSize(w) * VkDeviceSize(h) * 4;
+
+    // Full-device sync is overkill but simplifies correctness — ReadPixels
+    // is a debug / screenshot entry point, not a hot path.
+    vkDeviceWaitIdle(dev_.handle());
+
+    // Staging buffer sized to the requested region.
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size  = bytes;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo ai{};
+    ai.usage = VMA_MEMORY_USAGE_AUTO;
+    ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+               VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo info{};
+    VkBuffer      staging_buf   = VK_NULL_HANDLE;
+    VmaAllocation staging_alloc = nullptr;
+    check(vmaCreateBuffer(dev_.allocator(), &bi, &ai, &staging_buf,
+                          &staging_alloc, &info),
+          "readpixels staging");
+    VmaBuffer staging(dev_.allocator(), staging_buf, staging_alloc,
+                      info.pMappedData);
+
+    // One-shot transient command pool + command buffer.
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pci.queueFamilyIndex = dev_.queue_family();
+    VkCommandPool pool;
+    check(vkCreateCommandPool(dev_.handle(), &pci, nullptr, &pool), "readpixels pool");
+
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "readpixels cmd");
+
+    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bbi);
+
+    VkImage src = swap_.image(acquired_img_);
+
+    VkImageMemoryBarrier2 to_src{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    to_src.srcStageMask  = VK_PIPELINE_STAGE_2_NONE;
+    to_src.srcAccessMask = 0;
+    to_src.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+    to_src.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+    to_src.oldLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    to_src.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_src.image         = src;
+    to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1; dep.pImageMemoryBarriers = &to_src;
+    vkCmdPipelineBarrier2(cmd, &dep);
+
+    VkBufferImageCopy rgn{};
+    rgn.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    rgn.imageOffset      = {x, y, 0};
+    rgn.imageExtent      = {uint32_t(w), uint32_t(h), 1};
+    vkCmdCopyImageToBuffer(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           staging.handle(), 1, &rgn);
+
+    VkImageMemoryBarrier2 to_present = to_src;
+    to_present.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+    to_present.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+    to_present.dstStageMask  = VK_PIPELINE_STAGE_2_NONE;
+    to_present.dstAccessMask = 0;
+    to_present.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to_present.newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    dep.pImageMemoryBarriers = &to_present;
+    vkCmdPipelineBarrier2(cmd, &dep);
+
+    vkEndCommandBuffer(cmd);
+
+    VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    csi.commandBuffer = cmd;
+    VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    sub.commandBufferInfoCount = 1; sub.pCommandBufferInfos = &csi;
+
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFence fence;
+    check(vkCreateFence(dev_.handle(), &fci, nullptr, &fence), "readpixels fence");
+    check(dev_.submit2(1, &sub, fence), "readpixels submit");
+    vkWaitForFences(dev_.handle(), 1, &fence, VK_TRUE, UINT64_MAX);
+
+    // Flush is a no-op on coherent memory; required on non-coherent.
+    vmaInvalidateAllocation(dev_.allocator(), staging.allocation(), 0, bytes);
+    std::memcpy(buf, info.pMappedData, size_t(bytes));
+
+    vkDestroyFence(dev_.handle(), fence, nullptr);
+    vkDestroyCommandPool(dev_.handle(), pool, nullptr);
+    // staging destructs automatically.
+}
+
 void Renderer::Close() { should_close_ = true; }
 bool Renderer::ShouldClose() { return should_close_; }
 const rp::FrameFramebuffer& Renderer::framebuffer() const { return fb_; }

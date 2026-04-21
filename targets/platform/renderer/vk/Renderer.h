@@ -149,7 +149,7 @@ public:
     void StateSetVertexTextureUV(float u, float v) override { global_lm_uv_ = {u,v}; }
 
     void SetChunkOffset(float x, float y, float z) override { chunk_offset_ = {x,y,z}; }
-    void ReadPixels(int, int, int, int, void*) override {}
+    void ReadPixels(int x, int y, int w, int h, void* buf) override;
     [[nodiscard]] std::optional<rp::LoadedImage>
     load_texture_data(const char* filename) override;
     [[nodiscard]] std::optional<rp::LoadedImage>
