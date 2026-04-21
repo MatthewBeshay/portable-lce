@@ -26,10 +26,10 @@ void main()
     vec2 lm = (a_texcoord1.x <= -2) ? u_globalLM.xy : vec2(a_texcoord1);
     v_uv1 = (lm / 256.0) * u_lmTransform.xy + u_lmTransform.zw;
 
-    // Game packs color as (R<<24|G<<16|B<<8|A). In little-endian memory
-    // that's bytes [A,B,G,R]. bgfx reads Color0 as [R,G,B,A] from bytes,
-    // so we get R=A, G=B, B=G, A=R. Swizzle to correct order.
-    vec4 vertColor = a_color0.abgr;
+    // Game packs color as r | (g<<8) | (b<<16) | (a<<24), matching
+    // VK_FORMAT_R8G8B8A8_UNORM. bgfx reads Color0 as [R,G,B,A] so no
+    // swizzle is needed.
+    vec4 vertColor = a_color0;
     bool sentinel = (vertColor.r + vertColor.g + vertColor.b) < 0.004;
     vec4 col = sentinel ? u_baseColor : vertColor;
 
