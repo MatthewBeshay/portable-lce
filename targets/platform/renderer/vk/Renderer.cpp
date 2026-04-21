@@ -643,6 +643,16 @@ void Renderer::UpdateGamma(unsigned short g) {
     inv_gamma_ = 1.0f / gamma;
 }
 
+void Renderer::refresh_fog_mode_f() {
+    if (!fog_enabled_) { fog_mode_f_ = 0.0f; return; }
+    switch (fog_mode_) {
+        case rp::FogMode::linear:         fog_mode_f_ = 1.0f; break;
+        case rp::FogMode::exponential:    fog_mode_f_ = 2.0f; break;
+        case rp::FogMode::exponential_sq: fog_mode_f_ = 3.0f; break;
+        default:                          fog_mode_f_ = 0.0f; break;
+    }
+}
+
 // ===================================================================
 // PUSH CONSTANTS HELPER
 // ===================================================================
@@ -668,16 +678,7 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
     pc.ldiff     = glm::vec4(light_diffuse_,  mv[3][1]);
     pc.lamb      = glm::vec4(light_ambient_,  mv[3][2]);
 
-    float fog_mode_f = 0;
-    if (fog_enabled_) {
-        switch (fog_mode_) {
-            case rp::FogMode::linear:         fog_mode_f = 1; break;
-            case rp::FogMode::exponential:    fog_mode_f = 2; break;
-            case rp::FogMode::exponential_sq: fog_mode_f = 3; break;
-            default: break;
-        }
-    }
-    pc.fog_params = glm::vec4(fog_mode_f, fog_start_, fog_end_, fog_density_);
+    pc.fog_params = glm::vec4(fog_mode_f_, fog_start_, fog_end_, fog_density_);
 
     if (tint) {
         pc.state_colour = glm::vec4(state_colour_[0] * (*tint)[0],

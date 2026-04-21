@@ -114,8 +114,8 @@ public:
     void StateSetDepthTestEnable(bool e) override;
     void StateSetAlphaTestEnable(bool e) override;
     void StateSetDepthSlopeAndBias(float slope, float bias) override;
-    void StateSetFogEnable(bool e) override { fog_enabled_ = e; }
-    void StateSetFogMode(rp::FogMode m) override { fog_mode_ = m; }
+    void StateSetFogEnable(bool e) override { fog_enabled_ = e; refresh_fog_mode_f(); }
+    void StateSetFogMode(rp::FogMode m) override { fog_mode_ = m; refresh_fog_mode_f(); }
     void StateSetFogNearDistance(float d) override { fog_start_ = d; }
     void StateSetFogFarDistance(float d) override  { fog_end_ = d; }
     void StateSetFogDensity(float d) override      { fog_density_ = d; }
@@ -201,6 +201,10 @@ private:
     rp::FogMode fog_mode_ = rp::FogMode::linear;
     float fog_start_ = 0, fog_end_ = 1, fog_density_ = 1;
     std::array<float, 4> fog_colour_{0.5f, 0.7f, 1.0f, 1.0f};
+    // Derived fog_mode_f: 0 when disabled, else 1/2/3 for linear/exp/exp^2.
+    // Set from StateSetFogEnable and StateSetFogMode; read in the per-draw
+    // fill_push_constants hot path instead of re-deriving via a switch.
+    float fog_mode_f_ = 0.0f;
 
     glm::vec3 light0_dir_eye_{0.174f, 0.870f, -0.609f};
     glm::vec3 light1_dir_eye_{-0.174f, 0.870f, 0.609f};
@@ -252,6 +256,7 @@ private:
     void ensure_pass();
     void begin_pass();
     void end_pass();
+    void refresh_fog_mode_f();  // recompute fog_mode_f_ from fog_enabled_/fog_mode_
     void fill_push_constants(void* out, bool textured, bool lm_active,
                              uint32_t tex_id, uint32_t lm_tex_id,
                              const glm::vec4* tint = nullptr);
