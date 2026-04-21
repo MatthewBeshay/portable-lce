@@ -139,6 +139,10 @@ private:
     void    complete_upload(PendingUpload& pu);
     void    wait_for_upload(int texture_idx);
     void    wait_all_uploads();
+    // Shared drain pattern for ensure_default_* — snapshot any pending
+    // upload fence for `idx` under the mutex, wait on it outside, then
+    // re-acquire to finalise via wait_for_upload.
+    void    drain_pending_for(int idx);
 
     const Device* dev_       = nullptr;  // non-owning; guarded submits
     VkDevice      device_    = VK_NULL_HANDLE;

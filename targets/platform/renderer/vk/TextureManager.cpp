@@ -511,7 +511,7 @@ int TextureManager::ensure_default_texture() {
     uint32_t pixel = 0xFFFFFFFF;
     { std::lock_guard lk(texture_mutex_); bound_tex_ = idx; }
     upload_texture(idx, 1, 1, &pixel);
-    { std::lock_guard lk(texture_mutex_); wait_for_upload(idx); }
+    drain_pending_for(idx);
     return idx;
 }
 
@@ -520,8 +520,29 @@ int TextureManager::ensure_default_lightmap() {
     uint32_t pixel = 0xFFFFFFFF;
     { std::lock_guard lk(texture_mutex_); bound_tex_ = idx; }
     upload_texture(idx, 1, 1, &pixel);
-    { std::lock_guard lk(texture_mutex_); wait_for_upload(idx); }
+    drain_pending_for(idx);
     return idx;
+}
+
+// Snapshot the upload fence for `idx` under texture_mutex_, release the
+// mutex, wait on the fence outside, then re-acquire to finalise via
+// wait_for_upload. Same shape as upload_texture's prior-drain path —
+// avoids blocking other threads on texture_mutex_ for the duration of
+// the fence wait. At worst wait_for_upload does a tiny zero-wait poll
+// if the upload already completed.
+void TextureManager::drain_pending_for(int idx) {
+    VkFence pending = VK_NULL_HANDLE;
+    {
+        std::lock_guard lk(texture_mutex_);
+        for (const auto& pu : pending_uploads_) {
+            if (pu.texture_idx == idx) { pending = pu.fence; break; }
+        }
+    }
+    if (pending) {
+        vkWaitForFences(device_, 1, &pending, VK_TRUE, UINT64_MAX);
+    }
+    std::lock_guard lk(texture_mutex_);
+    wait_for_upload(idx);
 }
 
 void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
