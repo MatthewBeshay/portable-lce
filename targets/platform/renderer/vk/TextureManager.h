@@ -20,6 +20,10 @@ struct TextureSlot {
     VkImageView view  = VK_NULL_HANDLE;
     uint32_t    width = 0, height = 0;
     bool        ready = false;
+    // Index into Renderer::samplers_ (2 bits). 0 = nearest+repeat
+    // (Minecraft default). Updated by StateSetTextureFilter / Wrap on
+    // the currently-bound texture.
+    uint8_t     sampler_idx = 0;
 };
 
 /// Bindless texture manager: one descriptor set holds a sampled-image array
@@ -79,6 +83,18 @@ public:
     /// Same for the lightmap. Returns slot index (default_lm_ if unset/unready),
     /// and sets `active_out` to false if lightmap tex is 0 (no lightmap bound).
     uint32_t resolve_lightmap_slot(bool& active_out);
+
+    /// Update the sampler index of the currently-bound texture slot.
+    /// Matches the 4-way table owned by Renderer:
+    ///   0 = nearest + repeat        (default)
+    ///   1 = nearest + clamp_to_edge
+    ///   2 = linear  + repeat
+    ///   3 = linear  + clamp_to_edge (also the lightmap sampler)
+    void set_bound_sampler_idx(uint8_t idx);
+
+    /// Sampler index stored for slot `idx`. Used by fill_push_constants
+    /// to pack the index into PushConstants::flags.
+    [[nodiscard]] uint8_t sampler_idx_for(int idx) const;
 
 private:
     struct PendingUpload {

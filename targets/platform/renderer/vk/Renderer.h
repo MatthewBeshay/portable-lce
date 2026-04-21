@@ -139,16 +139,16 @@ public:
     void StateSetStencil(int func, uint8_t ref, uint8_t funcMask,
                          uint8_t writeMask) override;
     void StateSetForceLOD(int lod) override {
-        // -1 = auto (disabled). Otherwise clamp to 0..15 — shader reads a
-        // 4-bit field from the flags push constant. Callers use 0..2.
-        force_lod_ = (lod < 0) ? 0xFFu : uint32_t(lod) & 0xFu;
+        // -1 = auto (disabled). Otherwise 0..3 — shader reads a 2-bit
+        // field from the flags push constant (callers use 0..2 in
+        // practice). 0xFF is the sentinel the fill path checks to
+        // decide whether to set FLAG_FORCE_LOD.
+        force_lod_ = (lod < 0) ? 0xFFu : uint32_t(lod) & 0x3u;
     }
     void StateSetTextureEnable(bool e) override;
     void StateSetLightmapEnable(bool e) override;
-    // No-ops: bindless layout uses an immutable sampler shared by all
-    // diffuse textures. See TextureManager::set_param.
-    void StateSetTextureFilter(rp::TextureFilter, rp::TextureFilter) override {}
-    void StateSetTextureWrap(rp::TextureWrap, rp::TextureWrap) override {}
+    void StateSetTextureFilter(rp::TextureFilter min, rp::TextureFilter mag) override;
+    void StateSetTextureWrap(rp::TextureWrap s, rp::TextureWrap t) override;
     void StateSetVertexTextureUV(float u, float v) override { global_lm_uv_ = {u,v}; }
 
     void SetChunkOffset(float x, float y, float z) override { chunk_offset_ = {x,y,z}; }
@@ -182,8 +182,12 @@ private:
     // RAII-wrapped so a mid-constructor throw releases the handles. The
     // descriptor set itself is owned by the pool (no FREE_DESCRIPTOR_SET
     // flag), so bindless_set_ stays a raw handle.
-    ::vk::raii::Sampler             sampler_diffuse_{nullptr};
-    ::vk::raii::Sampler             sampler_lightmap_{nullptr};
+    // Immutable sampler table baked into the bindless descriptor set.
+    // Indices match SamplerKey: 0=nearest+repeat, 1=nearest+clamp,
+    // 2=linear+repeat, 3=linear+clamp. Slot 3 doubles as lightmap.
+    std::array<::vk::raii::Sampler, 4> samplers_{
+        ::vk::raii::Sampler{nullptr}, ::vk::raii::Sampler{nullptr},
+        ::vk::raii::Sampler{nullptr}, ::vk::raii::Sampler{nullptr}};
     ::vk::raii::DescriptorSetLayout bindless_set_layout_{nullptr};
     ::vk::raii::DescriptorPool      bindless_pool_{nullptr};
     ::vk::raii::PipelineLayout      pipeline_layout_{nullptr};

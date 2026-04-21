@@ -61,73 +61,78 @@ Renderer::Renderer(SDL_Window* window)
         f.create(dev_.handle(), dev_.allocator(), dev_.queue_family(),
                  dev_.timestamp_period_ns());
 
-    // Immutable samplers — diffuse uses nearest+mipmap+repeat (Minecraft default),
-    // lightmap uses linear+clamp with a single LOD. These are baked into the
-    // descriptor set layout so no descriptor updates are needed for the
-    // sampler side. Each sampler gets its own fully-initialised sci struct
-    // so that differences are explicit and fields don't silently inherit.
+    // Immutable sampler table — 4 combinations covering every filter/wrap
+    // combo the game emits through StateSetTextureFilter/Wrap. Layout:
+    //   [0] nearest + repeat        (chunk terrain, most mobs)
+    //   [1] nearest + clamp_to_edge (edge tiles, some GUI)
+    //   [2] linear  + repeat        (blur mask, panorama)
+    //   [3] linear  + clamp_to_edge (lightmap, UI smoothed icons)
+    // Index 3 doubles as the lightmap sampler. Every texture slot picks
+    // one index via TextureManager; the shader reads the index from
+    // PushConstants::flags bits [6:7].
     {
-        ::vk::SamplerCreateInfo diffuse;
-        diffuse.magFilter    = ::vk::Filter::eNearest;
-        diffuse.minFilter    = ::vk::Filter::eNearest;
-        diffuse.mipmapMode   = ::vk::SamplerMipmapMode::eLinear;
-        diffuse.addressModeU = ::vk::SamplerAddressMode::eRepeat;
-        diffuse.addressModeV = ::vk::SamplerAddressMode::eRepeat;
-        diffuse.addressModeW = ::vk::SamplerAddressMode::eRepeat;
-        diffuse.minLod       = 0.0f;
-        diffuse.maxLod       = VK_LOD_CLAMP_NONE;
-        sampler_diffuse_     = ::vk::raii::Sampler(dev_.vk_device(), diffuse);
-
-        ::vk::SamplerCreateInfo lightmap;
-        lightmap.magFilter    = ::vk::Filter::eLinear;
-        lightmap.minFilter    = ::vk::Filter::eLinear;
-        lightmap.mipmapMode   = ::vk::SamplerMipmapMode::eNearest;
-        lightmap.addressModeU = ::vk::SamplerAddressMode::eClampToEdge;
-        lightmap.addressModeV = ::vk::SamplerAddressMode::eClampToEdge;
-        lightmap.addressModeW = ::vk::SamplerAddressMode::eClampToEdge;
-        lightmap.minLod       = 0.0f;
-        lightmap.maxLod       = 0.25f;  // lightmap is a single mip, clamp hard
-        sampler_lightmap_     = ::vk::raii::Sampler(dev_.vk_device(), lightmap);
+        auto make = [&](::vk::Filter f, ::vk::SamplerAddressMode a,
+                        float max_lod) {
+            ::vk::SamplerCreateInfo sci;
+            sci.magFilter    = f;
+            sci.minFilter    = f;
+            sci.mipmapMode   = (f == ::vk::Filter::eLinear)
+                                   ? ::vk::SamplerMipmapMode::eNearest
+                                   : ::vk::SamplerMipmapMode::eLinear;
+            sci.addressModeU = a;
+            sci.addressModeV = a;
+            sci.addressModeW = a;
+            sci.minLod       = 0.0f;
+            sci.maxLod       = max_lod;
+            return ::vk::raii::Sampler(dev_.vk_device(), sci);
+        };
+        samplers_[0] = make(::vk::Filter::eNearest,
+                            ::vk::SamplerAddressMode::eRepeat,
+                            VK_LOD_CLAMP_NONE);
+        samplers_[1] = make(::vk::Filter::eNearest,
+                            ::vk::SamplerAddressMode::eClampToEdge,
+                            VK_LOD_CLAMP_NONE);
+        samplers_[2] = make(::vk::Filter::eLinear,
+                            ::vk::SamplerAddressMode::eRepeat,
+                            VK_LOD_CLAMP_NONE);
+        samplers_[3] = make(::vk::Filter::eLinear,
+                            ::vk::SamplerAddressMode::eClampToEdge,
+                            0.25f);  // lightmap: single mip level
     }
 
-    // Bindless descriptor set layout: SAMPLED_IMAGE[kMaxTextures] + 2 immutable samplers.
+    // Bindless descriptor set layout:
+    //   binding 0: SAMPLED_IMAGE[kMaxTextures]  (update-after-bind, partially-bound)
+    //   binding 1: SAMPLER[4]                   (immutable, 4 combos above)
     {
-        VkSampler immutable[2] = {*sampler_diffuse_, *sampler_lightmap_};
-        VkDescriptorSetLayoutBinding bindings[3]{};
+        VkSampler immutable[4] = {*samplers_[0], *samplers_[1],
+                                  *samplers_[2], *samplers_[3]};
+        VkDescriptorSetLayoutBinding bindings[2]{};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         bindings[0].descriptorCount = TextureManager::kMaxTextures;
         bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
         bindings[1].binding         = 1;
         bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
-        bindings[1].descriptorCount = 1;
+        bindings[1].descriptorCount = 4;
         bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[1].pImmutableSamplers = &immutable[0];
-        bindings[2].binding         = 2;
-        bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
-        bindings[2].descriptorCount = 1;
-        bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[2].pImmutableSamplers = &immutable[1];
+        bindings[1].pImmutableSamplers = immutable;
 
-        // Binding flags: image array is update-after-bind + partially bound so
-        // slots can be written while the set is in use without invalidating
-        // still-active frames; sampler bindings have no flags (immutable).
-        VkDescriptorBindingFlags flags[3] = {
+        VkDescriptorBindingFlags flags[2] = {
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
             VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
             VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT,
-            0, 0
+            0
         };
         VkDescriptorSetLayoutBindingFlagsCreateInfo bf{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-        bf.bindingCount  = 3;
+        bf.bindingCount  = 2;
         bf.pBindingFlags = flags;
 
         VkDescriptorSetLayoutCreateInfo ci{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         ci.pNext        = &bf;
         ci.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-        ci.bindingCount = 3;
+        ci.bindingCount = 2;
         ci.pBindings    = bindings;
         bindless_set_layout_ = ::vk::raii::DescriptorSetLayout(
             dev_.vk_device(), ::vk::DescriptorSetLayoutCreateInfo(ci));
@@ -139,7 +144,7 @@ Renderer::Renderer(SDL_Window* window)
         ps[0].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         ps[0].descriptorCount = TextureManager::kMaxTextures;
         ps[1].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
-        ps[1].descriptorCount = 2;
+        ps[1].descriptorCount = 4;
         VkDescriptorPoolCreateInfo ci{
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
@@ -754,6 +759,26 @@ void Renderer::StateSetLightDirection(int idx, float x, float y, float z) {
 }
 void Renderer::StateSetTextureEnable(bool e) { texture_enabled_ = e; }
 void Renderer::StateSetLightmapEnable(bool e) { lightmap_enabled_ = e; }
+
+void Renderer::StateSetTextureFilter(rp::TextureFilter min, rp::TextureFilter mag) {
+    // mag filter decides the visible crispness; min tracks it. The
+    // sampler-index packing is: bit 1 = linear-filter, bit 0 = clamp-wrap.
+    const int bound = tex_mgr_.bound_tex();
+    const uint8_t current = tex_mgr_.sampler_idx_for(bound);
+    const bool linear = (mag == rp::TextureFilter::linear);
+    const uint8_t next = uint8_t((current & 0x1) | (linear ? 0x2 : 0x0));
+    tex_mgr_.set_bound_sampler_idx(next);
+    (void)min;
+}
+
+void Renderer::StateSetTextureWrap(rp::TextureWrap s, rp::TextureWrap t) {
+    const int bound = tex_mgr_.bound_tex();
+    const uint8_t current = tex_mgr_.sampler_idx_for(bound);
+    const bool clamp = (s == rp::TextureWrap::clamp_to_edge);
+    const uint8_t next = uint8_t((current & 0x2) | (clamp ? 0x1 : 0x0));
+    tex_mgr_.set_bound_sampler_idx(next);
+    (void)t;
+}
 void Renderer::UpdateGamma(unsigned short g) {
     float gamma = 0.5f + float(g) / 32768.0f;
     if (gamma < 0.01f) gamma = 0.01f;
@@ -824,10 +849,15 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
     if (lm_active)                    flags |= 4u;
     if (force_lod_ != 0xFFu) {
         flags |= 8u;
-        flags |= (force_lod_ & 0xFu) << 28u;
+        flags |= (force_lod_ & 0x3u) << 28u;  // 2 bits; callers use 0..2
     }
     flags |= (tex_id    & 0xFFFu) << 4u;
     flags |= (lm_tex_id & 0xFFFu) << 16u;
+    // Sampler index for the diffuse bind (bits [30:31]). 4-entry table
+    // in Renderer::samplers_: 0=nearest+repeat (default), 1=nearest+
+    // clamp, 2=linear+repeat, 3=linear+clamp (lightmap).
+    const uint32_t sampler_idx = tex_mgr_.sampler_idx_for(int(tex_id)) & 0x3u;
+    flags |= (sampler_idx << 30u);
     pc.flags = flags;
     pc.global_lm_packed = uint32_t(global_lm_uv_[0]) | (uint32_t(global_lm_uv_[1]) << 16);
 }

@@ -8,11 +8,13 @@ layout(location = 3) in vec2  v_uv1;       // lightmap UV
 
 // Bindless descriptor set:
 //   binding 0: sampled image array (per texture slot)
-//   binding 1: immutable sampler for diffuse (nearest, mip-linear, repeat)
-//   binding 2: immutable sampler for lightmap (linear, nearest-mip, clamp)
+//   binding 1: immutable sampler[4] — one entry per
+//              (nearest|linear) x (repeat|clamp) combination.
+//              Index 3 (linear+clamp, single-mip) doubles as the lightmap
+//              sampler; diffuse samples pick an index from PushConstants::
+//              flags bits [6:7].
 layout(set = 0, binding = 0) uniform texture2D u_images[];
-layout(set = 0, binding = 1) uniform sampler   u_diffuse_sampler;
-layout(set = 0, binding = 2) uniform sampler   u_lightmap_sampler;
+layout(set = 0, binding = 1) uniform sampler   u_samplers[4];
 
 // Same push constant block as vertex shader (shared range).
 layout(push_constant) uniform PC {
@@ -31,6 +33,14 @@ layout(push_constant) uniform PC {
 } pc;
 
 // PushConstants::flags bit layout (keep in sync with VertexFormats.h).
+//   [0]     FLAG_TEXTURED       diffuse sample enabled
+//   [1]     FLAG_ALPHA_TEST     discard when alpha below ref
+//   [2]     FLAG_LIGHTMAP       multiply c.rgb by lightmap sample
+//   [3]     FLAG_FORCE_LOD      use textureLod with fixed level
+//   [4:15]  TEX_ID              12-bit diffuse bindless slot (0..4095)
+//   [16:27] LM_TEX_ID           12-bit lightmap bindless slot
+//   [28:29] FORCE_LOD           2-bit LOD level (0..2 used by callers)
+//   [30:31] SAMPLER_IDX         diffuse sampler index (0..3)
 #define FLAG_TEXTURED       (1u << 0)
 #define FLAG_ALPHA_TEST     (1u << 1)
 #define FLAG_LIGHTMAP       (1u << 2)
@@ -40,24 +50,29 @@ layout(push_constant) uniform PC {
 #define LM_TEX_ID_SHIFT     16u
 #define LM_TEX_ID_MASK      0xFFFu
 #define FORCE_LOD_SHIFT     28u
-#define FORCE_LOD_MASK      0xFu
+#define FORCE_LOD_MASK      0x3u
+#define SAMPLER_IDX_SHIFT   30u
+#define SAMPLER_IDX_MASK    0x3u
+// Fixed sampler index for the lightmap (linear+clamp, single mip).
+#define LIGHTMAP_SAMPLER_IDX 3u
 
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    uint tex_id    = (pc.flags >> TEX_ID_SHIFT)    & TEX_ID_MASK;
-    uint lm_tex_id = (pc.flags >> LM_TEX_ID_SHIFT) & LM_TEX_ID_MASK;
+    uint tex_id      = (pc.flags >> TEX_ID_SHIFT)      & TEX_ID_MASK;
+    uint lm_tex_id   = (pc.flags >> LM_TEX_ID_SHIFT)   & LM_TEX_ID_MASK;
+    uint sampler_idx = (pc.flags >> SAMPLER_IDX_SHIFT) & SAMPLER_IDX_MASK;
 
     vec4 tex;
     if ((pc.flags & FLAG_TEXTURED) != 0u) {
         if ((pc.flags & FLAG_FORCE_LOD) != 0u) {
             // Forced LOD — StateSetForceLOD packs the level into
-            // flags[28:31]. Used by ItemInHandRenderer / ItemRenderer
+            // flags[28:29]. Used by ItemInHandRenderer / ItemRenderer
             // for fixed-mip item textures (32×32 / 64×64 swap).
             float lod = float((pc.flags >> FORCE_LOD_SHIFT) & FORCE_LOD_MASK);
-            tex = textureLod(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv, lod);
+            tex = textureLod(sampler2D(u_images[nonuniformEXT(tex_id)], u_samplers[sampler_idx]), v_uv, lod);
         } else {
-            tex = texture(sampler2D(u_images[nonuniformEXT(tex_id)], u_diffuse_sampler), v_uv);
+            tex = texture(sampler2D(u_images[nonuniformEXT(tex_id)], u_samplers[sampler_idx]), v_uv);
         }
     } else {
         tex = vec4(1.0);
@@ -68,7 +83,7 @@ void main() {
         discard;
 
     if ((pc.flags & FLAG_LIGHTMAP) != 0u)
-        c.rgb *= texture(sampler2D(u_images[nonuniformEXT(lm_tex_id)], u_lightmap_sampler), v_uv1).rgb;
+        c.rgb *= texture(sampler2D(u_images[nonuniformEXT(lm_tex_id)], u_samplers[LIGHTMAP_SAMPLER_IDX]), v_uv1).rgb;
 
     if (pc.fog_params.x > 0.5)
         c.rgb = mix(pc.fog_colour.rgb, c.rgb, v_fog_factor);

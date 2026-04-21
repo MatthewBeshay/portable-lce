@@ -270,6 +270,18 @@ uint32_t TextureManager::resolve_lightmap_slot(bool& active_out) {
     return uint32_t(idx);
 }
 
+void TextureManager::set_bound_sampler_idx(uint8_t idx) {
+    std::lock_guard lk(texture_mutex_);
+    if (bound_tex_ <= 0 || size_t(bound_tex_) >= textures_.size()) return;
+    textures_[bound_tex_].sampler_idx = uint8_t(idx & 0x3u);
+}
+
+uint8_t TextureManager::sampler_idx_for(int idx) const {
+    std::lock_guard lk(texture_mutex_);
+    if (idx < 0 || size_t(idx) >= textures_.size()) return 0;
+    return textures_[idx].sampler_idx;
+}
+
 // ===================================================================
 // TEXTURES (thin legacy API)
 // ===================================================================
