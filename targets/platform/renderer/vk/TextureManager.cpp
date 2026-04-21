@@ -199,10 +199,15 @@ void TextureManager::wait_for_upload(int texture_idx) {
 
 void TextureManager::wait_all_uploads() {
     std::lock_guard lk(texture_mutex_);
-    for (auto& pu : pending_uploads_) {
-        vkWaitForFences(device_, 1, &pu.fence, VK_TRUE, UINT64_MAX);
-        complete_upload(pu);
-    }
+    if (pending_uploads_.empty()) return;
+    // Single vkWaitForFences with all fences — the driver batches the
+    // wait internally, one syscall instead of N.
+    std::vector<VkFence> fences;
+    fences.reserve(pending_uploads_.size());
+    for (const auto& pu : pending_uploads_) fences.push_back(pu.fence);
+    vkWaitForFences(device_, uint32_t(fences.size()), fences.data(),
+                    VK_TRUE, UINT64_MAX);
+    for (auto& pu : pending_uploads_) complete_upload(pu);
     pending_uploads_.clear();
 }
 
