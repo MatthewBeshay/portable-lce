@@ -13,10 +13,15 @@
 
 namespace plce::vk {
 
+// Metadata for a single recorded draw. Vertex bytes live in the
+// DisplayList's shared raw_verts arena at [byte_offset, byte_offset +
+// byte_size); this kills the per-draw std::vector<std::byte> allocation
+// that the previous shape paid per record_draw call.
 struct DisplayListDraw {
-    int primType = 0;
-    int vertexType = 0;
-    std::vector<std::byte> verts;
+    int      primType = 0;
+    int      vertexType = 0;
+    uint32_t byte_offset = 0;  // into DisplayList::raw_verts
+    uint32_t byte_size   = 0;
 };
 
 struct DisplayListSubDraw {
@@ -27,7 +32,8 @@ struct DisplayListSubDraw {
 };
 
 struct DisplayList {
-    std::vector<DisplayListDraw> draws;
+    std::vector<DisplayListDraw>    draws;
+    std::vector<std::byte>          raw_verts;   // concatenated per-draw bytes
     std::vector<DisplayListSubDraw> gpu_draws;
     VmaBuffer vb;
     uint32_t  vb_size = 0;

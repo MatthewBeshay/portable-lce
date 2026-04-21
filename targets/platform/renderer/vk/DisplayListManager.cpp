@@ -7,8 +7,14 @@
 namespace plce::vk {
 
 namespace {
-// Thread-local display list recording state
-struct RecState { int id = -1; std::vector<DisplayListDraw> draws; };
+// Thread-local display list recording state. `raw_verts` is the concat
+// arena for every recorded draw's vertex bytes in this recording; one
+// allocation per DisplayList instead of one per draw.
+struct RecState {
+    int id = -1;
+    std::vector<DisplayListDraw> draws;
+    std::vector<std::byte>       raw_verts;
+};
 thread_local RecState t_rec;
 }  // namespace
 
@@ -35,17 +41,21 @@ void DisplayListManager::delete_all(std::vector<VmaBuffer>& pending,
     }
     display_lists_.clear();
     next_display_list_ = 1;
-    t_rec.id = -1; t_rec.draws.clear();
+    t_rec.id = -1; t_rec.draws.clear(); t_rec.raw_verts.clear();
 }
 
-void DisplayListManager::start(int index) { t_rec.id = index; t_rec.draws.clear(); }
+void DisplayListManager::start(int index) {
+    t_rec.id = index;
+    t_rec.draws.clear();
+    t_rec.raw_verts.clear();
+}
 
 void DisplayListManager::clear(int index, std::vector<VmaBuffer>& pending,
                                 std::mutex& pending_mutex) {
     std::lock_guard lk(display_list_mutex_);
     if (index < 0 || size_t(index) >= display_lists_.size()) return;
     auto& cb = display_lists_[index];
-    cb.draws.clear(); cb.gpu_draws.clear();
+    cb.draws.clear(); cb.raw_verts.clear(); cb.gpu_draws.clear();
     if (cb.vb) {
         std::lock_guard lk2(pending_mutex);
         pending.push_back(std::move(cb.vb));
@@ -66,20 +76,26 @@ void DisplayListManager::end() {
     std::lock_guard lk(display_list_mutex_);
     if (size_t(id) >= display_lists_.size()) display_lists_.resize(id + 1);
     auto& cb = display_lists_[id];
-    cb.draws = std::move(t_rec.draws);
-    cb.valid = !cb.draws.empty();
-    cb.uploaded = false;
+    cb.draws     = std::move(t_rec.draws);
+    cb.raw_verts = std::move(t_rec.raw_verts);
+    cb.valid     = !cb.draws.empty();
+    cb.uploaded  = false;
     t_rec.draws.clear();
+    t_rec.raw_verts.clear();
 }
 
 void DisplayListManager::record_draw(int primType, int vertexType,
                                       const void* data, size_t bytes) {
+    const uint32_t off = uint32_t(t_rec.raw_verts.size());
+    t_rec.raw_verts.insert(t_rec.raw_verts.end(),
+                           static_cast<const std::byte*>(data),
+                           static_cast<const std::byte*>(data) + bytes);
     DisplayListDraw d;
-    d.primType = primType;
+    d.primType   = primType;
     d.vertexType = vertexType;
-    d.verts.resize(bytes);
-    std::memcpy(d.verts.data(), data, bytes);
-    t_rec.draws.push_back(std::move(d));
+    d.byte_offset = off;
+    d.byte_size   = uint32_t(bytes);
+    t_rec.draws.push_back(d);
 }
 
 bool DisplayListManager::is_recording() const {
@@ -103,19 +119,22 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
     std::vector<std::byte> combined;
     cb.gpu_draws.clear();
 
-    for (auto& d : cb.draws) {
+    for (const auto& d : cb.draws) {
+        const std::byte* src = cb.raw_verts.data() + d.byte_offset;
+        const uint32_t   sz  = d.byte_size;
+
         if (d.vertexType == 1) {
             // Compact 16-byte quads — stored natively; the vertex shader
             // decodes them and the GPU triangulates via quad_ib_.
-            int vert_count = int(d.verts.size() / kCompactStride);
+            int vert_count = int(sz / kCompactStride);
             if (vert_count == 0 || vert_count % 4 != 0) continue;
             uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
+            combined.insert(combined.end(), src, src + sz);
             cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), 0x0007, /*compact=*/true});
             continue;
         }
 
-        int vert_count = int(d.verts.size() / kStdStride);
+        int vert_count = int(sz / kStdStride);
         if (vert_count == 0) continue;
 
         if (d.primType == 0x0007) {
@@ -126,7 +145,7 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
             uint32_t quads = vert_count / 4;
             uint32_t byte_off = uint32_t(combined.size());
             for (uint32_t q = 0; q < quads; ++q) {
-                const std::byte* b = d.verts.data() + q * 4 * kStdStride;
+                const std::byte* b = src + q * 4 * kStdStride;
                 auto push = [&](uint32_t i) {
                     combined.insert(combined.end(), b + i*kStdStride, b + (i+1)*kStdStride);
                 };
@@ -137,14 +156,14 @@ void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,
             // Fan -> triangles
             if (vert_count < 3) continue;
             int fan_count = vert_count;
-            auto fan_data = fan_to_list(d.verts.data(), fan_count);
+            auto fan_data = fan_to_list(src, fan_count);
             if (fan_count == 0) continue;
             uint32_t byte_off = uint32_t(combined.size());
             combined.insert(combined.end(), fan_data.begin(), fan_data.end());
             cb.gpu_draws.push_back({byte_off, uint32_t(fan_count), 0x0004, /*compact=*/false});
         } else {
             uint32_t byte_off = uint32_t(combined.size());
-            combined.insert(combined.end(), d.verts.begin(), d.verts.end());
+            combined.insert(combined.end(), src, src + sz);
             cb.gpu_draws.push_back({byte_off, uint32_t(vert_count), d.primType, /*compact=*/false});
         }
     }
