@@ -2,7 +2,9 @@
 #include "VkCheck.h"
 #include "VertexFormats.h"
 
+#include <cassert>
 #include <cstring>
+#include <thread>
 
 namespace plce::vk {
 
@@ -10,8 +12,14 @@ namespace {
 // Thread-local display list recording state. `raw_verts` is the concat
 // arena for every recorded draw's vertex bytes in this recording; one
 // allocation per DisplayList instead of one per draw.
+//
+// Thread affinity: start() / record_draw() / end() must all run on the
+// same thread — the state is thread_local so a cross-thread split would
+// silently lose vertex data. `tid` stamps the owning thread on start()
+// and the other two functions assert against it in debug builds.
 struct RecState {
     int id = -1;
+    std::thread::id tid{};
     std::vector<DisplayListDraw> draws;
     std::vector<std::byte>       raw_verts;
 };
@@ -46,6 +54,7 @@ void DisplayListManager::delete_all(std::vector<VmaBuffer>& pending,
 
 void DisplayListManager::start(int index) {
     t_rec.id = index;
+    t_rec.tid = std::this_thread::get_id();
     t_rec.draws.clear();
     t_rec.raw_verts.clear();
 }
@@ -71,6 +80,8 @@ int DisplayListManager::size(int index) {
 }
 
 void DisplayListManager::end() {
+    assert((t_rec.id < 0 || t_rec.tid == std::this_thread::get_id()) &&
+           "DisplayListManager::end called on a thread different from start()");
     int id = t_rec.id; t_rec.id = -1;
     if (id < 0) return;
     std::lock_guard lk(display_list_mutex_);
@@ -86,6 +97,8 @@ void DisplayListManager::end() {
 
 void DisplayListManager::record_draw(int primType, int vertexType,
                                       const void* data, size_t bytes) {
+    assert(t_rec.tid == std::this_thread::get_id() &&
+           "record_draw called on a thread different from start()");
     const uint32_t off = uint32_t(t_rec.raw_verts.size());
     t_rec.raw_verts.insert(t_rec.raw_verts.end(),
                            static_cast<const std::byte*>(data),
