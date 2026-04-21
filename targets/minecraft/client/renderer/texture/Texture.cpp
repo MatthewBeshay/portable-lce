@@ -549,7 +549,6 @@ void Texture::bind(int mipMapIndex) {
     //	glEnable(GL_TEXTURE_3D);
     //}
 
-    RenderPath.StateSetActiveTexture(0x84C0 + mipMapIndex);
     RenderPath.TextureBind(glId);
     if (!updated) {
         updateOnGPU();

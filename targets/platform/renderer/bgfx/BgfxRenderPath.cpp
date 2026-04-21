@@ -491,20 +491,10 @@ void BgfxRenderPath::StateSetEnableViewportClipPlanes(bool) {}
 void BgfxRenderPath::StateSetStencil(int, uint8_t, uint8_t, uint8_t) {}
 void BgfxRenderPath::StateSetForceLOD(int) {}
 void BgfxRenderPath::StateSetTextureEnable(bool e) {
-    // Legacy GL toggles per-unit texture state; in bgfx we track the
-    // lightmap separately from the base texture. Route unit-1 toggles to
-    // use_lightmap so entity rendering (which disables lightmap sampling
-    // via active_texture=unit 1 + enable=false) doesn't turn the base
-    // texture off too.
-    if (state_.active_texture_unit == 1) {
-        state_.use_lightmap = e && bgfx::isValid(state_.bound_lightmap);
-    } else {
-        state_.texture_enabled = e;
-    }
+    state_.texture_enabled = e;
 }
-void BgfxRenderPath::StateSetActiveTexture(int unit) {
-    // GL_TEXTURE0 = 0x84C0, GL_TEXTURE1 = 0x84C1, ...
-    state_.active_texture_unit = unit - 0x84C0;
+void BgfxRenderPath::StateSetLightmapEnable(bool e) {
+    state_.use_lightmap = e && bgfx::isValid(state_.bound_lightmap);
 }
 
 void BgfxRenderPath::SetChunkOffset(float x, float y, float z) {

@@ -433,7 +433,9 @@ public:
                                  uint8_t writeMask) = 0;
     virtual void StateSetForceLOD(int lod) = 0;
     virtual void StateSetTextureEnable(bool enable) = 0;
-    virtual void StateSetActiveTexture(int tex) = 0;
+    /// Enable/disable the lightmap sampler. Replaces the legacy GL pattern
+    /// that toggled `GL_TEXTURE_2D` on texture unit 1.
+    virtual void StateSetLightmapEnable(bool enable) = 0;
 
     // Chunks
     virtual void SetChunkOffset(float x, float y, float z) = 0;

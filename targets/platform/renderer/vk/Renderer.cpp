@@ -738,8 +738,8 @@ void Renderer::StateSetLightDirection(int idx, float x, float y, float z) {
     glm::vec3 d = glm::normalize(glm::mat3(mv_stack_.top()) * glm::vec3(x,y,z));
     if (idx == 0) light0_dir_eye_ = d; else light1_dir_eye_ = d;
 }
-void Renderer::StateSetTextureEnable(bool e) { if (active_tex_unit_ == 0) texture_enabled_ = e; }
-void Renderer::StateSetActiveTexture(int gl) { active_tex_unit_ = (gl == 0x84C1) ? 1 : 0; }
+void Renderer::StateSetTextureEnable(bool e) { texture_enabled_ = e; }
+void Renderer::StateSetLightmapEnable(bool e) { lightmap_enabled_ = e; }
 void Renderer::UpdateGamma(unsigned short g) {
     float gamma = 0.5f + float(g) / 32768.0f;
     if (gamma < 0.01f) gamma = 0.01f;
@@ -908,6 +908,7 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     bool lm_active = false;
     const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
+    lm_active = lm_active && lightmap_enabled_;
 
     VkBuffer transient_buf = f.transient_vb();
     vkCmdBindVertexBuffers(f.cmd, 0, 1, &transient_buf, &off);
@@ -1130,6 +1131,7 @@ bool Renderer::CBuffCall(int index, bool) {
     bool lm_active = false;
     const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
+    lm_active = lm_active && lightmap_enabled_;
 
     PushConstants pc{};
     fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
@@ -1239,6 +1241,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
     bool lm_active = false;
     const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
+    lm_active = lm_active && lightmap_enabled_;
 
     VkDeviceSize off = tvb.offset;
     VkBuffer transient_buf = f.transient_vb();

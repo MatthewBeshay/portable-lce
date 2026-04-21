@@ -1863,19 +1863,11 @@ void GameRenderer::setupGuiScreen(int forceScale /*=-1*/) {
     RenderPath.StateSetDepthMask(true);
 
     RenderPath.TextureBindVertex(-1);
-
-    RenderPath.StateSetActiveTexture(0x84C1);
-    RenderPath.StateSetActiveTexture(0x84C1);
-    RenderPath.StateSetTextureEnable(false);
+    RenderPath.StateSetLightmapEnable(false);
     RenderPath.TextureBind(0);
     RenderPath.MatrixMode(rp::MatrixStack::texture);
     RenderPath.MatrixSetIdentity();
-
-    RenderPath.StateSetActiveTexture(0x84C0);
-    RenderPath.StateSetActiveTexture(0x84C0);
     RenderPath.StateSetTextureEnable(true);
-    RenderPath.MatrixMode(rp::MatrixStack::texture);
-    RenderPath.MatrixSetIdentity();
     RenderPath.MatrixMode(rp::MatrixStack::modelview);
 
     RenderPath.Clear(rp::CLEAR_DEPTH);

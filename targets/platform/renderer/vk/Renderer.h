@@ -145,7 +145,7 @@ public:
         force_lod_ = (lod < 0) ? 0xFFu : uint32_t(lod) & 0xFu;
     }
     void StateSetTextureEnable(bool e) override;
-    void StateSetActiveTexture(int gl_enum) override;
+    void StateSetLightmapEnable(bool e) override;
     void StateSetVertexTextureUV(float u, float v) override { global_lm_uv_ = {u,v}; }
 
     void SetChunkOffset(float x, float y, float z) override { chunk_offset_ = {x,y,z}; }
@@ -237,8 +237,8 @@ private:
     uint8_t stencil_compare_mask_ = 0xFF;
     uint8_t stencil_write_mask_   = 0xFF;
 
-    int  active_tex_unit_  = 0;
     bool texture_enabled_  = true;
+    bool lightmap_enabled_ = true;
     uint32_t force_lod_    = 0xFFu;  // 0xFF = disabled; otherwise 0..15 mipmap LOD
 
     rp::ViewportLayout viewport_layout_ = rp::ViewportLayout::fullscreen;

@@ -26,18 +26,10 @@ static void restoreFixedFunctionStateAfterIggy() {
     RenderPath.StateSetFaceCull(true);
     (void)0;
 
-    RenderPath.StateSetActiveTexture(0x84C1);
-    RenderPath.StateSetActiveTexture(0x84C1);
-    RenderPath.StateSetTextureEnable(false);
-    RenderPath.MatrixMode(rp::MatrixStack::texture);
-    RenderPath.MatrixSetIdentity();
-
-    RenderPath.StateSetActiveTexture(0x84C0);
-    RenderPath.StateSetActiveTexture(0x84C0);
+    RenderPath.StateSetLightmapEnable(false);
     RenderPath.StateSetTextureEnable(true);
     RenderPath.MatrixMode(rp::MatrixStack::texture);
     RenderPath.MatrixSetIdentity();
-
     RenderPath.MatrixMode(rp::MatrixStack::modelview);
 }
 

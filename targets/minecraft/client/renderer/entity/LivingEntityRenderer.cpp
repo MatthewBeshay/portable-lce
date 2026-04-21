@@ -174,9 +174,7 @@ void LivingEntityRenderer::render(std::shared_ptr<Entity> _mob, double x,
         additionalRendering(mob, a);
         float br = mob->getBrightness(a);
         int overlayColor = getOverlayColor(mob, br, a);
-        RenderPath.StateSetActiveTexture(0x84C1);
-        RenderPath.StateSetTextureEnable(false);
-        RenderPath.StateSetActiveTexture(0x84C0);
+        RenderPath.StateSetLightmapEnable(false);
 
         if (((overlayColor >> 24) & 0xff) > 0 || mob->hurtTime > 0 ||
             mob->deathTime > 0) {
@@ -232,9 +230,7 @@ void LivingEntityRenderer::render(std::shared_ptr<Entity> _mob, double x,
     e.printStackTrace();
     }*/
 
-    RenderPath.StateSetActiveTexture(0x84C1);
-    RenderPath.StateSetTextureEnable(true);
-    RenderPath.StateSetActiveTexture(0x84C0);
+    RenderPath.StateSetLightmapEnable(true);
     RenderPath.StateSetFaceCull(true);
 
     RenderPath.MatrixPop();
