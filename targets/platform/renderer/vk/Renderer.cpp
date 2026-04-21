@@ -885,10 +885,10 @@ bool Renderer::CBuffCall(int index, bool) {
     if (index < 0 || !frame_active_) return false;
 
     auto snap = dl_mgr_.prepare(index, frame().deletions, dev_.allocator());
-    if (snap.vb == VK_NULL_HANDLE) return false;
+    if (!snap) return false;
 
-    VkBuffer vb = snap.vb;
-    const auto& draws = snap.draws;
+    VkBuffer vb = snap.vb();
+    const auto& draws = snap.draws();
 
     auto& f = frame();
     ensure_pass();

@@ -86,15 +86,14 @@ bool DisplayListManager::is_recording() const {
     return t_rec.id >= 0;
 }
 
-DisplayListManager::Snapshot DisplayListManager::prepare(int index,
-                                                           DeletionQueue& deletions,
-                                                           VmaAllocator allocator) {
-    std::lock_guard lk(display_list_mutex_);
+DisplayListManager::PreparedHandle DisplayListManager::prepare(
+        int index, DeletionQueue& deletions, VmaAllocator allocator) {
+    std::unique_lock<std::mutex> lk(display_list_mutex_);
     if (index < 0 || size_t(index) >= display_lists_.size()) return {};
     auto& cb = display_lists_[index];
     if (!cb.valid || cb.draws.empty()) return {};
     if (!cb.uploaded) { upload(cb, deletions, allocator); if (!cb.uploaded) return {}; }
-    return {cb.vb.handle(), cb.gpu_draws};
+    return PreparedHandle(std::move(lk), &cb);
 }
 
 void DisplayListManager::upload(DisplayList& cb, DeletionQueue& deletions,

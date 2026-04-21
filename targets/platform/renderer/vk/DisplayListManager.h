@@ -45,17 +45,35 @@ public:
     int size(int index);
     void end();
 
-    /// Snapshot of a prepared display list — safe to use after the manager's
-    /// mutex is released. A null vb means the display list is not available.
-    struct Snapshot {
-        VkBuffer vb = VK_NULL_HANDLE;
-        std::vector<DisplayListSubDraw> draws;
+    /// RAII handle returned by prepare(): keeps the manager mutex locked
+    /// for its lifetime so the caller can read the DisplayList's VB and
+    /// sub-draws directly without copying them out. Unlock happens at
+    /// scope exit.
+    class PreparedHandle {
+    public:
+        PreparedHandle() = default;
+        PreparedHandle(std::unique_lock<std::mutex> lk, const DisplayList* dl)
+            : lock_(std::move(lk)), dl_(dl) {}
+
+        PreparedHandle(const PreparedHandle&) = delete;
+        PreparedHandle& operator=(const PreparedHandle&) = delete;
+        PreparedHandle(PreparedHandle&&) noexcept = default;
+        PreparedHandle& operator=(PreparedHandle&&) noexcept = default;
+
+        [[nodiscard]] explicit operator bool() const noexcept { return dl_ != nullptr; }
+        [[nodiscard]] VkBuffer vb() const noexcept { return dl_ ? dl_->vb.handle() : VK_NULL_HANDLE; }
+        [[nodiscard]] const std::vector<DisplayListSubDraw>& draws() const noexcept { return dl_->gpu_draws; }
+
+    private:
+        std::unique_lock<std::mutex> lock_;
+        const DisplayList*           dl_ = nullptr;
     };
 
     /// Locks the manager, uploads the display list if needed, and returns a
-    /// by-value snapshot safe to use after the lock is released. Returns an
-    /// empty snapshot (vb == VK_NULL_HANDLE) if the display list is unusable.
-    Snapshot prepare(int index, DeletionQueue& deletions, VmaAllocator allocator);
+    /// handle that keeps the lock for its lifetime. Dereferencing the
+    /// handle is only valid while it is in scope. An empty handle
+    /// (operator bool == false) means the display list is unusable.
+    PreparedHandle prepare(int index, DeletionQueue& deletions, VmaAllocator allocator);
 
     void record_draw(int primType, int vertexType, const void* data, size_t bytes);
 
