@@ -793,13 +793,13 @@ rp::LoadedImage pack_argb(unsigned char* px, int w, int h) {
     rp::LoadedImage out;
     out.width  = w;
     out.height = h;
-    out.argb_pixels.resize(size_t(w) * size_t(h));
+    out.packed_pixels_argb32.resize(size_t(w) * size_t(h));
     for (int i = 0; i < w * h; ++i) {
-        unsigned char r = px[i * 4 + 0];
-        unsigned char g = px[i * 4 + 1];
-        unsigned char b = px[i * 4 + 2];
-        unsigned char a = px[i * 4 + 3];
-        out.argb_pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        uint32_t r = px[i * 4 + 0];
+        uint32_t g = px[i * 4 + 1];
+        uint32_t b = px[i * 4 + 2];
+        uint32_t a = px[i * 4 + 3];
+        out.packed_pixels_argb32[i] = (a << 24) | (r << 16) | (g << 8) | b;
     }
     return out;
 }

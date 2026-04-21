@@ -70,7 +70,7 @@ public:
     CFontData();
 
     // pbRawImage consumed by constructor.
-    CFontData(SFontData& sFontData, int* pbRawImage);
+    CFontData(SFontData& sFontData, std::uint32_t* pbRawImage);
 
     // Release memory.
     void release();

@@ -11,13 +11,14 @@
 namespace rp {
 
 /// Decoded image returned from IRenderPath::load_texture_data.
-/// argb_pixels contains width*height 32-bit ARGB values (A in high byte);
-/// this matches BufferedImage's internal storage and uploads directly via
+/// `packed_pixels_argb32` contains width*height 32-bit ARGB values (A in
+/// the high byte) packed into unsigned 32-bit ints. Matches
+/// BufferedImage's internal storage and uploads directly via
 /// IRenderPath::TextureData.
 struct LoadedImage {
     int width  = 0;
     int height = 0;
-    std::vector<int> argb_pixels;
+    std::vector<uint32_t> packed_pixels_argb32;
 };
 
 // ---------------------------------------------------------------------------

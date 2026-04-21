@@ -1,9 +1,10 @@
 #pragma once
+#include <cstdint>
 #include "minecraft/client/renderer/MemTextureProcessor.h"
 
 class MobSkinMemTextureProcessor : public MemTextureProcessor {
 private:
-    int* pixels;
+    std::uint32_t* pixels;
     int width, height;
 
 public:

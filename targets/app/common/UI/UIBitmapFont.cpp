@@ -113,7 +113,7 @@ UIBitmapFont::UIBitmapFont(SFontData& sfontdata)
     m_numGlyphs = sfontdata.m_uiGlyphCount;
 
     BufferedImage bimg(sfontdata.m_wstrFilename);
-    int* bimgData = bimg.getData();
+    std::uint32_t* bimgData = bimg.getData();
 
     m_cFontData = new CFontData(sfontdata, bimgData);
 

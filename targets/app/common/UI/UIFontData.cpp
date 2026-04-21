@@ -659,7 +659,7 @@ CFontData::CFontData() {
     m_pbRawImage = nullptr;
 }
 
-CFontData::CFontData(SFontData& sFontData, int* pbRawImage)
+CFontData::CFontData(SFontData& sFontData, std::uint32_t* pbRawImage)
     : m_unicodeMap(sFontData.m_uiGlyphCount + 2) {
     this->m_sFontData = &sFontData;
 

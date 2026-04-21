@@ -1,9 +1,10 @@
 #pragma once
+#include <cstdint>
 #include "HttpTextureProcessor.h"
 
 class MobSkinTextureProcessor : public HttpTextureProcessor {
 private:
-    int* pixels;
+    std::uint32_t* pixels;
     int width, height;
 
 public:

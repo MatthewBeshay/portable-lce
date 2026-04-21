@@ -101,13 +101,13 @@ BufferedImage::BufferedImage(const std::string& File, bool filenameHasExtension,
                 width = img->width;
                 height = img->height;
             }
-            data[l] = std::move(img->argb_pixels);
+            data[l] = std::move(img->packed_pixels_argb32);
         } else {
             if (l == 0) {
                 // safety dummy to prevent crash
                 width = 1;
                 height = 1;
-                data[0] = {int(0xFFFF00FF)};
+                data[0] = {uint32_t(0xFFFF00FFu)};
             }
             break;
         }
@@ -129,7 +129,7 @@ bool BufferedImage::loadMipmapPng(int level, std::uint8_t* bytes,
         width = img->width;
         height = img->height;
     }
-    data[level] = std::move(img->argb_pixels);
+    data[level] = std::move(img->packed_pixels_argb32);
     return true;
 }
 
@@ -138,7 +138,7 @@ BufferedImage::BufferedImage(std::uint8_t* pbData, std::uint32_t dataBytes) {
     if (img) {
         width = img->width;
         height = img->height;
-        data[0] = std::move(img->argb_pixels);
+        data[0] = std::move(img->packed_pixels_argb32);
     } else {
         gameServices().fatalLoadError();
     }
@@ -162,9 +162,9 @@ void BufferedImage::getRGB(int startX, int startY, int w, int h,
     }
 }
 
-int* BufferedImage::getData() { return data[0].empty() ? nullptr : data[0].data(); }
+std::uint32_t* BufferedImage::getData() { return data[0].empty() ? nullptr : data[0].data(); }
 
-int* BufferedImage::getData(int level) {
+std::uint32_t* BufferedImage::getData(int level) {
     return (level < 0 || level >= 10 || data[level].empty()) ? nullptr : data[level].data();
 }
 
@@ -222,23 +222,22 @@ BufferedImage* BufferedImage::getSubimage(int x, int y, int w, int h) {
 }
 
 void BufferedImage::preMultiplyAlpha() {
-    int* curData = data[0].empty() ? nullptr : data[0].data();
+    std::uint32_t* curData = data[0].empty() ? nullptr : data[0].data();
     if (!curData) return;
 
-    int cur = 0;
-    int alpha = 0;
-    int r = 0;
-    int g = 0;
-    int b = 0;
+    std::uint32_t cur = 0;
+    std::uint32_t alpha = 0;
+    std::uint32_t r = 0;
+    std::uint32_t g = 0;
+    std::uint32_t b = 0;
 
     int total = width * height;
-    // why was it unsigned??
     for (int i = 0; i < total; ++i) {
         cur = curData[i];
         alpha = (cur >> 24) & 0xff;
-        r = ((cur >> 16) & 0xff) * (float)alpha / 255;
-        g = ((cur >> 8) & 0xff) * (float)alpha / 255;
-        b = (cur & 0xff) * (float)alpha / 255;
+        r = uint32_t(((cur >> 16) & 0xff) * (float)alpha / 255);
+        g = uint32_t(((cur >> 8) & 0xff) * (float)alpha / 255);
+        b = uint32_t((cur & 0xff) * (float)alpha / 255);
 
         curData[i] = (r << 16) | (g << 8) | (b) | (alpha << 24);
     }

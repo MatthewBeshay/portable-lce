@@ -7,8 +7,10 @@ class Graphics;
 
 class BufferedImage {
 private:
-    // Per-mip pixel storage (ARGB int). Empty vector = this mip level unused.
-    std::vector<int> data[10];
+    // Per-mip pixel storage — 32-bit ARGB pixels packed as uint32_t, one
+    // vector per mip level (level 0 = full resolution). An empty vector
+    // means that mip level is not present.
+    std::vector<uint32_t> data[10];
     int width;
     int height;
     void ByteFlip4(unsigned int& data);  // 4J added
@@ -33,8 +35,8 @@ public:
     void getRGB(int startX, int startY, int w, int h, std::vector<int>& out,
                 int offset, int scansize,
                 int level = 0);  // 4J Added level param
-    int* getData();              // 4J added
-    int* getData(int level);     // 4J added
+    std::uint32_t* getData();          // 4J added — ARGB pixels, level 0
+    std::uint32_t* getData(int level); // 4J added — ARGB pixels, arbitrary level
     Graphics* getGraphics();
     int getTransparency();
     BufferedImage* getSubimage(int x, int y, int w, int h);
