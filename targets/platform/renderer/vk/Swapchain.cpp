@@ -15,18 +15,32 @@ void Swapchain::create(const Device& dev, uint32_t w, uint32_t h,
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.physical(), dev.surface(), &caps);
 
-    // Pick B8G8R8A8_UNORM with SRGB_NONLINEAR color space (most common desktop)
+    // Pick B8G8R8A8_UNORM with SRGB_NONLINEAR color space (most common
+    // desktop). Fall back to R8G8B8A8_UNORM if the driver does not
+    // advertise BGRA — rare on desktop, more common on some mobile.
+    // First-entry fallback preserves prior behaviour if neither match.
     uint32_t fmt_n = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(dev.physical(), dev.surface(), &fmt_n, nullptr);
     std::vector<VkSurfaceFormatKHR> fmts(fmt_n);
     vkGetPhysicalDeviceSurfaceFormatsKHR(dev.physical(), dev.surface(), &fmt_n, fmts.data());
 
     VkSurfaceFormatKHR chosen = fmts.front();
+    bool found_preferred = false;
     for (auto& f : fmts) {
         if (f.format == VK_FORMAT_B8G8R8A8_UNORM &&
             f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             chosen = f;
+            found_preferred = true;
             break;
+        }
+    }
+    if (!found_preferred) {
+        for (auto& f : fmts) {
+            if (f.format == VK_FORMAT_R8G8B8A8_UNORM &&
+                f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                chosen = f;
+                break;
+            }
         }
     }
     format_ = chosen.format;
