@@ -70,29 +70,6 @@ enum class PrimitiveType : uint8_t {
     line_strip,
 };
 
-enum class TextureFormat : uint8_t {
-    rgba8_unorm,
-};
-
-enum class TextureFilter : uint8_t {
-    nearest,
-    linear,
-    mipmap_nearest,
-    mipmap_linear,
-};
-
-enum class TextureWrap : uint8_t {
-    clamp_to_edge,
-    repeat,
-};
-
-enum class TextureUsage : uint8_t {
-    static_resource,
-    dynamic_stream,
-    render_target,
-    readback,
-};
-
 enum class ShaderPath : uint8_t {
     standard,
     projected_texture,
@@ -183,61 +160,9 @@ enum ClearFlags : uint8_t {
     CLEAR_STENCIL = 1 << 2,
 };
 
-enum class MeshUsage : uint8_t {
-    static_lifetime,
-    streaming,
-};
-
 // ---------------------------------------------------------------------------
 // Descriptors
 // ---------------------------------------------------------------------------
-
-struct TextureDesc {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint8_t mip_levels = 1;
-    TextureFormat format = TextureFormat::rgba8_unorm;
-    TextureUsage usage = TextureUsage::static_resource;
-    TextureFilter min_filter = TextureFilter::nearest;
-    TextureFilter mag_filter = TextureFilter::nearest;
-    TextureWrap wrap_s = TextureWrap::repeat;
-    TextureWrap wrap_t = TextureWrap::repeat;
-    std::span<const std::byte> initial_data = {};
-    const char* debug_name = nullptr;
-};
-
-struct TextureRegion {
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint8_t mip_level = 0;
-    std::span<const std::byte> data = {};
-};
-
-struct TextureReadback {
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    std::span<std::byte> out = {};
-};
-
-struct MeshBounds {
-    float min_x = 0, min_y = 0, min_z = 0;
-    float max_x = 0, max_y = 0, max_z = 0;
-};
-
-struct MeshDesc {
-    VertexLayout layout = VertexLayout::world_standard;
-    PrimitiveType primitive = PrimitiveType::triangle_list;
-    uint32_t vertex_count = 0;
-    std::span<const std::byte> vertex_data = {};
-    std::span<const uint32_t> indices = {};
-    MeshBounds bounds = {};
-    MeshUsage usage = MeshUsage::static_lifetime;
-    const char* debug_name = nullptr;
-};
 
 struct TransientVertexBuffer {
     uint32_t frame_index = 0;
@@ -374,18 +299,6 @@ struct FrameDesc {
     uint64_t frame_index = 0;
     std::span<const ViewDesc> views;
     std::span<const DrawCall> ui_overlay;
-};
-
-struct ResourceFootprint {
-    uint64_t mesh_bytes = 0;
-    uint64_t texture_bytes = 0;
-    uint64_t total_bytes = 0;
-};
-
-struct RenderInit {
-    uint32_t window_width = 0;
-    uint32_t window_height = 0;
-    bool fullscreen = false;
 };
 
 // ---------------------------------------------------------------------------
