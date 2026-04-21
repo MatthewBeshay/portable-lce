@@ -105,6 +105,14 @@ void Swapchain::resize(const Device& dev, uint32_t w, uint32_t h) {
     // ready (avoids the black frame that a raw destroy+create produces).
     // Views, depth, and the old swapchain itself are destroyed *after* the
     // new one is built.
+    //
+    // Wait idle before touching the old views — on vendors that keep a
+    // present in flight after swapchain creation (AMD, some mobile), a
+    // frame in the compositor queue can still reference a view we're
+    // about to destroy. The callsite may also resize mid-frame. Pay the
+    // one-shot stall here; resize is not a hot path.
+    vkDeviceWaitIdle(dev.handle());
+
     VkSwapchainKHR   old_sc   = swapchain_;
     VkPresentModeKHR mode     = present_mode_;
     destroy_depth(dev);
