@@ -58,6 +58,11 @@ public:
     /// submit2 above so present cannot race with a worker-thread upload.
     VkResult present_khr(const VkPresentInfoKHR* present_info) const;
 
+    /// True when the physical device supports VkPhysicalDeviceFeatures::wideLines.
+    /// Renderer uses this to clamp requested line widths to 1.0f on devices
+    /// that reject values > 1.0.
+    bool wide_lines_enabled() const { return wide_lines_enabled_; }
+
 private:
     ::vk::raii::Context              ctx_;
     ::vk::raii::Instance             instance_{nullptr};
@@ -69,6 +74,7 @@ private:
     VkQueue                        queue_        = VK_NULL_HANDLE;
     VmaAllocator                   allocator_    = nullptr;
     mutable std::mutex             queue_mutex_;  // guards submit2
+    bool                           wide_lines_enabled_ = false;
 };
 
 }  // namespace plce::vk

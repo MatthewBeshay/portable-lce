@@ -620,6 +620,12 @@ void Renderer::StateSetDepthFunc(rp::DepthTest f) {
     if (pso_key_.depth_func() != v) { pso_key_.set_depth_func(v); pso_dirty_ = true; }
 }
 void Renderer::StateSetFaceCull(bool e) { if (pso_key_.cull_back() != e) { pso_key_.set_cull_back(e); pso_dirty_ = true; } }
+void Renderer::StateSetLineWidth(float w) {
+    // Clamp to 1.0 if the device does not support wideLines. Passing any
+    // non-1.0 value to vkCmdSetLineWidth on such a device is a validation
+    // error (VUID-vkCmdSetLineWidth-lineWidth-00788).
+    line_width_ = dev_.wide_lines_enabled() ? w : 1.0f;
+}
 void Renderer::StateSetWriteEnable(bool r, bool g, bool b, bool a) {
     uint8_t m = (r?1:0)|(g?2:0)|(b?4:0)|(a?8:0);
     if (pso_key_.color_mask() != m) { pso_key_.set_color_mask(m); pso_dirty_ = true; }
@@ -782,6 +788,7 @@ void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     }
     vkCmdSetPrimitiveTopology(f.cmd, topo);
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+    vkCmdSetLineWidth(f.cmd, line_width_);
 
     // Dynamic depth bias
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
@@ -896,6 +903,7 @@ bool Renderer::CBuffCall(int index, bool) {
     ensure_pass();
 
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+    vkCmdSetLineWidth(f.cmd, line_width_);
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
     bool textured  = false;
@@ -988,6 +996,7 @@ void Renderer::submit_immediate(const rp::DrawCall& dc) {
         last_bound_pso_ = pso_key_; pso_dirty_ = false;
     }
     vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+    vkCmdSetLineWidth(f.cmd, line_width_);
     vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

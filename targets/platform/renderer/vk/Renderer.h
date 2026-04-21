@@ -110,7 +110,7 @@ public:
     void StateSetAlphaFunc(rp::AlphaTest f, float ref) override;
     void StateSetDepthFunc(rp::DepthTest f) override;
     void StateSetFaceCull(bool e) override;
-    void StateSetLineWidth(float) override {}
+    void StateSetLineWidth(float w) override;
     void StateSetWriteEnable(bool r, bool g, bool b, bool a) override;
     void StateSetDepthTestEnable(bool e) override;
     void StateSetAlphaTestEnable(bool e) override;
@@ -215,6 +215,7 @@ private:
 
     float depth_bias_constant_ = 0;
     float depth_bias_slope_    = 0;
+    float line_width_          = 1.0f;
 
     int  active_tex_unit_  = 0;
     bool texture_enabled_  = true;

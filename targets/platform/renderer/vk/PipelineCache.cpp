@@ -47,12 +47,13 @@ struct PipelineBuild {
     VkPipelineDepthStencilStateCreateInfo     ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineColorBlendAttachmentState       att{};
     VkPipelineColorBlendStateCreateInfo       cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    VkDynamicState                            dyn_states[5]{
+    VkDynamicState                            dyn_states[6]{
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
         VK_DYNAMIC_STATE_DEPTH_BIAS,
+        VK_DYNAMIC_STATE_LINE_WIDTH,
     };
     VkPipelineDynamicStateCreateInfo          dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     VkPipelineRenderingCreateInfo             prci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
