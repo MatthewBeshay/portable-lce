@@ -154,6 +154,16 @@ private:
     mutable std::mutex upload_pool_mutex_;
     static constexpr VkDeviceSize kMaxUploadBytes = 64ull * 1024 * 1024;
 
+    // Serialises the section [ring_reserve ... dev_->submit2] of
+    // upload_texture and data_update so the reservation order across
+    // threads matches the on-queue submit order. Without this, a second
+    // worker can jump ahead of a first and the staging ring's tail-advance
+    // assumption breaks (see §2.1). Also lets data_update drop its
+    // wait_for_upload: any prior upload submit for the same image has
+    // completed its SHADER_READ_ONLY transition on the GPU by the time
+    // data_update's own command buffer runs.
+    mutable std::mutex upload_submit_mutex_;
+
     // Persistent staging ring shared by every texture upload. One long-
     // lived host-visible VkBuffer; each upload memcpy's pixels into the
     // ring and records the byte range in its PendingUpload. When the

@@ -377,7 +377,12 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
         std::lock_guard lk(texture_mutex_);
         idx = bound_tex_;
         if (idx <= 0 || size_t(idx) >= textures_.size()) return;
-        wait_for_upload(idx);
+        // data_update only runs on already-ready textures (first upload
+        // completed and slot published). No wait needed — the
+        // upload_submit_mutex_ below guarantees this update's submit
+        // orders after any concurrent upload_texture's submit, so the
+        // GPU-side image layout is SHADER_READ_ONLY_OPTIMAL by the time
+        // this cmd buffer runs (matching the source barrier below).
         if (!textures_[idx].ready) return;
         tw = textures_[idx].width;
         th = textures_[idx].height;
@@ -392,6 +397,10 @@ void TextureManager::data_update(int xo, int yo, int w, int h, const void* data,
 
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
     if (bytes > kMaxUploadBytes) return;
+
+    // Serialise reservation + submit across all upload paths on this
+    // manager so on-queue submit order matches ring-reservation order.
+    std::lock_guard submit_lk(upload_submit_mutex_);
 
     // Source: ring first, fall back to a one-shot vmaCreateBuffer if the
     // update doesn't fit.
@@ -611,6 +620,9 @@ void TextureManager::upload_texture(int idx, int w, int h, const void* pixels) {
 
     VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
     if (bytes > kMaxUploadBytes) return;
+
+    // See data_update: serialise reservation + submit.
+    std::lock_guard submit_lk(upload_submit_mutex_);
 
     // Source: ring first, fall back to a one-shot vmaCreateBuffer if the
     // upload doesn't fit or the ring is momentarily full.
