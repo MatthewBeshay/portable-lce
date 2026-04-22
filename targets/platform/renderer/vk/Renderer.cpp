@@ -451,9 +451,10 @@ void Renderer::StartFrame() {
         ubo.light_ambient = glm::vec4(light_ambient_, 0.0f);
         ubo.fog_params    = glm::vec4(fog_mode_f_, fog_start_, fog_end_, fog_density_);
         ubo.fog_colour    = glm::vec4(fog_colour_[0], fog_colour_[1],
-                                       fog_colour_[2], inv_gamma_);
+                                       fog_colour_[2], 0.0f);
         ubo.global_lm_packed =
             uint32_t(global_lm_uv_[0]) | (uint32_t(global_lm_uv_[1]) << 16);
+        ubo.inv_gamma     = inv_gamma_;
         f.write_frame_ubo(&ubo, sizeof(ubo));
     }
 

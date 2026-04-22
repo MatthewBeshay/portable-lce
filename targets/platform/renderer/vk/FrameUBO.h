@@ -19,11 +19,11 @@ struct alignas(16) FrameUBO {
     glm::vec4 light_diffuse;    // 32   rgb + pad
     glm::vec4 light_ambient;    // 48
     glm::vec4 fog_params;       // 64   mode, start, end, density
-    glm::vec4 fog_colour;       // 80   rgb + inv_gamma in .w
+    glm::vec4 fog_colour;       // 80   rgb + pad in .w
     uint32_t  global_lm_packed; // 96   low16=u, high16=v
-    uint32_t  _pad0;            // 100
-    uint32_t  _pad1;            // 104
-    uint32_t  _pad2;            // 108
+    float     inv_gamma;        // 100
+    uint32_t  _pad0;            // 104
+    uint32_t  _pad1;            // 108
 };
 
 // std140 offsets. Mismatch between this struct and the GLSL FrameUBO
@@ -37,5 +37,6 @@ static_assert(offsetof(FrameUBO, light_ambient)    == 48);
 static_assert(offsetof(FrameUBO, fog_params)       == 64);
 static_assert(offsetof(FrameUBO, fog_colour)       == 80);
 static_assert(offsetof(FrameUBO, global_lm_packed) == 96);
+static_assert(offsetof(FrameUBO, inv_gamma)        == 100);
 
 }  // namespace plce::vk

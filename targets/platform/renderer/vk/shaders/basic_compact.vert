@@ -17,16 +17,16 @@ layout(location = 1) in ivec4 a_packed1;  // (uv.x, uv.y, lm.u, lm.v)
 
 // Same FrameUBO block as basic.vert — see that file for layout notes.
 layout(set = 1, binding = 0, std140) uniform FrameUBO {
-    vec4 light0_dir;
-    vec4 light1_dir;
-    vec4 light_diffuse;
-    vec4 light_ambient;
-    vec4 fog_params;
-    vec4 fog_colour;
-    uint global_lm_packed;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    vec4  light0_dir;
+    vec4  light1_dir;
+    vec4  light_diffuse;
+    vec4  light_ambient;
+    vec4  fog_params;
+    vec4  fog_colour;
+    uint  global_lm_packed;
+    float inv_gamma;
+    uint  _pad0;
+    uint  _pad1;
 } frame;
 
 // Same push constant block as basic.vert — see that file for layout notes.

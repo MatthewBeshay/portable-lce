@@ -18,16 +18,16 @@ layout(set = 0, binding = 1) uniform sampler   u_samplers[4];
 
 // Per-frame UBO (set = 1, binding = 0). See basic.vert for layout notes.
 layout(set = 1, binding = 0, std140) uniform FrameUBO {
-    vec4 light0_dir;
-    vec4 light1_dir;
-    vec4 light_diffuse;
-    vec4 light_ambient;
-    vec4 fog_params;
-    vec4 fog_colour;        // rgb + inv_gamma in .w
-    uint global_lm_packed;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    vec4  light0_dir;
+    vec4  light1_dir;
+    vec4  light_diffuse;
+    vec4  light_ambient;
+    vec4  fog_params;
+    vec4  fog_colour;        // rgb + pad in .w
+    uint  global_lm_packed;
+    float inv_gamma;
+    uint  _pad0;
+    uint  _pad1;
 } frame;
 
 // Same push constant block as vertex shader (shared range).
@@ -97,7 +97,7 @@ void main() {
     if (frame.fog_params.x > 0.5)
         c.rgb = mix(frame.fog_colour.rgb, c.rgb, v_fog_factor);
 
-    c.rgb = pow(c.rgb, vec3(frame.fog_colour.w));  // inv_gamma packed in .w
+    c.rgb = pow(c.rgb, vec3(frame.inv_gamma));
 
     out_color = c;
 }

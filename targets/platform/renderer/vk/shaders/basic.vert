@@ -10,16 +10,16 @@ layout(location = 4) in ivec2 a_lm_raw;   // R16G16_SINT — lightmap UVs or sen
 // Renderer::state — holds state that doesn't vary inside a frame. Matches
 // the FrameUBO C++ struct; keep members in sync.
 layout(set = 1, binding = 0, std140) uniform FrameUBO {
-    vec4 light0_dir;        // eye-space dir + pad
-    vec4 light1_dir;
-    vec4 light_diffuse;     // rgb + pad
-    vec4 light_ambient;
-    vec4 fog_params;        // mode, start, end, density
-    vec4 fog_colour;        // rgb + inv_gamma in .w
-    uint global_lm_packed;  // low16=u, high16=v
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    vec4  light0_dir;        // eye-space dir + pad
+    vec4  light1_dir;
+    vec4  light_diffuse;     // rgb + pad
+    vec4  light_ambient;
+    vec4  fog_params;        // mode, start, end, density
+    vec4  fog_colour;        // rgb + pad in .w
+    uint  global_lm_packed;  // low16=u, high16=v
+    float inv_gamma;         // fragment tonemap
+    uint  _pad0;
+    uint  _pad1;
 } frame;
 
 // Per-draw 176-byte push constant block (shared with fragment).
