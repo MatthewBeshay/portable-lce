@@ -26,6 +26,13 @@ public:
     static constexpr VkDeviceSize kInitialTransientSize = 8ull  * 1024 * 1024;  // 8 MB
     static constexpr VkDeviceSize kMaxTransientSize     = 64ull * 1024 * 1024;  // 64 MB ceiling
 
+    // Per-frame UBO ring dimensions. 256-byte stride trivially satisfies
+    // every minUniformBufferOffsetAlignment we target (≤256 on all known
+    // desktop GPUs) and leaves headroom for FrameUBO growth. 64 slots
+    // covers a handful of views + nested sub-views with margin.
+    static constexpr uint32_t kFrameUboSlots       = 64;
+    static constexpr uint32_t kFrameUboSlotStride  = 256;
+
     void create(VkDevice dev, VmaAllocator alloc, uint32_t queue_family,
                 float timestamp_period_ns = 0.0f);
     void destroy(VkDevice dev, VmaAllocator alloc);
@@ -103,10 +110,14 @@ public:
     VkDeviceSize transient_pos()  const { return transient_offset_; }
     VkDeviceSize transient_size() const { return transient_size_; }
 
-    /// Write the per-frame UBO (lights, fog, gamma, global lightmap) into
-    /// this frame's persistently-mapped buffer. Called once per StartFrame,
-    /// before any draws reference set=1 binding=0.
-    void write_frame_ubo(const void* src, size_t bytes);
+    /// Allocate one FrameUBO-sized slot inside this frame's ring, copy
+    /// `bytes` from `src` into it, and return the byte offset of the
+    /// slot (for use as a dynamic UBO offset at bind time). Returns 0
+    /// and overwrites the first slot if the ring is exhausted this
+    /// frame; the caller also gets a stderr warning. Slot stride is
+    /// kFrameUboSlotStride (256 bytes, std140-friendly for any UBO
+    /// layout up to that size).
+    [[nodiscard]] uint32_t alloc_frame_ubo_slot(const void* src, size_t bytes);
 
     // Public handles for direct access
     VkCommandPool   pool         = VK_NULL_HANDLE;
@@ -137,9 +148,13 @@ private:
     VkDeviceSize pending_grow_bytes_ = 0;  // >0 means begin() will reallocate
     uint32_t     transient_overflow_count_ = 0;  // dropped draws last frame
 
-    // Per-frame UBO — persistently mapped; renderer writes it at StartFrame.
+    // Per-frame UBO ring — persistently mapped. Each slot holds one
+    // FrameUBO-sized block; the renderer allocates one slot per ViewDesc
+    // (plus a frame-default at slot 0 filled by StartFrame). begin()
+    // resets the ring cursor.
     std::byte*   frame_ubo_mapped_   = nullptr;
     VkDeviceSize frame_ubo_size_     = 0;
+    uint32_t     frame_ubo_next_slot_ = 0;
 
     // GPU timestamp query state. One pool per FrameContext; slot 0 and 1
     // hold the frame's begin/end timestamps written by begin_cmd_timestamps

@@ -205,6 +205,11 @@ private:
 
     // -- Per-frame state --
     uint32_t frame_idx_     = 0;
+    // Dynamic offset into frame().frame_ubo for set 1 binding 0.
+    // Written by StartFrame (default slot) and by future per-view
+    // processing inside render_frame. Passed to vkCmdBindDescriptorSets
+    // via pDynamicOffsets.
+    uint32_t current_frame_ubo_offset_ = 0;
     // GPU timestamp accumulation for the 1-Hz log. Reset each tick.
     double   gpu_ms_accum_  = 0.0;
     uint32_t gpu_ms_count_  = 0;

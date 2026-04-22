@@ -174,7 +174,7 @@ Renderer::Renderer(SDL_Window* window)
     {
         VkDescriptorSetLayoutBinding b{};
         b.binding         = 0;
-        b.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         b.descriptorCount = 1;
         b.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
@@ -189,7 +189,7 @@ Renderer::Renderer(SDL_Window* window)
     // Pool for the per-frame UBO sets (one per FrameContext).
     {
         VkDescriptorPoolSize ps{};
-        ps.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        ps.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         ps.descriptorCount = kFramesInFlight;
         VkDescriptorPoolCreateInfo ci{
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -221,7 +221,7 @@ Renderer::Renderer(SDL_Window* window)
         w.dstSet          = frames_[i].frame_ubo_set;
         w.dstBinding      = 0;
         w.descriptorCount = 1;
-        w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         w.pBufferInfo     = &bi;
         vkUpdateDescriptorSets(dev_.handle(), 1, &w, 0, nullptr);
     }
@@ -467,7 +467,7 @@ void Renderer::StartFrame() {
         ubo.global_lm_packed =
             uint32_t(global_lm_uv_[0]) | (uint32_t(global_lm_uv_[1]) << 16);
         ubo.inv_gamma     = inv_gamma_;
-        f.write_frame_ubo(&ubo, sizeof(ubo));
+        current_frame_ubo_offset_ = f.alloc_frame_ubo_slot(&ubo, sizeof(ubo));
     }
 
     frame().begin_cmd_timestamps();
@@ -600,10 +600,16 @@ void Renderer::begin_pass() {
 
     // Bind set 0 (bindless images + samplers) and set 1 (per-frame UBO)
     // once per frame. Every draw reads from set 0 via the tex_id packed
-    // in flags, and set 1 supplies lighting / fog / gamma constants.
+    // in flags, and set 1 supplies lighting / fog / gamma constants via
+    // a DYNAMIC uniform buffer — the dynamic offset selects which
+    // FrameUBO slot from this frame's ring the shader sees. StartFrame
+    // allocates the default slot and puts its byte offset in
+    // current_frame_ubo_offset_; future per-view processing rebinds
+    // set 1 with a different offset before emitting view draws.
     VkDescriptorSet sets[2] = { bindless_set_, frame().frame_ubo_set };
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            *pipeline_layout_, 0, 2, sets, 0, nullptr);
+                            *pipeline_layout_, 0, 2, sets,
+                            1, &current_frame_ubo_offset_);
 }
 
 void Renderer::rebuild_viewport_rects() {

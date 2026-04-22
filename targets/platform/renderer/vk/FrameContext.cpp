@@ -58,12 +58,12 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
     // Transient vertex buffer — host-visible, persistently mapped. Grows on demand.
     recreate_transient(alloc, kInitialTransientSize);
 
-    // Per-frame UBO (lights, fog, gamma, global lightmap). Fixed-size block
-    // mapped for CPU writes; the renderer fills it at StartFrame. Sized up
-    // to 256 bytes to give headroom for small future additions without a
-    // re-bind; std140 layout is 112 bytes today.
+    // Per-frame UBO ring. kFrameUboSlots * kFrameUboSlotStride bytes,
+    // persistently mapped. The renderer allocates one slot per view via
+    // alloc_frame_ubo_slot and rebinds set 1 with the slot's byte
+    // offset (UNIFORM_BUFFER_DYNAMIC); begin() resets the cursor.
     {
-        frame_ubo_size_ = 256;
+        frame_ubo_size_ = VkDeviceSize(kFrameUboSlots) * kFrameUboSlotStride;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size  = frame_ubo_size_;
         bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
@@ -100,11 +100,28 @@ void FrameContext::reset_acquire_semaphore(VkDevice dev) {
     check(vkCreateSemaphore(dev, &sci, nullptr, &sem_acquired), "sem acq (reset)");
 }
 
-void FrameContext::write_frame_ubo(const void* src, size_t bytes) {
-    // Silent truncation hid layout mismatches — now an assertion.
-    assert(frame_ubo_mapped_ && "FrameContext::write_frame_ubo before create()");
-    assert(bytes <= frame_ubo_size_ && "FrameUBO write exceeds buffer size");
-    std::memcpy(frame_ubo_mapped_, src, bytes);
+uint32_t FrameContext::alloc_frame_ubo_slot(const void* src, size_t bytes) {
+    assert(frame_ubo_mapped_ && "FrameContext::alloc_frame_ubo_slot before create()");
+    assert(bytes <= kFrameUboSlotStride &&
+           "FrameUBO payload exceeds per-slot stride — raise kFrameUboSlotStride");
+    if (frame_ubo_next_slot_ >= kFrameUboSlots) {
+        // Ring exhausted. Very unlikely (64 slots is generous) — log once
+        // and overwrite slot 0 so the current draw at least renders with
+        // stale frame state rather than nothing.
+        static bool warned = false;
+        if (!warned) {
+            std::fprintf(stderr,
+                         "[vk] FrameUBO ring exhausted (%u slots used); "
+                         "recycling slot 0\n", kFrameUboSlots);
+            warned = true;
+        }
+        std::memcpy(frame_ubo_mapped_, src, bytes);
+        return 0;
+    }
+    const uint32_t slot   = frame_ubo_next_slot_++;
+    const uint32_t offset = slot * kFrameUboSlotStride;
+    std::memcpy(frame_ubo_mapped_ + offset, src, bytes);
+    return offset;
 }
 
 void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
@@ -122,6 +139,10 @@ void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
 
 void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX);
+
+    // Reset the per-frame UBO ring cursor — slots from the prior pass
+    // through this slot are stale now that the fence has signalled.
+    frame_ubo_next_slot_ = 0;
 
     // Surface transient-buffer overflows from the previous frame for this
     // slot. Each overflow dropped a draw — silent misrender otherwise. The
