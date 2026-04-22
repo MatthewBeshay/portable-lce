@@ -1304,8 +1304,151 @@ bool Renderer::CBuffCall(int index, bool) {
 // MATERIALS + TRANSIENT + SUBMIT_IMMEDIATE
 // ===================================================================
 
-rp::MaterialHandle Renderer::create_material(const rp::MaterialDesc&) {
-    return {++next_material_id_, 1};
+rp::MaterialHandle Renderer::create_material(const rp::MaterialDesc& desc) {
+    // Linear-push registry — handle.index is vector index + 1 so that
+    // kInvalidMaterial (index = 0, generation = 0) stays invalid.
+    // Generation starts at 1; slot reuse would bump it, but we don't
+    // support material deletion yet.
+    MaterialRecord rec;
+    rec.desc       = desc;
+    rec.generation = 1;
+    material_descs_.push_back(rec);
+    rp::MaterialHandle h{};
+    h.index      = uint32_t(material_descs_.size());
+    h.generation = rec.generation;
+    return h;
+}
+
+PipelineKey Renderer::pipeline_key_from_material(const rp::MaterialDesc& m) const {
+    PipelineKey k{};
+    k.set_depth_test(m.depth_test != rp::DepthTest::off);
+    k.set_depth_write(m.depth_write);
+    k.set_blend_enable(m.blend != rp::BlendMode::opaque);
+    k.set_cull_back(m.cull == rp::CullMode::back_ccw ||
+                    m.cull == rp::CullMode::back_cw);
+    k.set_stencil_test(false);
+    k.set_compact(false);
+    k.set_depth_func(depth_to_vk(m.depth_test));
+
+    // Map MaterialDesc::blend enum to Vulkan (src, dst) factors.
+    using BF = rp::BlendFactor;
+    BF src = BF::one, dst = BF::zero;
+    switch (m.blend) {
+        case rp::BlendMode::opaque:         src = BF::one;       dst = BF::zero; break;
+        case rp::BlendMode::alpha:          src = BF::src_alpha; dst = BF::one_minus_src_alpha; break;
+        case rp::BlendMode::additive:       src = BF::src_alpha; dst = BF::one; break;
+        case rp::BlendMode::multiply:       src = BF::dst_color; dst = BF::zero; break;
+        case rp::BlendMode::premultiplied:  src = BF::one;       dst = BF::one_minus_src_alpha; break;
+        case rp::BlendMode::custom:         src = m.blend_src_custom; dst = m.blend_dst_custom; break;
+    }
+    k.set_blend_src(blend_to_vk(src));
+    k.set_blend_dst(blend_to_vk(dst));
+    k.set_color_mask(0xF);
+    return k;
+}
+
+void Renderer::record_draw_call(const rp::DrawCall& dc) {
+    if (dc.source != rp::VertexSource::transient) {
+        // Mesh-sourced draws require a MeshHandle registry, which is not
+        // yet wired up. Skip rather than emit undefined geometry.
+        return;
+    }
+    const auto& tvb = dc.transient;
+    if (tvb.vertex_count == 0) return;
+    if (dc.material.index == 0) return;  // invalid handle
+    const uint32_t mi = dc.material.index - 1;
+    if (mi >= material_descs_.size()) return;
+    const MaterialRecord& rec = material_descs_[mi];
+    if (rec.generation != dc.material.generation) return;
+    const rp::MaterialDesc& m = rec.desc;
+
+    auto& f = frame();
+    ensure_pass();
+
+    // Derive pipeline state from the material and bind if it changed.
+    const PipelineKey key = pipeline_key_from_material(m);
+    if (!(key == last_bound_pso_)) {
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipelines_.get(key));
+        last_bound_pso_ = key;
+        pso_dirty_      = true;  // legacy path must rebind on next submit_immediate / DrawVertices
+    }
+    if (viewport_dirty_) apply_viewport_and_scissor();
+    vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
+    vkCmdSetLineWidth(f.cmd, dc.line_width > 0.0f ? dc.line_width : line_width_);
+
+    VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    switch (tvb.primitive) {
+        case rp::PrimitiveType::triangle_strip: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+        case rp::PrimitiveType::triangle_fan:   topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
+        case rp::PrimitiveType::line_list:      topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
+        case rp::PrimitiveType::line_strip:     topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP; break;
+        default: break;
+    }
+    vkCmdSetPrimitiveTopology(f.cmd, topo);
+    vkCmdSetDepthBias(f.cmd, dc.depth_bias, 0.0f, dc.depth_slope);
+
+    // Texture resolution: the MaterialHandle-based path through a bindless
+    // slot lookup does not exist yet (TextureManager only exposes
+    // resolve_bound_slot based on the currently-bound legacy texture).
+    // For this first wave of migrations, subsystems call
+    // textures->bindTexture(...) before pushing the DrawCall, and
+    // record_draw_call picks the slot up from live state — matching how
+    // submit_immediate works today. Per-slot sampler state is a later item.
+    bool material_textured = m.textured;
+    uint32_t tex_id = 0;
+    if (material_textured) {
+        tex_id = tex_mgr_.resolve_bound_slot(material_textured);
+    }
+    bool lm_active = false;
+    const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
+    lm_active = lm_active && lightmap_enabled_;
+
+    VkDeviceSize off = tvb.offset;
+    VkBuffer transient_buf = f.transient_vb();
+    vkCmdBindVertexBuffers(f.cmd, 0, 1, &transient_buf, &off);
+
+    PushConstants pc{};
+    glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],
+                   dc.tint_color[2], dc.tint_color[3]);
+    fill_push_constants(&pc, material_textured, lm_active, tex_id, lm_tex_id, &tint);
+    // Override alpha_ref from the material instead of the live state so
+    // migrated draws don't depend on legacy StateSetAlphaFunc having
+    // been called first.
+    pc.alpha_ref = m.alpha_ref;
+    // Adjust the FLAG_ALPHA_TEST bit to match the material rather than
+    // live state. Bit 1 is FLAG_ALPHA_TEST.
+    if (m.alpha_test != rp::AlphaTest::off) pc.flags |= 0x2u;
+    else                                     pc.flags &= ~0x2u;
+    // DrawCall.transform composes on top of the current matrix stacks
+    // (same convention the legacy MatrixPush/Translate pattern produces).
+    // For screen-space UI overlays the transform is almost always identity
+    // — the vertex positions are authored directly in screen pixels — so
+    // skip the multiply when it is.
+    bool tform_is_identity = true;
+    for (int i = 0; i < 16 && tform_is_identity; ++i) {
+        const float expected = (i % 5 == 0) ? 1.0f : 0.0f;  // diag = 1, off-diag = 0
+        if (dc.transform[i] != expected) tform_is_identity = false;
+    }
+    if (!tform_is_identity) {
+        glm::mat4 tform(1.0f);
+        std::memcpy(&tform[0][0], dc.transform, sizeof(float) * 16);
+        pc.mvp = pc.mvp * tform;
+    }
+    vkCmdPushConstants(f.cmd, *pipeline_layout_,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(PushConstants), &pc);
+
+    vkCmdDraw(f.cmd, tvb.vertex_count, 1, 0, 0);
+}
+
+void Renderer::render_frame(const rp::FrameDesc& frame) {
+    if (!frame_active_) return;
+    // Views are not yet consumed — world rendering still goes through
+    // the legacy path. TODO: process frame.views once world draws migrate.
+    for (const rp::DrawCall& dc : frame.ui_overlay) {
+        record_draw_call(dc);
+    }
 }
 
 std::pair<rp::TransientVertexBuffer, std::span<std::byte>>

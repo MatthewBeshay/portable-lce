@@ -39,7 +39,7 @@ public:
     void Present() override;
     void Clear(int flags) override;
     void SetClearColour(const float rgba[4]) override;
-    void render_frame(const rp::FrameDesc&) override {}
+    void render_frame(const rp::FrameDesc&) override;
     void resize(uint32_t w, uint32_t h) override;
     void GetFramebufferSize(int& w, int& h) override;
     void SetWindowSize(int w, int h) override;
@@ -279,7 +279,25 @@ private:
     MatrixStack proj_stack_;
     MatrixStack tex_stack_;
 
-    uint32_t next_material_id_ = 0;
+    // Material registry. `create_material` stores a copy of the desc and
+    // returns a handle of {index+1, generation}. `record_draw_call` looks
+    // up the desc to derive pipeline state and per-draw push constants.
+    // Indexed from 0; handle.index == 0 means invalid.
+    struct MaterialRecord {
+        rp::MaterialDesc desc{};
+        uint32_t generation = 0;  // 0 = unused slot
+    };
+    std::vector<MaterialRecord> material_descs_;
+
+    // Convert a MaterialDesc into a PipelineKey. Pure function over the
+    // desc — sampler/texture state is looked up per-draw, not baked here.
+    [[nodiscard]] PipelineKey pipeline_key_from_material(
+        const rp::MaterialDesc& m) const;
+
+    // Emit draws for a single DrawCall from FrameDesc.ui_overlay. Uses
+    // the DrawCall's material to set pipeline + push-constant state
+    // instead of inheriting live legacy state (unlike submit_immediate).
+    void record_draw_call(const rp::DrawCall& dc);
 
     // Thread-safe deferred buffer destruction. Worker threads push here
     // instead of accessing frame().deletions (which is main-thread only).
