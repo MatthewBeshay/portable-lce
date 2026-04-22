@@ -280,12 +280,23 @@ struct ViewColorMask {
     bool r = true, g = true, b = true, a = false;
 };
 
+// Per-view scissor override. When set, replaces the default (full
+// viewport rect) scissor for draws inside this view. Leave
+// width == 0 to keep the viewport default.
+struct ViewScissor {
+    int32_t  x      = 0;
+    int32_t  y      = 0;
+    uint32_t width  = 0;
+    uint32_t height = 0;
+};
+
 struct ViewDesc {
     ViewportLayout viewport_layout = ViewportLayout::fullscreen;
     ViewCamera camera;
     ViewClear clear;
     ViewColorMask color_mask;
     bool scissor_from_viewport = false;
+    ViewScissor scissor;
 
     FogProfile fog_profiles[4] = {};
     uint8_t fog_profile_count = 1;
