@@ -31,6 +31,10 @@ private:
     // §-colour-code branch inside draw(str, dropShadow).
     float currentColor_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
+    // Cached atlas texture id — resolved once per draw(str, ...) call
+    // rather than per glyph. -1 means "not yet resolved".
+    int currentGlyphTexId_ = -1;
+
     bool enforceUnicodeSheet;  // use unicode sheet for ascii
     bool bidirectional;        // use bidi to flip strings
 

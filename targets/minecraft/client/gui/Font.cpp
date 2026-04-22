@@ -1,23 +1,20 @@
 #include "Font.h"
 
-#include <cstring>
 #include <string.h>
 
 #include <utility>
 #include <vector>
-
-#include <glm/glm.hpp>
 
 #include "java/Random.h"
 #include "minecraft/SharedConstants.h"
 #include "minecraft/client/BufferedImage.h"
 #include "minecraft/client/Options.h"
 #include "minecraft/client/gui/Gui.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/ui/UiDraw.h"
 #include "platform/stubs.h"
 #include "util/StringHelpers.h"
 
@@ -130,82 +127,18 @@ Font::Font(Options* options, const std::string& name, Textures* textures,
 Font::~Font() { delete[] charWidths; }
 
 void Font::renderCharacter(char c) {
-    float xOff = c % m_cols * m_charWidth;
-    float yOff = c / m_cols * m_charWidth;
+    const float xOff = c % m_cols * m_charWidth;
+    const float yOff = c / m_cols * m_charWidth;
+    const float w    = charWidths[c] - 0.01f;
+    const float h    = m_charHeight - 0.01f;
+    const float fw   = m_cols * m_charWidth;
+    const float fh   = m_rows * m_charHeight;
 
-    float width = charWidths[c] - .01f;
-    float height = m_charHeight - .01f;
-
-    float fontWidth = m_cols * m_charWidth;
-    float fontHeight = m_rows * m_charHeight;
-
-#ifdef PLCE_RENDERER_VULKAN
-    // New path: build a single-quad DrawCall and push into ui_overlay.
-    // The legacy per-glyph Tesselator submit emitted one VkDraw per
-    // character; we keep that cadence here but route through the
-    // material-aware record_draw_call so each glyph carries its own
-    // captured proj*mv transform, texture id, and tint.
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (!span.empty()) {
-        auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-        v[0] = {{xPos,         yPos + height, 0.0f},
-                {xOff          / fontWidth, (yOff + 7.99f) / fontHeight},
-                0, 0, 0xfe00fe00};
-        v[1] = {{xPos + width, yPos + height, 0.0f},
-                {(xOff + width) / fontWidth, (yOff + 7.99f) / fontHeight},
-                0, 0, 0xfe00fe00};
-        v[2] = {{xPos + width, yPos,          0.0f},
-                {(xOff + width) / fontWidth, yOff / fontHeight},
-                0, 0, 0xfe00fe00};
-        v[3] = {{xPos,         yPos,          0.0f},
-                {xOff          / fontWidth, yOff / fontHeight},
-                0, 0, 0xfe00fe00};
-
-        // Snapshot the live proj*mv at push time — render_frame uses
-        // identity matrices for ui_overlay, so DrawCall.transform does
-        // the full screen-to-clip mapping (same pattern as renderPumpkin
-        // / GuiComponent::fill).
-        const float* proj = RenderPath.MatrixGet(rp::MatrixStack::projection);
-        const float* mv   = RenderPath.MatrixGet(rp::MatrixStack::modelview);
-        glm::mat4 p(1.0f), m(1.0f);
-        std::memcpy(&p[0][0], proj, sizeof(float) * 16);
-        std::memcpy(&m[0][0], mv,   sizeof(float) * 16);
-        const glm::mat4 pm = p * m;
-
-        rp::DrawCall dc{};
-        dc.source                 = rp::VertexSource::transient;
-        dc.transient              = tvb;
-        dc.material               = Gui::gui_mat_font_;
-        dc.texture_override.index =
-            uint32_t(textures->resolveTextureId(m_textureLocation));
-        dc.tint_color[0]          = currentColor_[0];
-        dc.tint_color[1]          = currentColor_[1];
-        dc.tint_color[2]          = currentColor_[2];
-        dc.tint_color[3]          = currentColor_[3];
-        std::memcpy(dc.transform, &pm[0][0], sizeof(float) * 16);
-
-        rp::ui_overlay::push(dc);
-    }
-#else
-    // Legacy path: per-glyph Tesselator submit. bgfx still consumes
-    // this because its render_frame doesn't process ui_overlay yet.
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-    t->tex(xOff / fontWidth, (yOff + 7.99f) / fontHeight);
-    t->vertex(xPos, yPos + height, 0.0f);
-
-    t->tex((xOff + width) / fontWidth, (yOff + 7.99f) / fontHeight);
-    t->vertex(xPos + width, yPos + height, 0.0f);
-
-    t->tex((xOff + width) / fontWidth, yOff / fontHeight);
-    t->vertex(xPos + width, yPos, 0.0f);
-
-    t->tex(xOff / fontWidth, yOff / fontHeight);
-    t->vertex(xPos, yPos, 0.0f);
-
-    t->end();
-#endif
+    plce::ui::draw_glyph_quad(
+        xPos, yPos, w, h,
+        xOff / fw,          yOff / fh,
+        (xOff + w) / fw,    (yOff + 7.99f) / fh,
+        currentGlyphTexId_, currentColor_);
 
     xPos += (float)charWidths[c];
 }
@@ -231,8 +164,11 @@ std::string Font::reorderBidi(const std::string& str) {
 }
 
 void Font::draw(const std::string& str, bool dropShadow) {
-    // Bind the texture
+    // Bind the texture (still needed for anything on the legacy path
+    // that inspects the bound texture). Also cache the id for
+    // renderCharacter so it doesn't re-resolve per glyph.
     textures->bindTexture(m_textureLocation);
+    currentGlyphTexId_ = textures->resolveTextureId(m_textureLocation);
 
     bool noise = false;
     std::string cleanStr = sanitize(str);

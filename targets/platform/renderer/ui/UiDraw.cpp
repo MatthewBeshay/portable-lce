@@ -271,6 +271,31 @@ void draw_vignette(int w, int h, int texture_id, const float rgba[4]) {
                          0.0f, 0.0f, 1.0f, 1.0f);
 }
 
-// draw_glyph_quad lands in the next commit alongside the Font migration.
+void draw_glyph_quad(float x, float y, float w, float h,
+                     float u0, float v0, float u1, float v1,
+                     int texture_id, const float rgba[4]) {
+    auto [tvb, span] = RenderPath.alloc_transient_vertices(
+        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
+    if (span.empty()) return;
+
+    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
+    v[0] = {{x,     y + h, 0.0f}, {u0, v1}, 0, 0, kVertexColorSentinel};
+    v[1] = {{x + w, y + h, 0.0f}, {u1, v1}, 0, 0, kVertexColorSentinel};
+    v[2] = {{x + w, y,     0.0f}, {u1, v0}, 0, 0, kVertexColorSentinel};
+    v[3] = {{x,     y,     0.0f}, {u0, v0}, 0, 0, kVertexColorSentinel};
+
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::transient;
+    dc.transient              = tvb;
+    dc.material               = s_materials.font_glyph;
+    dc.texture_override.index = uint32_t(texture_id);
+    dc.tint_color[0] = rgba[0];
+    dc.tint_color[1] = rgba[1];
+    dc.tint_color[2] = rgba[2];
+    dc.tint_color[3] = rgba[3];
+    snapshot_transform(dc.transform);
+
+    rp::ui_overlay::push(dc);
+}
 
 }  // namespace plce::ui
