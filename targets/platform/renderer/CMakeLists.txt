@@ -1,3 +1,9 @@
+# Backend-agnostic 2D UI helpers. Builds regardless of the selected
+# backend — the module's impl only needs rp:: headers + glm; symbols
+# from the active backend (create_material, MatrixGet, ...) resolve
+# when the final executable links plce_platform_renderer.
+add_subdirectory(ui)
+
 if(PLCE_RENDERER STREQUAL "vulkan")
     find_path(VMA_INCLUDE_DIR "vma/vk_mem_alloc.h" REQUIRED)
 

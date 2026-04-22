@@ -5,6 +5,7 @@
 #include "app/common/GameMenuService.h"
 #include "minecraft/client/renderer/GameRenderer.h"
 #include "platform/renderer/IRenderPath.h"
+#include "platform/renderer/ui/UiDraw.h"
 // Minecraft.cpp : Defines the entry point for the application.
 //
 
@@ -461,6 +462,13 @@ int main(int argc, const char* argv[]) {
     auto render_path = make_bgfx_render_path(sdl_window);
 #endif
     rp::render_path_internal::set_active(render_path.get());
+
+    // Scaffold the modern UI draw module — registers the shared
+    // materials (untextured_alpha, textured_alpha, font_glyph,
+    // fullscreen_overlay, vignette) with the active RenderPath so
+    // plce::ui::draw_* primitives can run from anywhere without
+    // lazy-init checks.
+    plce::ui::init();
 
     // Read the file containing the product codes
     app.DebugPrintf("---ReadProductCodes()\n");

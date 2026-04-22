@@ -18,6 +18,7 @@ target_link_libraries(plce_minecraft
             plce_assets_localisation
             plce_platform_sound
             plce_platform_renderer
+            plce_platform_renderer_ui
             plce_platform_input
             plce_platform_profile
             plce_platform_storage

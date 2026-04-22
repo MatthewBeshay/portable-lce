@@ -1,9 +1,6 @@
 #include "GuiComponent.h"
 
-#include <cstring>
 #include <math.h>
-
-#include <glm/glm.hpp>
 
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/gui/Font.h"
@@ -11,24 +8,8 @@
 #include "minecraft/client/renderer/Tesselator.h"
 #include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/ui/UiDraw.h"
 #include "platform/stubs.h"
-
-namespace {
-// Snapshot the live proj*mv into the DrawCall's transform. render_frame
-// uses identity matrices when processing ui_overlay, so the DrawCall's
-// transform has to carry the full screen-to-clip mapping. Capturing the
-// live matrix stack mirrors what submit_immediate did implicitly — any
-// MatrixPush/Scale scope the caller wrapped this draw in is preserved.
-void snapshot_live_matrix(float out[16]) {
-    const float* proj = RenderPath.MatrixGet(rp::MatrixStack::projection);
-    const float* mv   = RenderPath.MatrixGet(rp::MatrixStack::modelview);
-    glm::mat4 p(1.0f), m(1.0f);
-    std::memcpy(&p[0][0], proj, sizeof(float) * 16);
-    std::memcpy(&m[0][0], mv,   sizeof(float) * 16);
-    const glm::mat4 pm = p * m;
-    std::memcpy(out, &pm[0][0], sizeof(float) * 16);
-}
-}
 
 
 void GuiComponent::hLine(int x0, int x1, int y, int col) {
@@ -50,83 +31,36 @@ void GuiComponent::vLine(int x, int y0, int y1, int col) {
 }
 
 void GuiComponent::fill(int x0, int y0, int x1, int y1, int col) {
-    if (x0 < x1) {
-        int tmp = x0;
-        x0 = x1;
-        x1 = tmp;
-    }
-    if (y0 < y1) {
-        int tmp = y0;
-        y0 = y1;
-        y1 = tmp;
-    }
-    float a = ((col >> 24) & 0xff) / 255.0f;
-    float r = ((col >> 16) & 0xff) / 255.0f;
-    float g = ((col >> 8) & 0xff) / 255.0f;
-    float b = ((col) & 0xff) / 255.0f;
-
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (span.empty()) {
-        return;
-    }
-    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    v[0] = {{(float)x0, (float)y1, 0}, {0, 0}, 0, 0, 0xfe00fe00};
-    v[1] = {{(float)x1, (float)y1, 0}, {0, 0}, 0, 0, 0xfe00fe00};
-    v[2] = {{(float)x1, (float)y0, 0}, {0, 0}, 0, 0, 0xfe00fe00};
-    v[3] = {{(float)x0, (float)y0, 0}, {0, 0}, 0, 0, 0xfe00fe00};
-
-    rp::DrawCall dc{};
-    dc.source = rp::VertexSource::transient;
-    dc.transient = tvb;
-    dc.material = Gui::gui_mat_untextured_alpha_;
-    dc.tint_color[0] = r;
-    dc.tint_color[1] = g;
-    dc.tint_color[2] = b;
-    dc.tint_color[3] = a;
-    snapshot_live_matrix(dc.transform);
-
-    rp::ui_overlay::push(dc);
+    if (x0 < x1) { int tmp = x0; x0 = x1; x1 = tmp; }
+    if (y0 < y1) { int tmp = y0; y0 = y1; y1 = tmp; }
+    // `col` is an int with byte layout 0xAARRGGBB (A high, R low-ish)
+    // but the modern UiDraw API takes 0xAABBGGRR (byte 0 = R, byte 3
+    // = A). Swap R and B so the packing matches.
+    const uint32_t rgba =
+        ((uint32_t(col) >> 16) & 0xFFu)        |  // R → byte 0
+        ((uint32_t(col) >>  8) & 0xFFu) <<  8  |  // G → byte 1
+        ((uint32_t(col)      ) & 0xFFu) << 16  |  // B → byte 2
+        ((uint32_t(col) >> 24) & 0xFFu) << 24;    // A → byte 3
+    plce::ui::draw_fill(x0, y0, x1, y1, rgba);
 }
 
-// Pack RGBA: LE bytes = [R,G,B,A] matching VK_FORMAT_R8G8B8A8_UNORM.
-static uint32_t pack_color(float r, float g, float b, float a) {
-    return uint32_t(r * 255) | (uint32_t(g * 255) << 8) |
-           (uint32_t(b * 255) << 16) | (uint32_t(a * 255) << 24);
+namespace {
+// Swap R/B from the legacy 0xAARRGGBB int to the UiDraw 0xAABBGGRR
+// uint32 layout.
+uint32_t legacy_col_to_rgba(int col) {
+    return  ((uint32_t(col) >> 16) & 0xFFu)        |
+           (((uint32_t(col) >>  8) & 0xFFu) <<  8) |
+           (((uint32_t(col)      ) & 0xFFu) << 16) |
+           (((uint32_t(col) >> 24) & 0xFFu) << 24);
+}
 }
 
 void GuiComponent::fillGradient(int x0, int y0, int x1, int y1, int col1,
                                 int col2) {
-    float a1 = ((col1 >> 24) & 0xff) / 255.0f;
-    float r1 = ((col1 >> 16) & 0xff) / 255.0f;
-    float g1 = ((col1 >> 8) & 0xff) / 255.0f;
-    float b1 = ((col1) & 0xff) / 255.0f;
-
-    float a2 = ((col2 >> 24) & 0xff) / 255.0f;
-    float r2 = ((col2 >> 16) & 0xff) / 255.0f;
-    float g2 = ((col2 >> 8) & 0xff) / 255.0f;
-    float b2 = ((col2) & 0xff) / 255.0f;
-
-    uint32_t c1 = pack_color(r1, g1, b1, a1);
-    uint32_t c2 = pack_color(r2, g2, b2, a2);
-
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (span.empty()) return;
-
-    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    v[0] = {{(float)x1, (float)y0, blitOffset}, {0, 0}, c1, 0, 0xfe00fe00};
-    v[1] = {{(float)x0, (float)y0, blitOffset}, {0, 0}, c1, 0, 0xfe00fe00};
-    v[2] = {{(float)x0, (float)y1, blitOffset}, {0, 0}, c2, 0, 0xfe00fe00};
-    v[3] = {{(float)x1, (float)y1, blitOffset}, {0, 0}, c2, 0, 0xfe00fe00};
-
-    rp::DrawCall dc{};
-    dc.source = rp::VertexSource::transient;
-    dc.transient = tvb;
-    dc.material = Gui::gui_mat_untextured_alpha_;
-    snapshot_live_matrix(dc.transform);
-
-    rp::ui_overlay::push(dc);
+    plce::ui::draw_fill_gradient(x0, y0, x1, y1,
+                                 legacy_col_to_rgba(col1),
+                                 legacy_col_to_rgba(col2),
+                                 float(blitOffset));
 }
 
 GuiComponent::GuiComponent() { blitOffset = 0; }
