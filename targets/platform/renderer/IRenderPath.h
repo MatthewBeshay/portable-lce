@@ -184,6 +184,20 @@ struct TransientVertexBuffer {
     PrimitiveType primitive = PrimitiveType::triangle_list;
 };
 
+// Description of a persistent mesh upload. Used to register a long-
+// lived vertex buffer that DrawCalls can reference via MeshHandle
+// (DrawCall::source == VertexSource::mesh). The renderer copies
+// `vertex_data` into a device-local GPU buffer and keeps it resident
+// until destroy_mesh is called. For short-lived per-frame geometry
+// use alloc_transient_vertices + VertexSource::transient instead.
+struct MeshDesc {
+    const void*   vertex_data   = nullptr;
+    uint32_t      vertex_count  = 0;
+    VertexLayout  layout        = VertexLayout::world_standard;
+    PrimitiveType primitive     = PrimitiveType::triangle_list;
+    const char*   debug_name    = nullptr;
+};
+
 struct MaterialDesc {
     ShaderPath shader = ShaderPath::standard;
     BlendMode blend = BlendMode::opaque;
@@ -341,6 +355,16 @@ public:
 
     [[nodiscard]] virtual MaterialHandle create_material(
         const MaterialDesc& desc) = 0;
+
+    /// Register a persistent mesh with the renderer. The vertex data is
+    /// copied into a device-local GPU buffer and kept resident until
+    /// destroy_mesh is called on the returned handle. Default impl
+    /// returns an invalid handle — new backends must override to
+    /// participate in the persistent-mesh DrawCall path.
+    [[nodiscard]] virtual MeshHandle create_mesh(const MeshDesc&) {
+        return {};
+    }
+    virtual void destroy_mesh(MeshHandle /*handle*/) {}
 
     // -- Transient vertex buffer (thread-transparent, frame-scoped) ---------
 

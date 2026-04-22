@@ -68,6 +68,8 @@ public:
 
     // -- Resources --
     [[nodiscard]] rp::MaterialHandle create_material(const rp::MaterialDesc&) override;
+    [[nodiscard]] rp::MeshHandle     create_mesh(const rp::MeshDesc&) override;
+    void                             destroy_mesh(rp::MeshHandle) override;
 
     [[nodiscard]] std::pair<rp::TransientVertexBuffer, std::span<std::byte>>
     alloc_transient_vertices(uint32_t count, rp::VertexLayout layout,
@@ -288,6 +290,22 @@ private:
         uint32_t generation = 0;  // 0 = unused slot
     };
     std::vector<MaterialRecord> material_descs_;
+
+    // Mesh registry. `create_mesh` uploads vertex data into a device-
+    // local VmaBuffer, stores it in a slot (reusing holes left by
+    // destroy_mesh where possible), and returns a handle of
+    // {slot+1, generation}. `record_draw_call` resolves mesh-sourced
+    // DrawCalls through this vector. Destroyed meshes are pushed
+    // through the current frame's DeletionQueue so any in-flight
+    // draws keep their buffer for the GPU fence's lifetime.
+    struct MeshRecord {
+        VmaBuffer          vb;
+        uint32_t           vertex_count = 0;
+        uint32_t           stride       = 32;
+        rp::PrimitiveType  primitive    = rp::PrimitiveType::triangle_list;
+        uint32_t           generation   = 0;  // 0 == free slot
+    };
+    std::vector<MeshRecord> meshes_;
 
     // Convert a MaterialDesc into a PipelineKey. Pure function over the
     // desc — sampler/texture state is looked up per-draw, not baked here.

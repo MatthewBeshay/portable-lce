@@ -359,6 +359,10 @@ Renderer::~Renderer() {
     if (auto blob = pipelines_.save_cache(); !blob.empty())
         (void)PlatformFilesystem.writeFile(pipeline_cache_path(), blob.data(), blob.size());
     pending_destroys_.clear();  // VmaBuffer destructors run vmaDestroyBuffer
+    // Release all persistent mesh buffers before the allocator dies.
+    // In-flight frames are already idle (vkDeviceWaitIdle above).
+    for (auto& rec : meshes_) rec.vb.reset();
+    meshes_.clear();
     tex_mgr_.destroy(dev_.handle(), dev_.allocator());
     quad_ib_.reset();
     pipelines_.destroy();
@@ -1328,6 +1332,117 @@ rp::MaterialHandle Renderer::create_material(const rp::MaterialDesc& desc) {
     return h;
 }
 
+rp::MeshHandle Renderer::create_mesh(const rp::MeshDesc& desc) {
+    if (!desc.vertex_data || desc.vertex_count == 0) return {};
+    // Strides are fixed per known VertexLayout. world_standard and
+    // world_texgen both emit the 32-byte WorldStandardVertex layout;
+    // chunk_compact uses the 16-byte packed form.
+    const uint32_t stride =
+        (desc.layout == rp::VertexLayout::chunk_compact) ? 16u : 32u;
+    const VkDeviceSize bytes = VkDeviceSize(desc.vertex_count) * stride;
+
+    // --- Staging buffer (host-visible, mapped) ---
+    VkBufferCreateInfo sci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    sci.size  = bytes;
+    sci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VmaAllocationCreateInfo sai{};
+    sai.usage = VMA_MEMORY_USAGE_AUTO;
+    sai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VmaAllocationInfo si{};
+    VkBuffer      stg = VK_NULL_HANDLE;
+    VmaAllocation sa  = nullptr;
+    check(vmaCreateBuffer(dev_.allocator(), &sci, &sai, &stg, &sa, &si),
+          "mesh staging");
+    std::memcpy(si.pMappedData, desc.vertex_data, bytes);
+    vmaFlushAllocation(dev_.allocator(), sa, 0, bytes);
+
+    // --- Device-local VB ---
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size  = bytes;
+    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo bai{};
+    bai.usage = VMA_MEMORY_USAGE_AUTO;
+    VkBuffer      buf = VK_NULL_HANDLE;
+    VmaAllocation a   = nullptr;
+    check(vmaCreateBuffer(dev_.allocator(), &bci, &bai, &buf, &a, nullptr),
+          "mesh vb");
+
+    // --- One-shot copy cmd buffer + submit. vkQueueWaitIdle is acceptable
+    //     here because create_mesh is called at resource-load time, not
+    //     per-frame on the hot path. Async upload (timeline + deletion-
+    //     queued staging) is a future optimisation if profiling flags it.
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pci.queueFamilyIndex = dev_.queue_family();
+    VkCommandPool pool = VK_NULL_HANDLE;
+    check(vkCreateCommandPool(dev_.handle(), &pci, nullptr, &pool),
+          "mesh cmd pool");
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool        = pool;
+    cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    check(vkAllocateCommandBuffers(dev_.handle(), &cai, &cmd), "mesh cmd buf");
+    VkCommandBufferBeginInfo bbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bbi);
+    VkBufferCopy rgn{0, 0, bytes};
+    vkCmdCopyBuffer(cmd, stg, buf, 1, &rgn);
+    vkEndCommandBuffer(cmd);
+    VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    csi.commandBuffer = cmd;
+    VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    sub.commandBufferInfoCount = 1;
+    sub.pCommandBufferInfos    = &csi;
+    check(dev_.submit2(1, &sub, VK_NULL_HANDLE), "mesh submit");
+    vkQueueWaitIdle(dev_.queue());
+    vmaDestroyBuffer(dev_.allocator(), stg, sa);
+    vkDestroyCommandPool(dev_.handle(), pool, nullptr);
+
+    // --- Register in the mesh slot vector, reusing a freed slot if one
+    //     exists so long-running sessions don't grow the vector without
+    //     bound. Generation bumps on reuse so stale handles to the old
+    //     occupant are rejected by record_draw_call.
+    MeshRecord rec;
+    rec.vb           = VmaBuffer(dev_.allocator(), buf, a);
+    rec.vertex_count = desc.vertex_count;
+    rec.stride       = stride;
+    rec.primitive    = desc.primitive;
+    for (size_t i = 0; i < meshes_.size(); ++i) {
+        if (meshes_[i].generation == 0) {
+            rec.generation = meshes_[i].generation + 1;
+            if (rec.generation == 0) rec.generation = 1;  // wraparound guard
+            meshes_[i] = std::move(rec);
+            rp::MeshHandle h{};
+            h.index      = uint32_t(i + 1);
+            h.generation = meshes_[i].generation;
+            return h;
+        }
+    }
+    rec.generation = 1;
+    meshes_.push_back(std::move(rec));
+    rp::MeshHandle h{};
+    h.index      = uint32_t(meshes_.size());
+    h.generation = 1;
+    return h;
+}
+
+void Renderer::destroy_mesh(rp::MeshHandle handle) {
+    if (handle.index == 0 || size_t(handle.index - 1) >= meshes_.size()) return;
+    MeshRecord& rec = meshes_[handle.index - 1];
+    if (rec.generation != handle.generation) return;
+    // Defer VmaBuffer destruction through the current frame's deletion
+    // queue. In-flight draws that reference the old buffer finish before
+    // the queue drains (guarded by the frame's fence).
+    if (rec.vb) frame().deletions.push_buffer(std::move(rec.vb));
+    rec.vertex_count = 0;
+    rec.stride       = 32;
+    rec.primitive    = rp::PrimitiveType::triangle_list;
+    rec.generation   = 0;
+}
+
 PipelineKey Renderer::pipeline_key_from_material(const rp::MaterialDesc& m) const {
     PipelineKey k{};
     k.set_depth_test(m.depth_test != rp::DepthTest::off);
@@ -1357,13 +1472,34 @@ PipelineKey Renderer::pipeline_key_from_material(const rp::MaterialDesc& m) cons
 }
 
 void Renderer::record_draw_call(const rp::DrawCall& dc) {
-    if (dc.source != rp::VertexSource::transient) {
-        // Mesh-sourced draws require a MeshHandle registry, which is not
-        // yet wired up. Skip rather than emit undefined geometry.
-        return;
+    // Resolve the vertex source — either a frame-scoped transient
+    // allocation or a persistent MeshHandle registered via create_mesh.
+    VkBuffer          vb        = VK_NULL_HANDLE;
+    VkDeviceSize      vb_offset = 0;
+    uint32_t          vertex_count = 0;
+    rp::PrimitiveType primitive = rp::PrimitiveType::triangle_list;
+
+    auto& f = frame();
+
+    if (dc.source == rp::VertexSource::transient) {
+        const auto& tvb = dc.transient;
+        if (tvb.vertex_count == 0) return;
+        vb           = f.transient_vb();
+        vb_offset    = tvb.offset;
+        vertex_count = tvb.vertex_count;
+        primitive    = tvb.primitive;
+    } else {  // VertexSource::mesh
+        const uint32_t mh_i = dc.mesh.index;
+        if (mh_i == 0 || size_t(mh_i - 1) >= meshes_.size()) return;
+        const MeshRecord& mr = meshes_[mh_i - 1];
+        if (mr.generation != dc.mesh.generation) return;
+        if (mr.vertex_count == 0 || !mr.vb) return;
+        vb           = mr.vb.handle();
+        vb_offset    = 0;
+        vertex_count = mr.vertex_count;
+        primitive    = mr.primitive;
     }
-    const auto& tvb = dc.transient;
-    if (tvb.vertex_count == 0) return;
+
     if (dc.material.index == 0) return;  // invalid handle
     const uint32_t mi = dc.material.index - 1;
     if (mi >= material_descs_.size()) return;
@@ -1371,7 +1507,6 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     if (rec.generation != dc.material.generation) return;
     const rp::MaterialDesc& m = rec.desc;
 
-    auto& f = frame();
     ensure_pass();
 
     // Derive pipeline state from the material and bind if it changed.
@@ -1387,7 +1522,7 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     vkCmdSetLineWidth(f.cmd, dc.line_width > 0.0f ? dc.line_width : line_width_);
 
     VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    switch (tvb.primitive) {
+    switch (primitive) {
         case rp::PrimitiveType::triangle_strip: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
         case rp::PrimitiveType::triangle_fan:   topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN; break;
         case rp::PrimitiveType::line_list:      topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
@@ -1422,9 +1557,7 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
     lm_active = lm_active && m.lit;
 
-    VkDeviceSize off = tvb.offset;
-    VkBuffer transient_buf = f.transient_vb();
-    vkCmdBindVertexBuffers(f.cmd, 0, 1, &transient_buf, &off);
+    vkCmdBindVertexBuffers(f.cmd, 0, 1, &vb, &vb_offset);
 
     PushConstants pc{};
     glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],
@@ -1472,7 +1605,7 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(PushConstants), &pc);
 
-    vkCmdDraw(f.cmd, tvb.vertex_count, 1, 0, 0);
+    vkCmdDraw(f.cmd, vertex_count, 1, 0, 0);
 }
 
 void Renderer::render_frame(const rp::FrameDesc& frame) {
