@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numbers>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "Facing.h"
 #include "app/common/UI/ConsoleUIController.h"
@@ -1265,22 +1269,31 @@ void Gui::renderPumpkin(int w, int h) {
     v[2] = {{(float)w, 0,        -90}, {1, 0}, 0, 0, 0xfe00fe00};
     v[3] = {{0,        0,        -90}, {0, 0}, 0, 0, 0xfe00fe00};
 
-    rp::DrawCall dc{};
-    dc.source = rp::VertexSource::transient;
-    dc.transient = tvb;
-    dc.material = gui_mat_fullscreen_overlay_;
+    // Resolve the texture id without binding it — the DrawCall records
+    // it into texture_override and the renderer looks it up at
+    // render_frame time, so the draw doesn't depend on whatever texture
+    // the legacy path happens to have bound when ui_overlay is processed.
+    const int pumpkin_tex =
+        minecraft->textures->resolveTextureId(&PUMPKIN_BLUR_LOCATION);
 
-    RenderPath.StateSetDepthTestEnable(false);
-    RenderPath.StateSetDepthMask(false);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-    RenderPath.StateSetColour(1, 1, 1, 1);
-    RenderPath.StateSetAlphaTestEnable(false);
-    minecraft->textures->bindTexture(&PUMPKIN_BLUR_LOCATION);
-    RenderPath.submit_immediate(dc);
-    RenderPath.StateSetDepthMask(true);
-    RenderPath.StateSetDepthTestEnable(true);
-    RenderPath.StateSetAlphaTestEnable(true);
-    RenderPath.StateSetColour(1, 1, 1, 1);
+    // Carry our own screen-space ortho in DrawCall::transform. The
+    // legacy GUI ortho uses the scaled logical size (ScreenSizeCalc
+    // output, same `w`/`h` passed here), which is smaller than the
+    // framebuffer — so we can't let render_frame derive one from the
+    // framebuffer. Y-flip is baked into the matrix: top-left origin
+    // in (0..w, 0..h) maps to NDC top-left in Vulkan (which the
+    // renderer's negative-height viewport then re-flips back, net
+    // result = top-left origin on screen).
+    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f, -100.0f, 100.0f);
+
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::transient;
+    dc.transient              = tvb;
+    dc.material               = gui_mat_fullscreen_overlay_;
+    dc.texture_override.index = uint32_t(pumpkin_tex);
+    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
+
+    rp::ui_overlay::push(dc);
 }
 
 void Gui::renderVignette(float br, int w, int h) {

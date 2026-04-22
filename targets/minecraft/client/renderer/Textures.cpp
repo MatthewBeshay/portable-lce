@@ -427,11 +427,14 @@ void Textures::bindTexture(const std::string& resourceName) {
 
 // 4J Added
 void Textures::bindTexture(ResourceLocation* resource) {
+    bind(resolveTextureId(resource));
+}
+
+int Textures::resolveTextureId(ResourceLocation* resource) {
     if (resource->isPreloaded()) {
-        bind(loadTexture(resource->getTexture()));
-    } else {
-        bind(loadTexture(TN_COUNT, resource->getPath()));
+        return loadTexture(resource->getTexture());
     }
+    return loadTexture(TN_COUNT, resource->getPath());
 }
 
 // 4jcraft: brought over from smartcmd/MinecraftConsoles in TU19 merge

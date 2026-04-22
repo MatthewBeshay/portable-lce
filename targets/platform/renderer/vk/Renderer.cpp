@@ -1388,17 +1388,22 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     vkCmdSetPrimitiveTopology(f.cmd, topo);
     vkCmdSetDepthBias(f.cmd, dc.depth_bias, 0.0f, dc.depth_slope);
 
-    // Texture resolution: the MaterialHandle-based path through a bindless
-    // slot lookup does not exist yet (TextureManager only exposes
-    // resolve_bound_slot based on the currently-bound legacy texture).
-    // For this first wave of migrations, subsystems call
-    // textures->bindTexture(...) before pushing the DrawCall, and
-    // record_draw_call picks the slot up from live state — matching how
-    // submit_immediate works today. Per-slot sampler state is a later item.
+    // Pull the texture from the DrawCall's override first, then the
+    // material's slot[0], so ui_overlay draws are self-describing and
+    // don't inherit the live texture bind the way submit_immediate
+    // does. If neither carries an id (legacy materials, partially-
+    // migrated sites), fall back to the currently-bound texture.
     bool material_textured = m.textured;
     uint32_t tex_id = 0;
     if (material_textured) {
-        tex_id = tex_mgr_.resolve_bound_slot(material_textured);
+        const int override_tex = int(dc.texture_override.index);
+        const int slot_tex     = int(m.texture_slots[0].index);
+        const int pick_tex     = override_tex > 0 ? override_tex : slot_tex;
+        if (pick_tex > 0) {
+            tex_id = tex_mgr_.resolve_slot(pick_tex, material_textured);
+        } else {
+            tex_id = tex_mgr_.resolve_bound_slot(material_textured);
+        }
     }
     bool lm_active = false;
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
@@ -1446,9 +1451,27 @@ void Renderer::render_frame(const rp::FrameDesc& frame) {
     if (!frame_active_) return;
     // Views are not yet consumed — world rendering still goes through
     // the legacy path. TODO: process frame.views once world draws migrate.
+    if (frame.ui_overlay.empty()) return;
+
+    // ui_overlay DrawCalls carry their own screen-space ortho in
+    // DrawCall::transform — the emitter knows the correct scaled UI
+    // coordinate system, the renderer does not. Reset the matrix stacks
+    // to identity so `pc.mvp = proj * mv = identity` and the composed
+    // `pc.mvp * dc.transform = dc.transform` drives the draw.
+    //
+    // Save/restore the tops so any subsequent legacy draws inside the
+    // same frame aren't surprised.
+    const glm::mat4 saved_proj = proj_stack_.top();
+    const glm::mat4 saved_mv   = mv_stack_.top();
+    proj_stack_.top() = glm::mat4(1.0f);
+    mv_stack_.top()   = glm::mat4(1.0f);
+
     for (const rp::DrawCall& dc : frame.ui_overlay) {
         record_draw_call(dc);
     }
+
+    proj_stack_.top() = saved_proj;
+    mv_stack_.top()   = saved_mv;
 }
 
 std::pair<rp::TransientVertexBuffer, std::span<std::byte>>

@@ -80,6 +80,12 @@ public:
     /// the default.
     uint32_t resolve_bound_slot(bool& textured_out);
 
+    /// Same logic as resolve_bound_slot but for an arbitrary texture id.
+    /// Returns the bindless slot for `idx` (== idx when ready), or the
+    /// 1x1 default if idx is out of range / not yet uploaded.
+    /// `textured_out` is true when the returned slot is NOT the default.
+    uint32_t resolve_slot(int idx, bool& textured_out);
+
     /// Same for the lightmap. Returns slot index (default_lm_ if unset/unready),
     /// and sets `active_out` to false if lightmap tex is 0 (no lightmap bound).
     uint32_t resolve_lightmap_slot(bool& active_out);

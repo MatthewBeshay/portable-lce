@@ -318,6 +318,12 @@ public:
     void bindTexture(ResourceLocation* resource);        // 4J Added
     void bindTextureLayers(ResourceLocation* resource);  // 4J added
 
+    // Resolve the integer texture id for a ResourceLocation without binding
+    // it. Used by the render_frame / DrawCall path to capture a texture
+    // into DrawCall::texture_override at push time, since the declarative
+    // draw is executed later when the bound texture may have changed.
+    int resolveTextureId(ResourceLocation* resource);
+
     // 4J Made public for use in XUI controls
     void bind(int id);
 

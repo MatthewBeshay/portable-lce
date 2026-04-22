@@ -248,8 +248,11 @@ uint32_t TextureManager::resolve_bound_slot(bool& textured_out) {
     // (complete_upload -> write_slot). Prior behaviour called
     // vkWaitForFences(UINT64_MAX) here which stalled every draw behind a
     // pending upload.
+    return resolve_slot(bound_tex_, textured_out);
+}
+
+uint32_t TextureManager::resolve_slot(int idx, bool& textured_out) {
     std::lock_guard lk(texture_mutex_);
-    int idx = bound_tex_;
     if (idx <= 0 || size_t(idx) >= textures_.size() || !textures_[idx].ready) {
         textured_out = false;
         return uint32_t(default_tex_);
