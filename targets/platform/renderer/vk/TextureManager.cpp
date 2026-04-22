@@ -298,6 +298,13 @@ int TextureManager::create() {
             "(kMaxTextures=4096). Raise kMaxTextures and the descriptor set layout "
             "in lockstep if the game needs more textures.");
     }
+    if (!hwm_warned_ && uint32_t(idx) >= (kMaxTextures * 9 / 10)) {
+        std::fprintf(stderr,
+                     "[vk] bindless texture slot %d of %u — 90%% used, "
+                     "consider raising kMaxTextures\n",
+                     idx, kMaxTextures);
+        hwm_warned_ = true;
+    }
     textures_.emplace_back();
     return idx;
 }

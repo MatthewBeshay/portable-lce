@@ -65,12 +65,15 @@ public:
     /// Bump-allocate from the transient vertex buffer.
     /// Returns nullptr if the allocation doesn't fit. When this happens, a
     /// grow request is recorded so the next begin() for this slot reallocates
-    /// the buffer with enough headroom. The current draw is still dropped.
+    /// the buffer with enough headroom. The current draw is still dropped —
+    /// begin() logs the overflow count at the start of the next frame so
+    /// dropped geometry is visible rather than silent.
     void* alloc_transient(VkDeviceSize bytes) {
         if (transient_offset_ + bytes > transient_size_) {
             // Track the high-water mark so begin() knows how big to grow to.
             VkDeviceSize needed = transient_offset_ + bytes;
             if (needed > pending_grow_bytes_) pending_grow_bytes_ = needed;
+            ++transient_overflow_count_;
             return nullptr;
         }
         void* p = transient_mapped_ + transient_offset_;
@@ -113,6 +116,7 @@ private:
     VkDeviceSize transient_offset_   = 0;
     VkDeviceSize transient_size_     = 0;
     VkDeviceSize pending_grow_bytes_ = 0;  // >0 means begin() will reallocate
+    uint32_t     transient_overflow_count_ = 0;  // dropped draws last frame
 
     // Per-frame UBO — persistently mapped; renderer writes it at StartFrame.
     std::byte*   frame_ubo_mapped_   = nullptr;

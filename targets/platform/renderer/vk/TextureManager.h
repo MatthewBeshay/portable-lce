@@ -171,6 +171,11 @@ private:
     VkDevice      device_    = VK_NULL_HANDLE;
     VmaAllocator  allocator_ = nullptr;
 
+    // One-shot high-water-mark warning when bindless usage crosses 90%.
+    // Raising kMaxTextures isn't free (descriptor set layout churn +
+    // pool sizing), so flag the ceiling before we hit it.
+    bool hwm_warned_ = false;
+
     /// Descriptor set owning the SAMPLED_IMAGE[kMaxTextures] array. Owned by
     /// Renderer; TextureManager holds a non-owning handle and writes into it.
     VkDescriptorSet bindless_set_ = VK_NULL_HANDLE;

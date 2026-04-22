@@ -2,6 +2,7 @@
 #include "VkCheck.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdio>
 
 namespace plce::vk {
@@ -99,7 +100,9 @@ void FrameContext::reset_acquire_semaphore(VkDevice dev) {
 }
 
 void FrameContext::write_frame_ubo(const void* src, size_t bytes) {
-    if (!frame_ubo_mapped_ || bytes > frame_ubo_size_) return;
+    // Silent truncation hid layout mismatches — now an assertion.
+    assert(frame_ubo_mapped_ && "FrameContext::write_frame_ubo before create()");
+    assert(bytes <= frame_ubo_size_ && "FrameUBO write exceeds buffer size");
     std::memcpy(frame_ubo_mapped_, src, bytes);
 }
 
@@ -118,6 +121,19 @@ void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
 
 void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX);
+
+    // Surface transient-buffer overflows from the previous frame for this
+    // slot. Each overflow dropped a draw — silent misrender otherwise. The
+    // grow-on-next-begin path below reallocates to cover the high-water
+    // mark, but logging makes the drop visible until that kicks in.
+    if (transient_overflow_count_ > 0) {
+        std::fprintf(stderr,
+                     "[vk] transient VB overflowed %u times last frame "
+                     "(dropped draws); growing to %llu bytes\n",
+                     transient_overflow_count_,
+                     (unsigned long long)pending_grow_bytes_);
+        transient_overflow_count_ = 0;
+    }
 
     // Read back the last-frame timestamps from this slot's query pool.
     // The fence has signalled, so the queries are guaranteed available.
