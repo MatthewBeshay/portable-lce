@@ -1312,24 +1312,21 @@ void Gui::renderVignette(float br, int w, int h) {
     v[2] = {{(float)w, 0,        -90}, {1, 0}, 0, 0, 0xfe00fe00};
     v[3] = {{0,        0,        -90}, {0, 0}, 0, 0, 0xfe00fe00};
 
-    rp::DrawCall dc{};
-    dc.source = rp::VertexSource::transient;
-    dc.transient = tvb;
-    dc.material = gui_mat_vignette_;
-    dc.tint_color[0] = tbr;
-    dc.tint_color[1] = tbr;
-    dc.tint_color[2] = tbr;
-    dc.tint_color[3] = 1.0f;
+    const int vignette_tex = minecraft->textures->loadTexture(TN__BLUR__MISC_VIGNETTE);
+    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f, -100.0f, 100.0f);
 
-    RenderPath.StateSetDepthTestEnable(false);
-    RenderPath.StateSetDepthMask(false);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::zero, rp::BlendFactor::one_minus_src_color);
-    RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN__BLUR__MISC_VIGNETTE));
-    RenderPath.submit_immediate(dc);
-    RenderPath.StateSetDepthMask(true);
-    RenderPath.StateSetDepthTestEnable(true);
-    RenderPath.StateSetColour(1, 1, 1, 1);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::transient;
+    dc.transient              = tvb;
+    dc.material               = gui_mat_vignette_;
+    dc.texture_override.index = uint32_t(vignette_tex);
+    dc.tint_color[0]          = tbr;
+    dc.tint_color[1]          = tbr;
+    dc.tint_color[2]          = tbr;
+    dc.tint_color[3]          = 1.0f;
+    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
+
+    rp::ui_overlay::push(dc);
 #endif
 }
 
@@ -1355,25 +1352,22 @@ void Gui::renderTp(float br, int w, int h) {
     v[2] = {{(float)w, 0,        -90}, {u1, v0}, 0, 0, 0xfe00fe00};
     v[3] = {{0,        0,        -90}, {u0, v0}, 0, 0, 0xfe00fe00};
 
-    rp::DrawCall dc{};
-    dc.source = rp::VertexSource::transient;
-    dc.transient = tvb;
-    dc.material = gui_mat_fullscreen_overlay_;
-    dc.tint_color[0] = 1;
-    dc.tint_color[1] = 1;
-    dc.tint_color[2] = 1;
-    dc.tint_color[3] = br;
+    const int blocks_tex =
+        minecraft->textures->resolveTextureId(&TextureAtlas::LOCATION_BLOCKS);
+    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f, -100.0f, 100.0f);
 
-    RenderPath.StateSetAlphaTestEnable(false);
-    RenderPath.StateSetDepthTestEnable(false);
-    RenderPath.StateSetDepthMask(false);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-    minecraft->textures->bindTexture(&TextureAtlas::LOCATION_BLOCKS);
-    RenderPath.submit_immediate(dc);
-    RenderPath.StateSetDepthMask(true);
-    RenderPath.StateSetDepthTestEnable(true);
-    RenderPath.StateSetAlphaTestEnable(true);
-    RenderPath.StateSetColour(1, 1, 1, 1);
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::transient;
+    dc.transient              = tvb;
+    dc.material               = gui_mat_fullscreen_overlay_;
+    dc.texture_override.index = uint32_t(blocks_tex);
+    dc.tint_color[0]          = 1;
+    dc.tint_color[1]          = 1;
+    dc.tint_color[2]          = 1;
+    dc.tint_color[3]          = br;
+    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
+
+    rp::ui_overlay::push(dc);
 }
 
 void Gui::renderSlot(int slot, int x, int y, float a) {
