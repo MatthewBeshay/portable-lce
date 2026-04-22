@@ -200,6 +200,21 @@ found:
         upload_timeline_      = *upload_timeline_raii_;
     }
 
+    // --- Frame-submission timeline semaphore ---
+    // Renderer signals a monotonically-increasing value at the end of
+    // every frame's graphics submit; each FrameContext stores the value
+    // it last signalled, and StartFrame waits on that value next time
+    // the slot comes around. Replaces the per-FrameContext VkFence.
+    {
+        vkhpp::SemaphoreTypeCreateInfo ti;
+        ti.semaphoreType = vkhpp::SemaphoreType::eTimeline;
+        ti.initialValue  = 0;
+        vkhpp::SemaphoreCreateInfo sci;
+        sci.pNext = &ti;
+        frame_timeline_raii_ = vkhpp::raii::Semaphore(device_, sci);
+        frame_timeline_      = *frame_timeline_raii_;
+    }
+
     // --- VMA ---
     VmaAllocatorCreateInfo ai{};
     ai.physicalDevice   = *physical_;

@@ -51,9 +51,9 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
     check(vkCreateSemaphore(dev, &sci, nullptr, &sem_acquired), "sem acq");
     check(vkCreateSemaphore(dev, &sci, nullptr, &sem_done), "sem done");
 
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    check(vkCreateFence(dev, &fci, nullptr, &fence), "fence");
+    // No per-slot VkFence any more — synchronization uses the Device's
+    // shared frame_timeline semaphore, compared against this slot's
+    // submit_timeline_value (0 on first use, meaning no wait needed).
 
     // Transient vertex buffer — host-visible, persistently mapped. Grows on demand.
     recreate_transient(alloc, kInitialTransientSize);
@@ -131,14 +131,15 @@ void FrameContext::destroy(VkDevice dev, VmaAllocator /*alloc*/) {
     transient.reset();
     if (ts_pool_)     vkDestroyQueryPool(dev, ts_pool_, nullptr);
     ts_pool_  = VK_NULL_HANDLE;
-    if (fence)        vkDestroyFence(dev, fence, nullptr);
     if (sem_done)     vkDestroySemaphore(dev, sem_done, nullptr);
     if (sem_acquired) vkDestroySemaphore(dev, sem_acquired, nullptr);
     if (pool)         vkDestroyCommandPool(dev, pool, nullptr);
 }
 
 void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
-    vkWaitForFences(dev, 1, &fence, VK_TRUE, UINT64_MAX);
+    // Slot-reuse wait lives in Renderer::StartFrame now — it holds the
+    // Device reference and the frame_timeline semaphore. By the time
+    // begin() runs, the caller has already waited on submit_timeline_value.
 
     // Reset the per-frame UBO ring cursor — slots from the prior pass
     // through this slot are stale now that the fence has signalled.
@@ -211,7 +212,6 @@ void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
         pending_grow_bytes_ = 0;
     }
 
-    vkResetFences(dev, 1, &fence);
     vkResetCommandPool(dev, pool, 0);
     transient_offset_ = 0;
 

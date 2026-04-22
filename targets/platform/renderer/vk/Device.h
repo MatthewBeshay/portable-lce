@@ -83,6 +83,15 @@ public:
         return ++upload_timeline_counter_;
     }
 
+    /// Shared frame-submission timeline semaphore. Renderer signals a
+    /// monotonically-increasing value at the end of each frame's graphics
+    /// submit; the next StartFrame through that FrameContext slot waits
+    /// on the previously-signalled value. Replaces the per-slot VkFence.
+    VkSemaphore frame_timeline() const { return frame_timeline_; }
+    uint64_t next_frame_timeline_value() const {
+        return ++frame_timeline_counter_;
+    }
+
 private:
     ::vk::raii::Context              ctx_;
     ::vk::raii::Instance             instance_{nullptr};
@@ -99,6 +108,10 @@ private:
     ::vk::raii::Semaphore          upload_timeline_raii_{nullptr};
     VkSemaphore                    upload_timeline_     = VK_NULL_HANDLE;
     mutable std::atomic<uint64_t>  upload_timeline_counter_{0};
+
+    ::vk::raii::Semaphore          frame_timeline_raii_{nullptr};
+    VkSemaphore                    frame_timeline_      = VK_NULL_HANDLE;
+    mutable std::atomic<uint64_t>  frame_timeline_counter_{0};
 };
 
 }  // namespace plce::vk

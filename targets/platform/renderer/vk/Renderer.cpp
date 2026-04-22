@@ -393,7 +393,18 @@ void Renderer::StartFrame() {
         fb_.is_hi_def     = h >= 720;
     }
 
-    vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
+    // Wait on this slot's last submit via the Device's shared frame
+    // timeline. Value 0 means the slot has never submitted, so nothing
+    // to wait on. Replaces the per-slot VkFence + vkWaitForFences /
+    // vkResetFences pair.
+    if (f.submit_timeline_value > 0) {
+        VkSemaphore sem = dev_.frame_timeline();
+        VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        wi.semaphoreCount = 1;
+        wi.pSemaphores    = &sem;
+        wi.pValues        = &f.submit_timeline_value;
+        vkWaitSemaphores(dev_.handle(), &wi, UINT64_MAX);
+    }
 
     // Poll async texture uploads and mark completed ones ready.
     tex_mgr_.poll_uploads();
@@ -485,19 +496,29 @@ void Renderer::Present() {
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     wait.semaphore = f.sem_acquired;
     wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkSemaphoreSubmitInfo sig{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    sig.semaphore = f.sem_done;
-    // Present only consumes the color attachment — narrow stage mask lets
-    // the driver release the semaphore as soon as color-attachment writes
-    // retire, without waiting for unrelated graphics-stage work.
-    sig.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    // Two signals: the binary sem_done for present (narrow
+    // COLOR_ATTACHMENT_OUTPUT stage so the compositor releases early)
+    // and the shared frame timeline so the next pass through this slot
+    // can wait on a single semaphore instead of a dedicated fence.
+    const uint64_t next_timeline = dev_.next_frame_timeline_value();
+    VkSemaphoreSubmitInfo sigs[2]{};
+    sigs[0].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    sigs[0].semaphore = f.sem_done;
+    sigs[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    sigs[1].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    sigs[1].semaphore = dev_.frame_timeline();
+    sigs[1].value     = next_timeline;
+    sigs[1].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
     VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     csi.commandBuffer = f.cmd;
     VkSubmitInfo2 sub{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     sub.waitSemaphoreInfoCount    = 1; sub.pWaitSemaphoreInfos    = &wait;
     sub.commandBufferInfoCount    = 1; sub.pCommandBufferInfos    = &csi;
-    sub.signalSemaphoreInfoCount  = 1; sub.pSignalSemaphoreInfos  = &sig;
-    check(dev_.submit2(1, &sub, f.fence), "submit");
+    sub.signalSemaphoreInfoCount  = 2; sub.pSignalSemaphoreInfos  = sigs;
+    check(dev_.submit2(1, &sub, VK_NULL_HANDLE), "submit");
+    f.submit_timeline_value = next_timeline;
 
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.waitSemaphoreCount = 1;
@@ -713,8 +734,18 @@ void Renderer::SetClearColour(const float rgba[4]) {
 
 void Renderer::resize(uint32_t w, uint32_t h) {
     if (w == 0 || h == 0) return;
-    for (auto& f : frames_)
-        vkWaitForFences(dev_.handle(), 1, &f.fence, VK_TRUE, UINT64_MAX);
+    // Drain every frame slot's last graphics submit via the shared
+    // timeline before touching the swapchain. Slots never submitted
+    // have submit_timeline_value == 0 and need no wait.
+    for (auto& f : frames_) {
+        if (f.submit_timeline_value == 0) continue;
+        VkSemaphore sem = dev_.frame_timeline();
+        VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        wi.semaphoreCount = 1;
+        wi.pSemaphores    = &sem;
+        wi.pValues        = &f.submit_timeline_value;
+        vkWaitSemaphores(dev_.handle(), &wi, UINT64_MAX);
+    }
     // A VK_SUBOPTIMAL_KHR return from vkAcquireNextImageKHR leaves the
     // acquire semaphore signaled even though we are discarding the image.
     // Reusing a still-signaled semaphore in the next acquire is UB. After

@@ -124,7 +124,10 @@ public:
     VkCommandBuffer cmd          = VK_NULL_HANDLE;
     VkSemaphore     sem_acquired = VK_NULL_HANDLE;
     VkSemaphore     sem_done     = VK_NULL_HANDLE;
-    VkFence         fence        = VK_NULL_HANDLE;
+    // Timeline value this slot will signal on its next submit, written
+    // by Renderer::Present. StartFrame waits on the previously signalled
+    // value before reusing the slot. 0 = never submitted yet.
+    uint64_t        submit_timeline_value = 0;
     VmaBuffer       transient;   // host-visible, persistently mapped
     VmaBuffer       frame_ubo;   // host-visible, persistently mapped
     VkDescriptorSet frame_ubo_set = VK_NULL_HANDLE;  // owned by Renderer's pool
