@@ -89,19 +89,9 @@ public:
     std::string getJukeboxMessage(int iPad) { return overlayMessageString; }
     float getJukeboxOpacity(int iPad);
 
-    // 4J Added. Static so callers that don't own a Gui instance (e.g.
-    // Font drawing on the title/world-select screens before the HUD is
-    // ever rendered) can lazily initialise the shared gui_mat_* handles.
-    // Guarded by materials_initialized_ — first call creates, later
-    // calls are no-ops.
-    static void initMaterials();
-    static rp::MaterialHandle gui_mat_untextured_alpha_;
-    static rp::MaterialHandle gui_mat_vignette_;
-    static rp::MaterialHandle gui_mat_fullscreen_overlay_;
-    // Textured-alpha material used for font glyphs (alpha blend, no
-    // depth, no lighting, texture comes from DrawCall::texture_override).
-    static rp::MaterialHandle gui_mat_font_;
-    static bool materials_initialized_;
+    // Material handles + init used to live here; they moved into the
+    // plce::ui module (targets/platform/renderer/ui/UiDraw.cpp) and are
+    // created once at startup from main.cpp.
 
     void renderGraph(int dataLength, int dataPos, int64_t* dataA,
                      float dataAScale, int dataAWarning, int64_t* dataB,

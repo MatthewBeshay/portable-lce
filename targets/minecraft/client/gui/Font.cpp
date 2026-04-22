@@ -234,12 +234,6 @@ void Font::draw(const std::string& str, bool dropShadow) {
 void Font::draw(const std::string& str, int x, int y, int color,
                 bool dropShadow) {
     if (!str.empty()) {
-        // Title / world-select screens render Font text before Gui::render
-        // ever runs, and gui_mat_font_ is lazily created in initMaterials.
-        // Without this ensure-call, record_draw_call on those screens
-        // sees an invalid material handle and silently drops every glyph.
-        Gui::initMaterials();
-
         if ((color & 0xFC000000) == 0) color |= 0xFF000000;  // force alpha
         // if not set
 

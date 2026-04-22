@@ -72,12 +72,6 @@ ResourceLocation Gui::GUI_ICONS_LOCATION = ResourceLocation(TN_GUI_ICONS);
 float Gui::currentGuiBlendFactor = 1.0f;  // 4J added
 float Gui::currentGuiScaleFactor = 1.0f;  // 4J added
 ItemRenderer* Gui::itemRenderer = new ItemRenderer();
-rp::MaterialHandle Gui::gui_mat_untextured_alpha_{};
-rp::MaterialHandle Gui::gui_mat_vignette_{};
-rp::MaterialHandle Gui::gui_mat_fullscreen_overlay_{};
-rp::MaterialHandle Gui::gui_mat_font_{};
-bool Gui::materials_initialized_ = false;
-
 Gui::Gui(Minecraft* minecraft) {
     // 4J - initialisers added
     random = new Random();
@@ -97,64 +91,7 @@ Gui::Gui(Minecraft* minecraft) {
     lastTickA = 0.0f;
 }
 
-/*static*/ void Gui::initMaterials() {
-    if (materials_initialized_) return;
-    materials_initialized_ = true;
-
-    rp::MaterialDesc untex{};
-    untex.shader      = rp::ShaderPath::standard;
-    untex.blend       = rp::BlendMode::alpha;
-    untex.textured    = false;
-    untex.lit         = false;
-    untex.fog_enabled = false;
-    untex.depth_test  = rp::DepthTest::less_equal;
-    untex.depth_write = true;
-    untex.cull        = rp::CullMode::none;
-    gui_mat_untextured_alpha_ = RenderPath.create_material(untex);
-
-    rp::MaterialDesc vig{};
-    vig.shader          = rp::ShaderPath::standard;
-    vig.blend           = rp::BlendMode::custom;
-    vig.blend_src_custom = rp::BlendFactor::zero;
-    vig.blend_dst_custom = rp::BlendFactor::one_minus_src_color;
-    vig.textured    = true;
-    vig.lit         = false;
-    vig.fog_enabled = false;
-    vig.depth_test  = rp::DepthTest::off;
-    vig.depth_write = false;
-    vig.cull        = rp::CullMode::none;
-    gui_mat_vignette_ = RenderPath.create_material(vig);
-
-    rp::MaterialDesc overlay{};
-    overlay.shader      = rp::ShaderPath::standard;
-    overlay.blend       = rp::BlendMode::alpha;
-    overlay.textured    = true;
-    overlay.lit         = false;
-    overlay.fog_enabled = false;
-    overlay.depth_test  = rp::DepthTest::off;
-    overlay.depth_write = false;
-    overlay.alpha_test  = rp::AlphaTest::off;
-    overlay.cull        = rp::CullMode::none;
-    gui_mat_fullscreen_overlay_ = RenderPath.create_material(overlay);
-
-    rp::MaterialDesc font{};
-    font.shader      = rp::ShaderPath::standard;
-    font.blend       = rp::BlendMode::alpha;
-    font.textured    = true;
-    font.lit         = false;
-    font.fog_enabled = false;
-    // Glyph atlas is alpha-tested to kill the background around the
-    // sprite; depth test off so text lays on top of the current frame.
-    font.alpha_test  = rp::AlphaTest::greater;
-    font.alpha_ref   = 0.1f;
-    font.depth_test  = rp::DepthTest::off;
-    font.depth_write = false;
-    font.cull        = rp::CullMode::none;
-    gui_mat_font_ = RenderPath.create_material(font);
-}
-
 void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
-    initMaterials();
     // 4J Stu - I have copied this code for XUI_BaseScene. If/when it gets
     // changed it should be broken out 4J - altered to force full screen mode to
     // 3X scaling, and any split screen modes to 2X scaling. This is so that the
