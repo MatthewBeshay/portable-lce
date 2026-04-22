@@ -5,6 +5,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <span>
+#include <utility>
+#include <vector>
 
 #include "DeletionQueue.h"
 #include "VmaResources.h"
@@ -35,13 +38,29 @@ public:
 
     /// Record a begin/end timestamp pair into the frame's query pool.
     /// begin_cmd_timestamps() is called at the top of command recording,
-    /// end_cmd_timestamps() just before vkEndCommandBuffer.
+    /// end_cmd_timestamps() just before vkEndCommandBuffer. These reserve
+    /// slots 0 and 1; push_timestamp / pop_timestamp nest inside and
+    /// consume slots 2..kMaxTimestamps.
     void begin_cmd_timestamps();
     void end_cmd_timestamps();
+
+    /// Begin a named GPU timing pair inside command recording. Pairs may
+    /// nest. `tag` is stored by pointer — pass a string literal or another
+    /// pointer that outlives the frame. Silently no-ops if timestamps are
+    /// disabled on this device or if the pool has no free slots.
+    void push_timestamp(const char* tag);
+    /// Close the most recently opened pair (LIFO with push_timestamp).
+    void pop_timestamp();
 
     /// Most recent completed frame's whole-GPU-time in milliseconds, or 0
     /// if no measurement is available yet.
     [[nodiscard]] double last_frame_gpu_ms() const { return last_gpu_ms_; }
+
+    /// Per-tag ms accumulated over the last completed frame. Multiple
+    /// push_timestamp calls with the same tag in one frame sum into one
+    /// entry. Empty until the first readback completes.
+    [[nodiscard]] std::span<const std::pair<const char*, double>>
+    last_pass_ms() const { return last_pass_ms_; }
 
     /// End command buffer recording.
     void end_cmd() { vkEndCommandBuffer(cmd); }
@@ -122,17 +141,29 @@ private:
     std::byte*   frame_ubo_mapped_   = nullptr;
     VkDeviceSize frame_ubo_size_     = 0;
 
-    // GPU timestamp query state. One pool per FrameContext (2 queries:
-    // begin + end of the frame's command buffer). A query is read back
-    // in begin() of the next iteration through this slot — by then the
-    // fence has signalled, so the query is guaranteed to be available.
-    // timestamp_period_ns_ == 0 disables the feature.
+    // GPU timestamp query state. One pool per FrameContext; slot 0 and 1
+    // hold the frame's begin/end timestamps written by begin_cmd_timestamps
+    // / end_cmd_timestamps, and the remaining slots feed nested
+    // push_timestamp / pop_timestamp pairs. Queries are read back in
+    // begin() on the next pass through this slot — by then the fence has
+    // signalled so results are guaranteed available. timestamp_period_ns_
+    // == 0 disables all timestamp recording.
+    static constexpr uint32_t kMaxTimestamps = 32;
+
+    // Pair recorded by push/pop_timestamp. `tag` is a non-owning pointer.
+    struct TsPair { const char* tag; uint32_t start_slot; uint32_t end_slot; };
+
     VkDevice    ts_device_           = VK_NULL_HANDLE;
     VkQueryPool ts_pool_              = VK_NULL_HANDLE;
     float       ts_period_ns_         = 0.0f;
     bool        ts_queries_recorded_  = false;   // any begin_cmd_timestamps() yet?
     bool        ts_queries_pending_   = false;   // prev-pass wrote; not yet read back
     double      last_gpu_ms_          = 0.0;
+    uint32_t    ts_next_slot_         = 2;       // next free slot for push_timestamp
+    std::vector<TsPair>   ts_pairs_recording_;   // pairs being recorded this frame
+    std::vector<TsPair>   ts_pairs_pending_;     // last frame's pairs awaiting readback
+    std::vector<uint32_t> ts_stack_;             // indices into ts_pairs_recording_
+    std::vector<std::pair<const char*, double>> last_pass_ms_;  // accumulated per-tag ms
 };
 
 }  // namespace plce::vk

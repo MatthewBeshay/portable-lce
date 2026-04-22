@@ -79,15 +79,16 @@ void FrameContext::create(VkDevice dev, VmaAllocator alloc, uint32_t queue_famil
         frame_ubo_mapped_ = static_cast<std::byte*>(info.pMappedData);
     }
 
-    // GPU timestamp query pool. 2 queries per frame: begin + end of the
-    // primary command buffer. timestamp_period_ns == 0 means disabled
-    // (e.g. device reports timestampValidBits == 0 on this queue family).
+    // GPU timestamp query pool. Slots 0 and 1 hold the frame's begin/end
+    // timestamps; slots 2..kMaxTimestamps-1 feed nested push_timestamp /
+    // pop_timestamp pairs. timestamp_period_ns == 0 means disabled (e.g.
+    // device reports timestampValidBits == 0 on this queue family).
     ts_device_     = dev;
     ts_period_ns_  = timestamp_period_ns;
     if (ts_period_ns_ > 0.0f) {
         VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         qci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-        qci.queryCount = 2;
+        qci.queryCount = kMaxTimestamps;
         check(vkCreateQueryPool(dev, &qci, nullptr, &ts_pool_),
               "timestamp query pool");
     }
@@ -138,16 +139,36 @@ void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     // Read back the last-frame timestamps from this slot's query pool.
     // The fence has signalled, so the queries are guaranteed available.
     if (ts_pool_ && ts_queries_pending_ && ts_period_ns_ > 0.0f) {
-        uint64_t ts[2] = {0, 0};
+        uint64_t ts[kMaxTimestamps] = {};
         VkResult r = vkGetQueryPoolResults(
-            dev, ts_pool_, 0, 2, sizeof(ts), ts, sizeof(uint64_t),
-            VK_QUERY_RESULT_64_BIT);
+            dev, ts_pool_, 0, kMaxTimestamps,
+            sizeof(ts), ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
         if (r == VK_SUCCESS) {
             const double ns = double(ts[1] - ts[0]) * ts_period_ns_;
             last_gpu_ms_ = ns / 1'000'000.0;
+
+            // Aggregate per-tag ms from the nested pairs. Multiple pairs
+            // with the same tag pointer sum into one entry. Cleared each
+            // frame before repopulating.
+            last_pass_ms_.clear();
+            for (const TsPair& p : ts_pairs_pending_) {
+                if (p.end_slot == 0) continue;  // unclosed — dropped
+                const double pair_ns =
+                    double(ts[p.end_slot] - ts[p.start_slot]) * ts_period_ns_;
+                const double pair_ms = pair_ns / 1'000'000.0;
+                bool merged = false;
+                for (auto& e : last_pass_ms_) {
+                    if (e.first == p.tag) { e.second += pair_ms; merged = true; break; }
+                }
+                if (!merged) last_pass_ms_.emplace_back(p.tag, pair_ms);
+            }
         }
         ts_queries_pending_ = false;
     }
+    ts_pairs_pending_.clear();
+    ts_pairs_recording_.clear();
+    ts_stack_.clear();
+    ts_next_slot_ = 2;
 
     deletions.flush();
 
@@ -181,7 +202,7 @@ void FrameContext::begin(VkDevice dev, VmaAllocator alloc) {
     // the command buffer so it is guaranteed to run before the
     // subsequent vkCmdWriteTimestamp on the GPU.
     if (ts_pool_) {
-        vkCmdResetQueryPool(cmd, ts_pool_, 0, 2);
+        vkCmdResetQueryPool(cmd, ts_pool_, 0, kMaxTimestamps);
     }
     ts_queries_recorded_ = false;
 }
@@ -195,7 +216,35 @@ void FrameContext::begin_cmd_timestamps() {
 void FrameContext::end_cmd_timestamps() {
     if (!ts_pool_ || !ts_queries_recorded_) return;
     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ts_pool_, 1);
+    // Move this frame's recorded pairs into the pending slot so begin()
+    // can read them back two frames from now when this FrameContext's
+    // fence signals. Also close any pairs left open by a mispaired
+    // caller — they'll show up as 0 ms rather than a stack imbalance.
+    ts_pairs_pending_ = std::move(ts_pairs_recording_);
+    ts_pairs_recording_.clear();
+    ts_stack_.clear();
     ts_queries_pending_ = true;
+}
+
+void FrameContext::push_timestamp(const char* tag) {
+    if (!ts_pool_ || ts_period_ns_ <= 0.0f) return;
+    if (ts_next_slot_ >= kMaxTimestamps) return;  // pool full; drop pair
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        ts_pool_, ts_next_slot_);
+    ts_pairs_recording_.push_back({tag, ts_next_slot_, 0});
+    ts_stack_.push_back(uint32_t(ts_pairs_recording_.size() - 1));
+    ++ts_next_slot_;
+}
+
+void FrameContext::pop_timestamp() {
+    if (!ts_pool_ || ts_period_ns_ <= 0.0f) return;
+    if (ts_stack_.empty()) return;
+    if (ts_next_slot_ >= kMaxTimestamps) { ts_stack_.pop_back(); return; }
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        ts_pool_, ts_next_slot_);
+    ts_pairs_recording_[ts_stack_.back()].end_slot = ts_next_slot_;
+    ts_stack_.pop_back();
+    ++ts_next_slot_;
 }
 
 }  // namespace plce::vk

@@ -426,6 +426,14 @@ void Renderer::StartFrame() {
         if (frame_counter >= next_gpu_log_frame_ && gpu_ms_count_ > 0) {
             std::fprintf(stderr, "[vk] gpu avg %.2f ms (%u frames)\n",
                          gpu_ms_accum_ / gpu_ms_count_, gpu_ms_count_);
+            // Per-pass breakdown, if any push_timestamp pairs were
+            // recorded last frame. Tags come straight from the emitter
+            // (string literals; no copy). Single-frame snapshot — no
+            // rolling average — since passes come and go.
+            for (const auto& [tag, ms_pass] : f.last_pass_ms()) {
+                std::fprintf(stderr, "[vk]   %-16s %.3f ms\n",
+                             tag ? tag : "(null)", ms_pass);
+            }
             gpu_ms_accum_ = 0.0;
             gpu_ms_count_ = 0;
             next_gpu_log_frame_ = frame_counter + 60;
@@ -1472,6 +1480,8 @@ void Renderer::render_frame(const rp::FrameDesc& frame) {
     // the legacy path. TODO: process frame.views once world draws migrate.
     if (frame.ui_overlay.empty()) return;
 
+    this->frame().push_timestamp("ui_overlay");
+
     // ui_overlay DrawCalls carry their own screen-space ortho in
     // DrawCall::transform — the emitter knows the correct scaled UI
     // coordinate system, the renderer does not. Reset the matrix stacks
@@ -1491,6 +1501,8 @@ void Renderer::render_frame(const rp::FrameDesc& frame) {
 
     proj_stack_.top() = saved_proj;
     mv_stack_.top()   = saved_mv;
+
+    this->frame().pop_timestamp();
 }
 
 std::pair<rp::TransientVertexBuffer, std::span<std::byte>>
