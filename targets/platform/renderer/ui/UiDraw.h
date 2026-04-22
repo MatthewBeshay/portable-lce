@@ -65,10 +65,13 @@ void draw_glyph_quad(float x, float y, float w, float h,
                      float u0, float v0, float u1, float v1,
                      int texture_id, const float rgba[4]);
 
-// Fullscreen textured overlay (pumpkin-head blur, portal tint). UVs
-// span 0..1 across the whole (w, h) quad.
+// Fullscreen textured overlay (pumpkin-head blur, portal tint,
+// post-effect). UVs default to 0..1 but can be overridden when the
+// texture is an atlas region (e.g. portalTile's UV subrect).
 void draw_fullscreen_overlay(int w, int h, int texture_id,
-                             const float rgba[4]);
+                             const float rgba[4],
+                             float u0 = 0.0f, float v0 = 0.0f,
+                             float u1 = 1.0f, float v1 = 1.0f);
 
 // Fullscreen vignette with the custom zero / one_minus_src_color
 // blend the legacy renderVignette used.

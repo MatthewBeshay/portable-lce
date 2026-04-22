@@ -2,11 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <numbers>
-
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 #include "Facing.h"
 #include "app/common/UI/ConsoleUIController.h"
@@ -56,6 +52,7 @@
 #include "platform/XboxStubs.h"
 #include "platform/input/input.h"
 #include "platform/renderer/IRenderPath.h"
+#include "platform/renderer/ui/UiDraw.h"
 #include "platform/renderer/renderer.h"
 #include "platform/stubs.h"
 #include "strings.h"
@@ -1276,40 +1273,9 @@ void Gui::renderBossHealth(void) {
 }
 
 void Gui::renderPumpkin(int w, int h) {
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (span.empty()) return;
-    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    v[0] = {{0,       (float)h, -90}, {0, 1}, 0, 0, 0xfe00fe00};
-    v[1] = {{(float)w, (float)h, -90}, {1, 1}, 0, 0, 0xfe00fe00};
-    v[2] = {{(float)w, 0,        -90}, {1, 0}, 0, 0, 0xfe00fe00};
-    v[3] = {{0,        0,        -90}, {0, 0}, 0, 0, 0xfe00fe00};
-
-    // Resolve the texture id without binding it — the DrawCall records
-    // it into texture_override and the renderer looks it up at
-    // render_frame time, so the draw doesn't depend on whatever texture
-    // the legacy path happens to have bound when ui_overlay is processed.
-    const int pumpkin_tex =
-        minecraft->textures->resolveTextureId(&PUMPKIN_BLUR_LOCATION);
-
-    // Carry our own screen-space ortho in DrawCall::transform. The
-    // legacy GUI ortho uses the scaled logical size (ScreenSizeCalc
-    // output, same `w`/`h` passed here), which is smaller than the
-    // framebuffer — so we can't let render_frame derive one from the
-    // framebuffer. Y-flip is baked into the matrix: top-left origin
-    // in (0..w, 0..h) maps to NDC top-left in Vulkan (which the
-    // renderer's negative-height viewport then re-flips back, net
-    // result = top-left origin on screen).
-    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f, -100.0f, 100.0f);
-
-    rp::DrawCall dc{};
-    dc.source                 = rp::VertexSource::transient;
-    dc.transient              = tvb;
-    dc.material               = gui_mat_fullscreen_overlay_;
-    dc.texture_override.index = uint32_t(pumpkin_tex);
-    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
-
-    rp::ui_overlay::push(dc);
+    const int tex = minecraft->textures->resolveTextureId(&PUMPKIN_BLUR_LOCATION);
+    const float rgba[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    plce::ui::draw_fullscreen_overlay(w, h, tex, rgba);
 }
 
 void Gui::renderVignette(float br, int w, int h) {
@@ -1319,30 +1285,9 @@ void Gui::renderVignette(float br, int w, int h) {
     tbr += (br - tbr) * 0.01f;
 
 #if defined(ENABLE_JAVA_GUIS)
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (span.empty()) return;
-    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    v[0] = {{0,        (float)h, -90}, {0, 1}, 0, 0, 0xfe00fe00};
-    v[1] = {{(float)w, (float)h, -90}, {1, 1}, 0, 0, 0xfe00fe00};
-    v[2] = {{(float)w, 0,        -90}, {1, 0}, 0, 0, 0xfe00fe00};
-    v[3] = {{0,        0,        -90}, {0, 0}, 0, 0, 0xfe00fe00};
-
-    const int vignette_tex = minecraft->textures->loadTexture(TN__BLUR__MISC_VIGNETTE);
-    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f, -100.0f, 100.0f);
-
-    rp::DrawCall dc{};
-    dc.source                 = rp::VertexSource::transient;
-    dc.transient              = tvb;
-    dc.material               = gui_mat_vignette_;
-    dc.texture_override.index = uint32_t(vignette_tex);
-    dc.tint_color[0]          = tbr;
-    dc.tint_color[1]          = tbr;
-    dc.tint_color[2]          = tbr;
-    dc.tint_color[3]          = 1.0f;
-    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
-
-    rp::ui_overlay::push(dc);
+    const int tex = minecraft->textures->loadTexture(TN__BLUR__MISC_VIGNETTE);
+    const float rgba[4] = {tbr, tbr, tbr, 1.0f};
+    plce::ui::draw_vignette(w, h, tex, rgba);
 #endif
 }
 
@@ -1354,36 +1299,12 @@ void Gui::renderTp(float br, int w, int h) {
     }
 
     Icon* slot = Tile::portalTile->getTexture(Facing::UP);
-    float u0 = slot->getU0();
-    float v0 = slot->getV0();
-    float u1 = slot->getU1();
-    float v1 = slot->getV1();
-
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (span.empty()) return;
-    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    v[0] = {{0,        (float)h, -90}, {u0, v1}, 0, 0, 0xfe00fe00};
-    v[1] = {{(float)w, (float)h, -90}, {u1, v1}, 0, 0, 0xfe00fe00};
-    v[2] = {{(float)w, 0,        -90}, {u1, v0}, 0, 0, 0xfe00fe00};
-    v[3] = {{0,        0,        -90}, {u0, v0}, 0, 0, 0xfe00fe00};
-
-    const int blocks_tex =
+    const int tex =
         minecraft->textures->resolveTextureId(&TextureAtlas::LOCATION_BLOCKS);
-    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f, -100.0f, 100.0f);
-
-    rp::DrawCall dc{};
-    dc.source                 = rp::VertexSource::transient;
-    dc.transient              = tvb;
-    dc.material               = gui_mat_fullscreen_overlay_;
-    dc.texture_override.index = uint32_t(blocks_tex);
-    dc.tint_color[0]          = 1;
-    dc.tint_color[1]          = 1;
-    dc.tint_color[2]          = 1;
-    dc.tint_color[3]          = br;
-    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
-
-    rp::ui_overlay::push(dc);
+    const float rgba[4] = {1.0f, 1.0f, 1.0f, br};
+    plce::ui::draw_fullscreen_overlay(w, h, tex, rgba,
+                                      slot->getU0(), slot->getV0(),
+                                      slot->getU1(), slot->getV1());
 }
 
 void Gui::renderSlot(int slot, int x, int y, float a) {
