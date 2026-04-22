@@ -105,10 +105,23 @@ void GuiComponent::blit(int x, int y, int sx, int sy, int w, int h) {
     const int tex_id = Minecraft::GetInstance()->textures->currentBoundId();
     if (tex_id < 0) return;
 
+    // Apply the global HUD fade. Legacy HUD relied on
+    // StateSetBlendFactor(constant_alpha) with (fade, fade, fade, fade)
+    // to dim every HUD draw by the user's Interface Opacity setting.
+    // With ui_overlay draws going through per-material alpha blending
+    // that scaffolding doesn't fire, so we bake the fade into the
+    // tint_color alpha here — visually equivalent for the white-tint
+    // texture draws this path produces, and it's the one place every
+    // HUD blit funnels through.
+    const float fade = Gui::currentGuiBlendFactor;
+    const uint32_t tint_alpha =
+        uint32_t(fade < 0.0f ? 0 : fade > 1.0f ? 255 : fade * 255.0f);
+    const uint32_t tint = 0x00FFFFFFu | (tint_alpha << 24);
+
     plce::ui::draw_textured_quad(
         fx - dx, fy - dy, fx + fw - dx, fy + fh - dy,
         (float)blitOffset,
         u0, v0, u1, v1,
-        tex_id);
+        tex_id, tint);
 }
 
