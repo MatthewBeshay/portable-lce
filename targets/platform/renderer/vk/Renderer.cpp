@@ -1405,9 +1405,13 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
             tex_id = tex_mgr_.resolve_bound_slot(material_textured);
         }
     }
+    // Lightmap modulation is driven by the material's `lit` flag — no
+    // live-state override. Migrated UI overlays set lit=false, chunk
+    // materials will set lit=true. Legacy path keeps its own AND-with-
+    // lightmap_enabled_ in fill_push_constants; here we ignore it.
     bool lm_active = false;
     const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
-    lm_active = lm_active && lightmap_enabled_;
+    lm_active = lm_active && m.lit;
 
     VkDeviceSize off = tvb.offset;
     VkBuffer transient_buf = f.transient_vb();
@@ -1417,14 +1421,28 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     glm::vec4 tint(dc.tint_color[0], dc.tint_color[1],
                    dc.tint_color[2], dc.tint_color[3]);
     fill_push_constants(&pc, material_textured, lm_active, tex_id, lm_tex_id, &tint);
-    // Override alpha_ref from the material instead of the live state so
-    // migrated draws don't depend on legacy StateSetAlphaFunc having
-    // been called first.
+
+    // fill_push_constants is shared with the legacy path and mixes live
+    // flags (alpha_test_enabled_, force_lod_, texture_enabled_) into
+    // pc.flags + pc.alpha_ref. Overwrite every field that could have
+    // leaked through so the final PC is derived purely from the material
+    // and the DrawCall. Without this, a migrated subsystem's rendering
+    // would silently depend on whatever legacy StateSet*/MatrixMode
+    // calls ran most recently.
     pc.alpha_ref = m.alpha_ref;
-    // Adjust the FLAG_ALPHA_TEST bit to match the material rather than
-    // live state. Bit 1 is FLAG_ALPHA_TEST.
-    if (m.alpha_test != rp::AlphaTest::off) pc.flags |= 0x2u;
-    else                                     pc.flags &= ~0x2u;
+    uint32_t mat_flags = 0;
+    if (material_textured)                     mat_flags |= 0x1u;   // FLAG_TEXTURED
+    if (m.alpha_test != rp::AlphaTest::off)    mat_flags |= 0x2u;   // FLAG_ALPHA_TEST
+    if (lm_active)                             mat_flags |= 0x4u;   // FLAG_LIGHTMAP
+    if (dc.forced_lod > 0) {                                        // FLAG_FORCE_LOD
+        mat_flags |= 0x8u;
+        mat_flags |= (uint32_t(dc.forced_lod) & 0x3u) << 28u;
+    }
+    mat_flags |= (tex_id    & 0xFFFu) << 4u;
+    mat_flags |= (lm_tex_id & 0xFFFu) << 16u;
+    const uint32_t sampler_idx = tex_mgr_.sampler_idx_for(int(tex_id)) & 0x3u;
+    mat_flags |= (sampler_idx << 30u);
+    pc.flags = mat_flags;
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).
     // For screen-space UI overlays the transform is almost always identity
