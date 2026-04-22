@@ -386,6 +386,17 @@ public:
     virtual void push_debug_event(const char* name) = 0;
     virtual void pop_debug_event() = 0;
 
+    // -- GPU timestamps (per-pass) ------------------------------------------
+    //
+    // Wrap a render pass with a begin/end pair. The renderer records
+    // GPU timestamps at the top/bottom of pipeline and logs the delta
+    // per-tag in the 1-Hz breakdown. Pairs may nest; `tag` is stored
+    // by pointer so it must outlive the frame (string literals are
+    // fine). Default impl is a no-op for backends that don't support
+    // timestamps.
+    virtual void push_timestamp(const char* /*tag*/) {}
+    virtual void pop_timestamp() {}
+
     // -- Host lifecycle (main thread only) ----------------------------------
 
     virtual void tick() = 0;

@@ -1067,7 +1067,9 @@ void GameRenderer::render(float a, bool bFirst) {
 
         if (!mc->options->hideGui || mc->screen != nullptr) {
             FRAME_PROFILE_SCOPE(UIHud);
+            RenderPath.push_timestamp("gui");
             mc->gui->render(a, mc->screen != nullptr, xMouse, yMouse);
+            RenderPath.pop_timestamp();
         }
     } else {
         (void)0;
@@ -1300,9 +1302,11 @@ void GameRenderer::renderLevel(float a, int64_t until) {
             setupFog(-1, a);
             {
                 FRAME_PROFILE_SCOPE(WeatherSky);
+                RenderPath.push_timestamp("sky");
                 levelRenderer->renderSky(a);
                 if (mc->skins->getSelected()->getId() == 1026)
                     levelRenderer->renderHaloRing(a);
+                RenderPath.pop_timestamp();
             }
         }
         // 4jcraft: needs to be enabled for proper transparent texturing on low
@@ -1361,7 +1365,9 @@ void GameRenderer::renderLevel(float a, int64_t until) {
         mc->textures->bindTexture(
             &TextureAtlas::LOCATION_BLOCKS);  // 4J was "/terrain.png"
         Lighting::turnOff();
+        RenderPath.push_timestamp("terrain_opaque");
         levelRenderer->render(cameraEntity, 0, a, updateChunks);
+        RenderPath.pop_timestamp();
 
         (void)0;
 
@@ -1384,22 +1390,28 @@ void GameRenderer::renderLevel(float a, int64_t until) {
             cameraPos.z = cameraPosTemp.z;
             {
                 FRAME_PROFILE_SCOPE(Entity);
+                RenderPath.push_timestamp("entities");
                 levelRenderer->renderEntities(&cameraPos, frustum, a);
+                RenderPath.pop_timestamp();
             }
 
             turnOnLightLayer(a);  // 4J - brought forward from 1.8.2
             captureLighting();
             {
                 FRAME_PROFILE_SCOPE(Particle);
+                RenderPath.push_timestamp("particles_opaque");
                 particleEngine->renderLit(cameraEntity, a,
                                           ParticleEngine::OPAQUE_LIST);
+                RenderPath.pop_timestamp();
             }
             Lighting::turnOff();
             setupFog(0, a);
             {
                 FRAME_PROFILE_SCOPE(Particle);
+                RenderPath.push_timestamp("particles_opaque");
                 particleEngine->render(cameraEntity, a,
                                        ParticleEngine::OPAQUE_LIST);
+                RenderPath.pop_timestamp();
             }
 
             turnOffLightLayer(a);  // 4J - brought forward from 1.8.2
@@ -1458,7 +1470,9 @@ void GameRenderer::renderLevel(float a, int64_t until) {
 
             (void)0;
         } else {
+            RenderPath.push_timestamp("terrain_translucent");
             levelRenderer->render(cameraEntity, 1, a, updateChunks);
+            RenderPath.pop_timestamp();
         }
 
         // 4J - added - have split out translucent particle rendering so that it
@@ -1467,15 +1481,19 @@ void GameRenderer::renderLevel(float a, int64_t until) {
         turnOnLightLayer(a);  // 4J - brought forward from 1.8.2
         {
             FRAME_PROFILE_SCOPE(Particle);
+            RenderPath.push_timestamp("particles_translucent");
             particleEngine->renderLit(cameraEntity, a,
                                       ParticleEngine::TRANSLUCENT_LIST);
+            RenderPath.pop_timestamp();
         }
         Lighting::turnOff();
         setupFog(0, a);
         {
             FRAME_PROFILE_SCOPE(Particle);
+            RenderPath.push_timestamp("particles_translucent");
             particleEngine->render(cameraEntity, a,
                                    ParticleEngine::TRANSLUCENT_LIST);
+            RenderPath.pop_timestamp();
         }
 
         turnOffLightLayer(a);  // 4J - brought forward from 1.8.2
@@ -1516,7 +1534,9 @@ void GameRenderer::renderLevel(float a, int64_t until) {
 
         if (cameraEntity->y >= Level::genDepth) {
             FRAME_PROFILE_SCOPE(WeatherSky);
+            RenderPath.push_timestamp("clouds");
             prepareAndRenderClouds(levelRenderer, a);
+            RenderPath.pop_timestamp();
         }
 
         // 4J - rain rendering moved here so that it renders after clouds & can
@@ -1525,14 +1545,18 @@ void GameRenderer::renderLevel(float a, int64_t until) {
         RenderPath.StateSetFogEnable(true);
         {
             FRAME_PROFILE_SCOPE(WeatherSky);
+            RenderPath.push_timestamp("weather");
             renderSnowAndRain(a);
+            RenderPath.pop_timestamp();
         }
 
         RenderPath.StateSetFogEnable(false);
 
         if (zoom == 1) {
             RenderPath.Clear(rp::CLEAR_DEPTH);
+            RenderPath.push_timestamp("item_in_hand");
             renderItemInHand(a, i);
+            RenderPath.pop_timestamp();
         }
 
         if (!mc->options->anaglyph3d) {

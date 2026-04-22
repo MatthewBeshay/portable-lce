@@ -77,6 +77,8 @@ public:
 
     void push_debug_event(const char*) override;
     void pop_debug_event() override;
+    void push_timestamp(const char* tag) override { frame().push_timestamp(tag); }
+    void pop_timestamp() override                  { frame().pop_timestamp(); }
     void tick() override {}
     void submit_immediate(const rp::DrawCall&) override;
 
