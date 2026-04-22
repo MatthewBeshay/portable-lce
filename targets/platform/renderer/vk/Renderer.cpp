@@ -1645,35 +1645,171 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     vkCmdDraw(f.cmd, vertex_count, 1, 0, 0);
 }
 
-void Renderer::render_frame(const rp::FrameDesc& frame) {
+void Renderer::render_frame(const rp::FrameDesc& desc) {
     if (!frame_active_) return;
-    // Views are not yet consumed — world rendering still goes through
-    // the legacy path. TODO: process frame.views once world draws migrate.
-    if (frame.ui_overlay.empty()) return;
+    if (desc.views.empty() && desc.ui_overlay.empty()) return;
 
-    this->frame().push_timestamp("ui_overlay");
+    auto& f = this->frame();
 
-    // ui_overlay DrawCalls carry their own screen-space ortho in
-    // DrawCall::transform — the emitter knows the correct scaled UI
-    // coordinate system, the renderer does not. Reset the matrix stacks
-    // to identity so `pc.mvp = proj * mv = identity` and the composed
-    // `pc.mvp * dc.transform = dc.transform` drives the draw.
-    //
-    // Save/restore the tops so any subsequent legacy draws inside the
-    // same frame aren't surprised.
+    // Save matrix stack tops once so the single stored default survives
+    // both the per-view loops (which swap in view.camera) and the
+    // ui_overlay loop (which forces identity).
     const glm::mat4 saved_proj = proj_stack_.top();
     const glm::mat4 saved_mv   = mv_stack_.top();
-    proj_stack_.top() = glm::mat4(1.0f);
-    mv_stack_.top()   = glm::mat4(1.0f);
+    const uint32_t  saved_ubo_offset = current_frame_ubo_offset_;
 
-    for (const rp::DrawCall& dc : frame.ui_overlay) {
-        record_draw_call(dc);
+    // --- Per-view processing --------------------------------------------
+    for (const rp::ViewDesc& view : desc.views) {
+        // Skip views with no draws. During the Tier-C migration period,
+        // GameRenderer populates current_view with camera / fog / lighting
+        // / clear flags every frame but leaves the draw spans empty
+        // because the legacy path is still doing the work. Applying the
+        // view's clear + UBO swap on such a view would clobber the
+        // legacy-rendered frame for zero benefit.
+        if (view.chunk_opaque.empty()    && view.chunk_alpha_test.empty() &&
+            view.chunk_transparent.empty() && view.world_opaque.empty()  &&
+            view.world_alpha_test.empty()  && view.world_transparent.empty() &&
+            view.debug_overlay.empty()) {
+            continue;
+        }
+
+        f.push_timestamp("view");
+        ensure_pass();
+
+        // Camera: write view-space and projection directly into the matrix
+        // stacks. DrawCall.transform composes on top as model-space.
+        std::memcpy(&proj_stack_.top()[0][0], view.camera.projection,
+                    sizeof(float) * 16);
+        std::memcpy(&mv_stack_.top()[0][0],   view.camera.view,
+                    sizeof(float) * 16);
+
+        // Viewport + scissor override. Legacy viewport_layout_ stays
+        // untouched; we set the VkViewport + VkRect2D directly on the
+        // command buffer and mark the legacy state dirty so it gets
+        // reapplied after render_frame returns.
+        if (view.viewport_layout != rp::ViewportLayout::fullscreen ||
+            view.scissor.width != 0) {
+            viewport_layout_ = view.viewport_layout;
+            viewport_dirty_  = true;
+            apply_viewport_and_scissor();
+            if (view.scissor.width > 0) {
+                VkRect2D sc{};
+                sc.offset.x      = view.scissor.x;
+                sc.offset.y      = view.scissor.y;
+                sc.extent.width  = view.scissor.width;
+                sc.extent.height = view.scissor.height;
+                vkCmdSetScissor(f.cmd, 0, 1, &sc);
+            }
+        }
+
+        // Build a FrameUBO from this view's fog_profiles[0] + lighting.
+        // Allocate a ring slot, rebind set 1 with the new dynamic offset.
+        FrameUBO vubo{};
+        const rp::FogProfile& fp = view.fog_profiles[0];
+        const float fog_mode_f = (fp.mode == rp::FogMode::linear)         ? 1.0f
+                               : (fp.mode == rp::FogMode::exponential)    ? 2.0f
+                               : (fp.mode == rp::FogMode::exponential_sq) ? 3.0f
+                                                                           : 0.0f;
+        vubo.fog_params = glm::vec4(fog_mode_f, fp.start, fp.end, fp.density);
+        vubo.fog_colour = glm::vec4(fp.color[0], fp.color[1], fp.color[2], 0.0f);
+        vubo.light0_dir = glm::vec4(view.lighting.directional[0].direction[0],
+                                    view.lighting.directional[0].direction[1],
+                                    view.lighting.directional[0].direction[2], 0);
+        vubo.light1_dir = glm::vec4(view.lighting.directional[1].direction[0],
+                                    view.lighting.directional[1].direction[1],
+                                    view.lighting.directional[1].direction[2], 0);
+        vubo.light_diffuse = glm::vec4(view.lighting.directional[0].color[0],
+                                       view.lighting.directional[0].color[1],
+                                       view.lighting.directional[0].color[2], 0);
+        vubo.light_ambient = glm::vec4(view.lighting.ambient_color[0],
+                                       view.lighting.ambient_color[1],
+                                       view.lighting.ambient_color[2], 0);
+        vubo.global_lm_packed = 0;
+        vubo.inv_gamma        = inv_gamma_;
+
+        current_frame_ubo_offset_ = f.alloc_frame_ubo_slot(&vubo, sizeof(vubo));
+
+        // Rebind set 1 with the new dynamic offset. Set 0 (bindless) stays.
+        {
+            VkDescriptorSet one_set = f.frame_ubo_set;
+            vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    *pipeline_layout_, 1, 1, &one_set,
+                                    1, &current_frame_ubo_offset_);
+        }
+
+        // Optional in-pass clear of this view's attachments. Rare — most
+        // views inherit the frame's begin_pass LOAD_OP_CLEAR. vkCmdClear-
+        // Attachments clears the current scissor rect inside an active
+        // render pass.
+        if (view.clear.flags != rp::CLEAR_NONE) {
+            VkClearAttachment atts[3]{};
+            uint32_t n = 0;
+            if (view.clear.flags & rp::CLEAR_COLOR) {
+                atts[n].aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
+                atts[n].colorAttachment = 0;
+                std::memcpy(atts[n].clearValue.color.float32,
+                            view.clear.color, sizeof(float) * 4);
+                ++n;
+            }
+            if (view.clear.flags & rp::CLEAR_DEPTH) {
+                atts[n].aspectMask      = VK_IMAGE_ASPECT_DEPTH_BIT;
+                atts[n].clearValue.depthStencil.depth = view.clear.depth;
+                ++n;
+            }
+            if (view.clear.flags & rp::CLEAR_STENCIL) {
+                atts[n].aspectMask      = VK_IMAGE_ASPECT_STENCIL_BIT;
+                atts[n].clearValue.depthStencil.stencil = view.clear.stencil;
+                ++n;
+            }
+            if (n > 0) {
+                VkClearRect r{};
+                r.rect.extent = {swap_.extent().width, swap_.extent().height};
+                r.layerCount  = 1;
+                vkCmdClearAttachments(f.cmd, n, atts, 1, &r);
+            }
+        }
+
+        // Draw order: chunks (not yet wired — ChunkDrawCall has a
+        // slightly different shape; Tier C7 will wire them), then
+        // world spans in opaque → alpha_test → transparent order, then
+        // debug overlay.
+        // TODO(C7): process view.chunk_opaque / chunk_alpha_test /
+        // chunk_transparent once ChunkDrawCall handling lands.
+        for (const rp::DrawCall& dc : view.world_opaque)      record_draw_call(dc);
+        for (const rp::DrawCall& dc : view.world_alpha_test)  record_draw_call(dc);
+        for (const rp::DrawCall& dc : view.world_transparent) record_draw_call(dc);
+        for (const rp::DrawCall& dc : view.debug_overlay)     record_draw_call(dc);
+
+        f.pop_timestamp();
     }
 
+    // --- UI overlay (identity matrices; DrawCall::transform carries its
+    //     own screen-space ortho) ----------------------------------------
+    if (!desc.ui_overlay.empty()) {
+        f.push_timestamp("ui_overlay");
+        ensure_pass();
+        proj_stack_.top() = glm::mat4(1.0f);
+        mv_stack_.top()   = glm::mat4(1.0f);
+
+        // Rebind set 1 with the frame-default UBO offset (StartFrame's
+        // snapshot). ui_overlay draws inherit the frame's lighting/fog/
+        // gamma — they don't need per-view UBO state.
+        current_frame_ubo_offset_ = saved_ubo_offset;
+        VkDescriptorSet one_set = f.frame_ubo_set;
+        vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                *pipeline_layout_, 1, 1, &one_set,
+                                1, &current_frame_ubo_offset_);
+
+        for (const rp::DrawCall& dc : desc.ui_overlay) {
+            record_draw_call(dc);
+        }
+        f.pop_timestamp();
+    }
+
+    // Restore the matrix stacks for any subsequent legacy draws. The
+    // FrameUBO dynamic offset has already been reset above.
     proj_stack_.top() = saved_proj;
     mv_stack_.top()   = saved_mv;
-
-    this->frame().pop_timestamp();
 }
 
 std::pair<rp::TransientVertexBuffer, std::span<std::byte>>
