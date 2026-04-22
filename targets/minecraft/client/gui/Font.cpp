@@ -1,17 +1,22 @@
 #include "Font.h"
 
+#include <cstring>
 #include <string.h>
 
 #include <utility>
 #include <vector>
 
+#include <glm/glm.hpp>
+
 #include "java/Random.h"
 #include "minecraft/SharedConstants.h"
 #include "minecraft/client/BufferedImage.h"
 #include "minecraft/client/Options.h"
+#include "minecraft/client/gui/Gui.h"
 #include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
+#include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/renderer.h"
 #include "platform/stubs.h"
 #include "util/StringHelpers.h"
@@ -134,8 +139,58 @@ void Font::renderCharacter(char c) {
     float fontWidth = m_cols * m_charWidth;
     float fontHeight = m_rows * m_charHeight;
 
+#ifdef PLCE_RENDERER_VULKAN
+    // New path: build a single-quad DrawCall and push into ui_overlay.
+    // The legacy per-glyph Tesselator submit emitted one VkDraw per
+    // character; we keep that cadence here but route through the
+    // material-aware record_draw_call so each glyph carries its own
+    // captured proj*mv transform, texture id, and tint.
+    auto [tvb, span] = RenderPath.alloc_transient_vertices(
+        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
+    if (!span.empty()) {
+        auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
+        v[0] = {{xPos,         yPos + height, 0.0f},
+                {xOff          / fontWidth, (yOff + 7.99f) / fontHeight},
+                0, 0, 0xfe00fe00};
+        v[1] = {{xPos + width, yPos + height, 0.0f},
+                {(xOff + width) / fontWidth, (yOff + 7.99f) / fontHeight},
+                0, 0, 0xfe00fe00};
+        v[2] = {{xPos + width, yPos,          0.0f},
+                {(xOff + width) / fontWidth, yOff / fontHeight},
+                0, 0, 0xfe00fe00};
+        v[3] = {{xPos,         yPos,          0.0f},
+                {xOff          / fontWidth, yOff / fontHeight},
+                0, 0, 0xfe00fe00};
+
+        // Snapshot the live proj*mv at push time — render_frame uses
+        // identity matrices for ui_overlay, so DrawCall.transform does
+        // the full screen-to-clip mapping (same pattern as renderPumpkin
+        // / GuiComponent::fill).
+        const float* proj = RenderPath.MatrixGet(rp::MatrixStack::projection);
+        const float* mv   = RenderPath.MatrixGet(rp::MatrixStack::modelview);
+        glm::mat4 p(1.0f), m(1.0f);
+        std::memcpy(&p[0][0], proj, sizeof(float) * 16);
+        std::memcpy(&m[0][0], mv,   sizeof(float) * 16);
+        const glm::mat4 pm = p * m;
+
+        rp::DrawCall dc{};
+        dc.source                 = rp::VertexSource::transient;
+        dc.transient              = tvb;
+        dc.material               = Gui::gui_mat_font_;
+        dc.texture_override.index =
+            uint32_t(textures->resolveTextureId(m_textureLocation));
+        dc.tint_color[0]          = currentColor_[0];
+        dc.tint_color[1]          = currentColor_[1];
+        dc.tint_color[2]          = currentColor_[2];
+        dc.tint_color[3]          = currentColor_[3];
+        std::memcpy(dc.transform, &pm[0][0], sizeof(float) * 16);
+
+        rp::ui_overlay::push(dc);
+    }
+#else
+    // Legacy path: per-glyph Tesselator submit. bgfx still consumes
+    // this because its render_frame doesn't process ui_overlay yet.
     Tesselator* t = Tesselator::getInstance();
-    // 4J Stu - Changed to a quad so that we can use within a command buffer
     t->begin();
     t->tex(xOff / fontWidth, (yOff + 7.99f) / fontHeight);
     t->vertex(xPos, yPos + height, 0.0f);
@@ -150,6 +205,7 @@ void Font::renderCharacter(char c) {
     t->vertex(xPos, yPos, 0.0f);
 
     t->end();
+#endif
 
     xPos += (float)charWidths[c];
 }
@@ -211,8 +267,14 @@ void Font::draw(const std::string& str, bool dropShadow) {
                 if (dropShadow) colorN += 16;
 
                 int color = colors[colorN];
-                RenderPath.StateSetColour((color >> 16) / 255.0F, ((color >> 8) & 255) / 255.0F,
-                          (color & 255) / 255.0F, 1.0f);
+                const float cr = (color >> 16) / 255.0F;
+                const float cg = ((color >> 8) & 255) / 255.0F;
+                const float cb = (color & 255) / 255.0F;
+                RenderPath.StateSetColour(cr, cg, cb, 1.0f);
+                currentColor_[0] = cr;
+                currentColor_[1] = cg;
+                currentColor_[2] = cb;
+                currentColor_[3] = 1.0f;
             }
 
             i += 1;
@@ -236,6 +298,12 @@ void Font::draw(const std::string& str, bool dropShadow) {
 void Font::draw(const std::string& str, int x, int y, int color,
                 bool dropShadow) {
     if (!str.empty()) {
+        // Title / world-select screens render Font text before Gui::render
+        // ever runs, and gui_mat_font_ is lazily created in initMaterials.
+        // Without this ensure-call, record_draw_call on those screens
+        // sees an invalid material handle and silently drops every glyph.
+        Gui::initMaterials();
+
         if ((color & 0xFC000000) == 0) color |= 0xFF000000;  // force alpha
         // if not set
 
@@ -244,8 +312,15 @@ void Font::draw(const std::string& str, int x, int y, int color,
                          // FF FF)
             color = (color & 0xfcfcfc) >> 2 | (color & (0xFFFFFFFF << 24));
 
-        RenderPath.StateSetColour((color >> 16 & 255) / 255.0F, (color >> 8 & 255) / 255.0F,
-                  (color & 255) / 255.0F, (color >> 24 & 255) / 255.0F);
+        const float cr = (color >> 16 & 255) / 255.0F;
+        const float cg = (color >> 8  & 255) / 255.0F;
+        const float cb = (color       & 255) / 255.0F;
+        const float ca = (color >> 24 & 255) / 255.0F;
+        RenderPath.StateSetColour(cr, cg, cb, ca);
+        currentColor_[0] = cr;
+        currentColor_[1] = cg;
+        currentColor_[2] = cb;
+        currentColor_[3] = ca;
 
         xPos = x;
         yPos = y;

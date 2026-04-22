@@ -78,6 +78,7 @@ ItemRenderer* Gui::itemRenderer = new ItemRenderer();
 rp::MaterialHandle Gui::gui_mat_untextured_alpha_{};
 rp::MaterialHandle Gui::gui_mat_vignette_{};
 rp::MaterialHandle Gui::gui_mat_fullscreen_overlay_{};
+rp::MaterialHandle Gui::gui_mat_font_{};
 bool Gui::materials_initialized_ = false;
 
 Gui::Gui(Minecraft* minecraft) {
@@ -99,7 +100,7 @@ Gui::Gui(Minecraft* minecraft) {
     lastTickA = 0.0f;
 }
 
-void Gui::initMaterials() {
+/*static*/ void Gui::initMaterials() {
     if (materials_initialized_) return;
     materials_initialized_ = true;
 
@@ -138,6 +139,21 @@ void Gui::initMaterials() {
     overlay.alpha_test  = rp::AlphaTest::off;
     overlay.cull        = rp::CullMode::none;
     gui_mat_fullscreen_overlay_ = RenderPath.create_material(overlay);
+
+    rp::MaterialDesc font{};
+    font.shader      = rp::ShaderPath::standard;
+    font.blend       = rp::BlendMode::alpha;
+    font.textured    = true;
+    font.lit         = false;
+    font.fog_enabled = false;
+    // Glyph atlas is alpha-tested to kill the background around the
+    // sprite; depth test off so text lays on top of the current frame.
+    font.alpha_test  = rp::AlphaTest::greater;
+    font.alpha_ref   = 0.1f;
+    font.depth_test  = rp::DepthTest::off;
+    font.depth_write = false;
+    font.cull        = rp::CullMode::none;
+    gui_mat_font_ = RenderPath.create_material(font);
 }
 
 void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {

@@ -25,6 +25,12 @@ private:
     float xPos;
     float yPos;
 
+    // Current RGBA in float — tracked alongside legacy StateSetColour so
+    // the new ui_overlay-based renderCharacter path can tint each glyph
+    // without reading back global state. Set by draw(...) and by the
+    // §-colour-code branch inside draw(str, dropShadow).
+    float currentColor_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
     bool enforceUnicodeSheet;  // use unicode sheet for ascii
     bool bidirectional;        // use bidi to flip strings
 
