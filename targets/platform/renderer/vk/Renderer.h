@@ -205,6 +205,12 @@ private:
     VmaBuffer quad_ib_;
     static constexpr uint32_t kMaxQuads = 16384;
 
+    // VMA allocation-churn counters for the 1-Hz log. Used to gate the
+    // MeshArena decision (high steady-state delta == suballocator worth
+    // it; near-zero == keep per-resource VmaCreateBuffer).
+    uint64_t vma_prev_allocs_ = 0;
+    uint64_t vma_prev_bytes_  = 0;
+
     // -- Per-frame state --
     uint32_t frame_idx_     = 0;
     // Dynamic offset into frame().frame_ubo for set 1 binding 0.

@@ -449,6 +449,28 @@ void Renderer::StartFrame() {
                 std::fprintf(stderr, "[vk]   %-16s %.3f ms\n",
                              tag ? tag : "(null)", ms_pass);
             }
+            // VMA allocation churn — gates the MeshArena decision
+            // (B5 in the renderer plan). High steady-state
+            // alloc/free deltas mean per-chunk VmaCreateBuffer is
+            // thrashing; zero deltas mean the arena isn't worth
+            // the code. Print both the total count + the delta
+            // versus the previous log so the 1-Hz rate is visible.
+            VmaTotalStatistics vma_stats{};
+            vmaCalculateStatistics(dev_.allocator(), &vma_stats);
+            const uint64_t now_allocs = vma_stats.total.statistics.allocationCount;
+            const uint64_t now_bytes  = vma_stats.total.statistics.allocationBytes;
+            const int64_t  d_allocs   = int64_t(now_allocs) - int64_t(vma_prev_allocs_);
+            const int64_t  d_bytes    = int64_t(now_bytes)  - int64_t(vma_prev_bytes_);
+            std::fprintf(stderr,
+                         "[vk]   vma              %llu allocs (%+lld/s) "
+                         "%.1f MB (%+.1f MB/s)\n",
+                         (unsigned long long)now_allocs,
+                         (long long)d_allocs,
+                         double(now_bytes) / (1024.0 * 1024.0),
+                         double(d_bytes)  / (1024.0 * 1024.0));
+            vma_prev_allocs_ = now_allocs;
+            vma_prev_bytes_  = now_bytes;
+
             gpu_ms_accum_ = 0.0;
             gpu_ms_count_ = 0;
             next_gpu_log_frame_ = frame_counter + 60;
