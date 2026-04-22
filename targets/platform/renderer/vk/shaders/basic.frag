@@ -1,5 +1,8 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : require
+
+#include "common.glsl"
 
 layout(location = 0) in vec2  v_uv;
 layout(location = 1) in vec4  v_color;
@@ -8,62 +11,11 @@ layout(location = 3) in vec2  v_uv1;       // lightmap UV
 
 // Bindless descriptor set (set = 0):
 //   binding 0: sampled image array (per texture slot)
-//   binding 1: immutable sampler[4] — one entry per
-//              (nearest|linear) x (repeat|clamp) combination.
+//   binding 1: immutable sampler[4] — (nearest|linear) × (repeat|clamp).
 //              Index 3 (linear+clamp, single-mip) doubles as the lightmap
-//              sampler; diffuse samples pick an index from PushConstants::
-//              flags bits [30:31].
+//              sampler; diffuse samples pick an index from PC::flags[30:31].
 layout(set = 0, binding = 0) uniform texture2D u_images[];
 layout(set = 0, binding = 1) uniform sampler   u_samplers[4];
-
-// Per-frame UBO (set = 1, binding = 0). See basic.vert for layout notes.
-layout(set = 1, binding = 0, std140) uniform FrameUBO {
-    vec4  light0_dir;
-    vec4  light1_dir;
-    vec4  light_diffuse;
-    vec4  light_ambient;
-    vec4  fog_params;
-    vec4  fog_colour;        // rgb + pad in .w
-    uint  global_lm_packed;
-    float inv_gamma;
-    uint  _pad0;
-    uint  _pad1;
-} frame;
-
-// Same push constant block as vertex shader (shared range).
-layout(push_constant) uniform PC {
-    mat4 mvp;
-    vec4 nm0, nm1, nm2;
-    vec4 chunk_lit;
-    vec4 tex_mv;
-    vec4 state_colour;
-    float alpha_ref;
-    uint flags;
-} pc;
-
-// PushConstants::flags bit layout (keep in sync with VertexFormats.h).
-//   [0]     FLAG_TEXTURED       diffuse sample enabled
-//   [1]     FLAG_ALPHA_TEST     discard when alpha below ref
-//   [2]     FLAG_LIGHTMAP       multiply c.rgb by lightmap sample
-//   [3]     FLAG_FORCE_LOD      use textureLod with fixed level
-//   [4:15]  TEX_ID              12-bit diffuse bindless slot (0..4095)
-//   [16:27] LM_TEX_ID           12-bit lightmap bindless slot
-//   [28:29] FORCE_LOD           2-bit LOD level (0..2 used by callers)
-//   [30:31] SAMPLER_IDX         diffuse sampler index (0..3)
-#define FLAG_TEXTURED       (1u << 0)
-#define FLAG_ALPHA_TEST     (1u << 1)
-#define FLAG_LIGHTMAP       (1u << 2)
-#define FLAG_FORCE_LOD      (1u << 3)
-#define TEX_ID_SHIFT        4u
-#define TEX_ID_MASK         0xFFFu
-#define LM_TEX_ID_SHIFT     16u
-#define LM_TEX_ID_MASK      0xFFFu
-#define FORCE_LOD_SHIFT     28u
-#define FORCE_LOD_MASK      0x3u
-#define SAMPLER_IDX_SHIFT   30u
-#define SAMPLER_IDX_MASK    0x3u
-// Fixed sampler index for the lightmap (linear+clamp, single mip).
-#define LIGHTMAP_SAMPLER_IDX 3u
 
 layout(location = 0) out vec4 out_color;
 

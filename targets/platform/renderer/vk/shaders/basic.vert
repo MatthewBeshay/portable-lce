@@ -1,39 +1,13 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
 
 layout(location = 0) in vec3  a_pos;
 layout(location = 1) in vec2  a_uv;
 layout(location = 2) in vec4  a_color;    // R8G8B8A8_UNORM
 layout(location = 3) in vec4  a_normal;   // R8G8B8A8_SNORM — maps [-128,127] to [-1,1]
 layout(location = 4) in ivec2 a_lm_raw;   // R16G16_SINT — lightmap UVs or sentinel
-
-// Per-frame UBO (set = 1, binding = 0). Populated once per StartFrame from
-// Renderer::state — holds state that doesn't vary inside a frame. Matches
-// the FrameUBO C++ struct; keep members in sync.
-layout(set = 1, binding = 0, std140) uniform FrameUBO {
-    vec4  light0_dir;        // eye-space dir + pad
-    vec4  light1_dir;
-    vec4  light_diffuse;     // rgb + pad
-    vec4  light_ambient;
-    vec4  fog_params;        // mode, start, end, density
-    vec4  fog_colour;        // rgb + pad in .w
-    uint  global_lm_packed;  // low16=u, high16=v
-    float inv_gamma;         // fragment tonemap
-    uint  _pad0;
-    uint  _pad1;
-} frame;
-
-// Per-draw 176-byte push constant block (shared with fragment).
-layout(push_constant) uniform PC {
-    mat4 mvp;               // 0    plain proj * modelview (Y-flip via negative viewport height)
-    vec4 nm0;               // 64   mat3(mv) col0 + .w = tex_scale_x
-    vec4 nm1;               // 80   mat3(mv) col1 + .w = tex_scale_y
-    vec4 nm2;               // 96   mat3(mv) col2 + .w = tex_offset_x
-    vec4 chunk_lit;         // 112  chunk_offset.xyz + .w = lighting_enabled
-    vec4 tex_mv;            // 128  tex_offset_y + mv_translation.xyz
-    vec4 state_colour;      // 144
-    float alpha_ref;        // 160
-    uint flags;             // 164
-} pc;
 
 layout(location = 0) out vec2  v_uv;
 layout(location = 1) out vec4  v_color;

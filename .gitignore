@@ -5,6 +5,7 @@
 !/.devcontainer/
 !/.github/
 !/.github-assets/
+!/cmake/
 !/docs/
 !/targets/
 !/scripts/

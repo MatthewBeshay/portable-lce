@@ -1,4 +1,7 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
 
 // Compact 16-byte vertex format — 8x int16.
 // Decoded in-shader to avoid a per-draw CPU expansion pass.
@@ -14,33 +17,6 @@
 //   int16 lightmap.v
 layout(location = 0) in ivec4 a_packed0;  // (pos.x, pos.y, pos.z, color_5_6_5)
 layout(location = 1) in ivec4 a_packed1;  // (uv.x, uv.y, lm.u, lm.v)
-
-// Same FrameUBO block as basic.vert — see that file for layout notes.
-layout(set = 1, binding = 0, std140) uniform FrameUBO {
-    vec4  light0_dir;
-    vec4  light1_dir;
-    vec4  light_diffuse;
-    vec4  light_ambient;
-    vec4  fog_params;
-    vec4  fog_colour;
-    uint  global_lm_packed;
-    float inv_gamma;
-    uint  _pad0;
-    uint  _pad1;
-} frame;
-
-// Same push constant block as basic.vert — see that file for layout notes.
-layout(push_constant) uniform PC {
-    mat4 mvp;
-    vec4 nm0;
-    vec4 nm1;
-    vec4 nm2;
-    vec4 chunk_lit;
-    vec4 tex_mv;            // tex_offset_y + mv_translation.xyz
-    vec4 state_colour;
-    float alpha_ref;
-    uint flags;
-} pc;
 
 layout(location = 0) out vec2  v_uv;
 layout(location = 1) out vec4  v_color;
