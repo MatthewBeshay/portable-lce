@@ -531,6 +531,26 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// UI overlay collection — frame-scoped DrawCall buffer.
+//
+// Subsystems that have migrated off the legacy stateful API (matrix pushes,
+// StateSet*, submit_immediate) push declarative DrawCalls here during their
+// normal draw flow. The main loop clears the buffer once per frame, then
+// assigns it into `FrameDesc::ui_overlay` right before calling
+// `render_frame`. The renderer iterates those DrawCalls and emits real
+// draws via its material-aware record path.
+//
+// Not thread-safe — UI draws happen on the main thread.
+// ---------------------------------------------------------------------------
+namespace ui_overlay {
+
+void push(const DrawCall& dc);
+void clear();
+[[nodiscard]] std::span<const DrawCall> get();
+
+}  // namespace ui_overlay
+
+// ---------------------------------------------------------------------------
 // Vertex format matching the Tesselator world_standard layout (32 bytes)
 // ---------------------------------------------------------------------------
 

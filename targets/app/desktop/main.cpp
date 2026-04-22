@@ -546,6 +546,11 @@ int main(int argc, const char* argv[]) {
     while (!RenderPath.ShouldClose()) {
         RenderPath.StartFrame();
 
+        // Reset the UI-overlay DrawCall buffer for this frame. Migrated
+        // subsystems append into it via rp::ui_overlay::push during the
+        // normal draw flow; we hand the span to render_frame below.
+        rp::ui_overlay::clear();
+
         rp::FrameDesc frame{};
         {
             frame.framebuffer = RenderPath.framebuffer();
@@ -613,6 +618,7 @@ int main(int argc, const char* argv[]) {
             rp::ViewDesc& gv = pMinecraft->gameRenderer->current_view;
             frame.views = {&gv, 1};
         }
+        frame.ui_overlay = rp::ui_overlay::get();
         RenderPath.render_frame(frame);
         RenderPath.Present();
 
