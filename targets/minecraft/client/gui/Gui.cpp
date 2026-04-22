@@ -358,11 +358,12 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
             fVal = fAlphaIncrementPerCent * (float)ucAlpha;
         }
 
-        RenderPath.StateSetBlendFactor(0xffffff |
-                                             (((unsigned int)fVal) << 24));
+        // Interface Opacity fade — applied per-blit via
+        // Gui::currentGuiBlendFactor. The legacy constant_alpha
+        // StateSetBlendFactor + StateSetBlendFunc pair that used to
+        // live here is dead on raw-vk (material-based blending ignores
+        // live blend state).
         currentGuiBlendFactor = fVal / 255.0f;
-        //	RenderPath.StateSetBlendFactor(0x40ffffff);
-        RenderPath.StateSetBlendFunc(rp::BlendFactor::constant_alpha, rp::BlendFactor::one_minus_constant_alpha);
 
         blitOffset = -90;
 
@@ -409,20 +410,15 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
 
             minecraft->textures->bindTexture(
                 &GUI_ICONS_LOCATION);  // "/gui/icons.png"));
-            RenderPath.StateSetBlendEnable(true);
-            RenderPath.StateSetBlendFactor(0xffffff |
-                                           (((unsigned int)fVal) << 24));
-            RenderPath.StateSetBlendFunc(rp::BlendFactor::constant_alpha, rp::BlendFactor::one_minus_constant_alpha);
-            // RenderPath.StateSetBlendFunc(GL_ONE_MINUS_DST_COLOR, rp::BlendFactor::one_minus_src_color);
-            //  4J Stu - We don't want to adjust the cursor by the safezone, we
-            //  want it centred
+            // 4J Stu - We don't want to adjust the cursor by the safezone,
+            // we want it centred. Crosshair blit inherits the fade from
+            // currentGuiBlendFactor baked into the blit tint.
             if (bTwoPlayerSplitscreen) {
                 blit(iWidthOffset + screenWidth / 2 - 7,
                      (iHeightOffset + screenHeight) / 2 - 7, 0, 0, 16, 16);
             } else {
                 blit(screenWidth / 2 - 7, screenHeight / 2 - 7, 0, 0, 16, 16);
             }
-            RenderPath.StateSetBlendEnable(false);
 
             // 		if(bTwoPlayerSplitscreen)
             // 		{
@@ -452,10 +448,8 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
         // Display the experience, food, armour, health and the air bubbles
         /////////////////////////////////////////////////////////////////////////////////////
         if (bDisplayGui) {
-            // 4J - added blend for fading gui
-            RenderPath.StateSetBlendEnable(true);
-            RenderPath.StateSetBlendFunc(rp::BlendFactor::constant_alpha, rp::BlendFactor::one_minus_constant_alpha);
-
+            // HUD fade is applied per-blit via currentGuiBlendFactor;
+            // no legacy constant_alpha scaffolding needed here.
             if (minecraft->gameMode->canHurtPlayer()) {
                 int xLeft, xRight;
                 // 4J Stu - TODO Work out proper positioning for splitscreen
