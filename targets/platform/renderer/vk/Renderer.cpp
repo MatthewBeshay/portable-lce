@@ -1438,7 +1438,8 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     // and the DrawCall. Without this, a migrated subsystem's rendering
     // would silently depend on whatever legacy StateSet*/MatrixMode
     // calls ran most recently.
-    pc.alpha_ref = m.alpha_ref;
+    pc.alpha_ref = dc.alpha_ref_override >= 0.0f ? dc.alpha_ref_override
+                                                 : m.alpha_ref;
     uint32_t mat_flags = 0;
     if (material_textured)                     mat_flags |= 0x1u;   // FLAG_TEXTURED
     if (m.alpha_test != rp::AlphaTest::off)    mat_flags |= 0x2u;   // FLAG_ALPHA_TEST

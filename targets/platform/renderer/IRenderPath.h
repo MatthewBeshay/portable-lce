@@ -229,6 +229,11 @@ struct DrawCall {
     uint32_t blend_constant_factor = 0xFFFFFFFF;
     const StencilOp* stencil = nullptr;
     bool lit_override_off = false;
+    // Per-draw alpha test threshold override. Materials share a single
+    // alpha_ref, but particle batches and a handful of entity renderers
+    // need finer-grained thresholds (0.01 / 0.1 / 1/255) on the same
+    // base material. Negative means "inherit from material".
+    float alpha_ref_override = -1.0f;
 };
 
 struct ChunkDrawCall {
