@@ -26,7 +26,15 @@ struct alignas(16) FrameUBO {
     uint32_t  _pad2;            // 108
 };
 
+// std140 offsets. Mismatch between this struct and the GLSL FrameUBO
+// block silently corrupts shading; these asserts trip at compile time
+// before that ever ships.
 static_assert(sizeof(FrameUBO) == 112);
+static_assert(offsetof(FrameUBO, light0_dir)       == 0);
+static_assert(offsetof(FrameUBO, light1_dir)       == 16);
+static_assert(offsetof(FrameUBO, light_diffuse)    == 32);
+static_assert(offsetof(FrameUBO, light_ambient)    == 48);
+static_assert(offsetof(FrameUBO, fog_params)       == 64);
 static_assert(offsetof(FrameUBO, fog_colour)       == 80);
 static_assert(offsetof(FrameUBO, global_lm_packed) == 96);
 
