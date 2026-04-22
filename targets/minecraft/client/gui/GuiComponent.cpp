@@ -1,6 +1,9 @@
 #include "GuiComponent.h"
 
+#include <cstring>
 #include <math.h>
+
+#include <glm/glm.hpp>
 
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/gui/Font.h"
@@ -9,6 +12,23 @@
 #include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/renderer.h"
 #include "platform/stubs.h"
+
+namespace {
+// Snapshot the live proj*mv into the DrawCall's transform. render_frame
+// uses identity matrices when processing ui_overlay, so the DrawCall's
+// transform has to carry the full screen-to-clip mapping. Capturing the
+// live matrix stack mirrors what submit_immediate did implicitly — any
+// MatrixPush/Scale scope the caller wrapped this draw in is preserved.
+void snapshot_live_matrix(float out[16]) {
+    const float* proj = RenderPath.MatrixGet(rp::MatrixStack::projection);
+    const float* mv   = RenderPath.MatrixGet(rp::MatrixStack::modelview);
+    glm::mat4 p(1.0f), m(1.0f);
+    std::memcpy(&p[0][0], proj, sizeof(float) * 16);
+    std::memcpy(&m[0][0], mv,   sizeof(float) * 16);
+    const glm::mat4 pm = p * m;
+    std::memcpy(out, &pm[0][0], sizeof(float) * 16);
+}
+}
 
 
 void GuiComponent::hLine(int x0, int x1, int y, int col) {
@@ -64,13 +84,9 @@ void GuiComponent::fill(int x0, int y0, int x1, int y1, int col) {
     dc.tint_color[1] = g;
     dc.tint_color[2] = b;
     dc.tint_color[3] = a;
+    snapshot_live_matrix(dc.transform);
 
-    RenderPath.StateSetBlendEnable(true);
-    RenderPath.StateSetTextureEnable(false);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-    RenderPath.submit_immediate(dc);
-    RenderPath.StateSetTextureEnable(true);
-    RenderPath.StateSetBlendEnable(false);
+    rp::ui_overlay::push(dc);
 }
 
 // Pack RGBA: LE bytes = [R,G,B,A] matching VK_FORMAT_R8G8B8A8_UNORM.
@@ -108,17 +124,9 @@ void GuiComponent::fillGradient(int x0, int y0, int x1, int y1, int col1,
     dc.source = rp::VertexSource::transient;
     dc.transient = tvb;
     dc.material = Gui::gui_mat_untextured_alpha_;
+    snapshot_live_matrix(dc.transform);
 
-    RenderPath.StateSetTextureEnable(false);
-    RenderPath.StateSetBlendEnable(true);
-    RenderPath.StateSetAlphaTestEnable(false);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-    (void)0;
-    RenderPath.submit_immediate(dc);
-    (void)0;
-    RenderPath.StateSetBlendEnable(false);
-    RenderPath.StateSetAlphaTestEnable(true);
-    RenderPath.StateSetTextureEnable(true);
+    rp::ui_overlay::push(dc);
 }
 
 GuiComponent::GuiComponent() { blitOffset = 0; }
