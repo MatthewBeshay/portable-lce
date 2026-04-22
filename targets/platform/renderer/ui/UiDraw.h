@@ -49,6 +49,14 @@ void draw_textured_quad(int x, int y, int w, int h,
                         int texture_id,
                         uint32_t tint_rgba = 0xFFFFFFFFu);
 
+// Float-coordinate variant with explicit z. Used by GuiComponent::blit,
+// which pixel-snaps and sub-pixel-shifts coords on its own and needs
+// to pass the corner positions directly.
+void draw_textured_quad(float x0, float y0, float x1, float y1, float z,
+                        float u0, float v0, float u1, float v1,
+                        int texture_id,
+                        uint32_t tint_rgba = 0xFFFFFFFFu);
+
 // Text glyph quad. Float positions (Font uses sub-pixel math),
 // alpha-tested material (discards pixels below alpha_ref so the
 // glyph sprite's bg doesn't bleed), and float RGBA to match Font's

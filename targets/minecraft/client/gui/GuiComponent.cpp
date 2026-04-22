@@ -76,40 +76,39 @@ void GuiComponent::drawString(Font* font, const std::string& str, int x, int y,
 }
 
 void GuiComponent::blit(int x, int y, int sx, int sy, int w, int h) {
-    float us = 1 / 256.0f;
-    float vs = 1 / 256.0f;
+    const float us = 1.0f / 256.0f;
+    const float vs = 1.0f / 256.0f;
 
+    // Pixel-snap + sub-pixel shift to keep 1:1 texel mapping on
+    // arbitrary-DPI backbuffers. The shift is legacy behaviour from
+    // the classic GUI renderer — kept verbatim to avoid visual
+    // regressions.
     const float extraShift = 0.75f;
-    float dx = (extraShift * (float)Minecraft::GetInstance()->width) /
-               (float)Minecraft::GetInstance()->width_phys;
-    dx /= Gui::currentGuiScaleFactor;
-    float dy = extraShift / Gui::currentGuiScaleFactor;
-    float fx = (floorf((float)x * Gui::currentGuiScaleFactor)) /
-               Gui::currentGuiScaleFactor;
-    float fy = (floorf((float)y * Gui::currentGuiScaleFactor)) /
-               Gui::currentGuiScaleFactor;
-    float fw = (floorf((float)w * Gui::currentGuiScaleFactor)) /
-               Gui::currentGuiScaleFactor;
-    float fh = (floorf((float)h * Gui::currentGuiScaleFactor)) /
-               Gui::currentGuiScaleFactor;
+    const float scale  = Gui::currentGuiScaleFactor;
+    const float dx     = (extraShift * (float)Minecraft::GetInstance()->width /
+                          (float)Minecraft::GetInstance()->width_phys) / scale;
+    const float dy     = extraShift / scale;
+    const float fx     = floorf((float)x * scale) / scale;
+    const float fy     = floorf((float)y * scale) / scale;
+    const float fw     = floorf((float)w * scale) / scale;
+    const float fh     = floorf((float)h * scale) / scale;
 
-    float u0 = (sx + 0) * us;
-    float u1 = (sx + w) * us;
-    float v0 = (sy + 0) * vs;
-    float v1 = (sy + h) * vs;
+    const float u0 = (sx      ) * us;
+    const float u1 = (sx + w  ) * us;
+    const float v0 = (sy      ) * vs;
+    const float v1 = (sy + h  ) * vs;
 
-    auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
-    if (span.empty()) return;
-    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    v[0] = {{fx + 0  - dx, fy + fh - dy, blitOffset}, {u0, v1}, 0, 0, 0xfe00fe00};
-    v[1] = {{fx + fw - dx, fy + fh - dy, blitOffset}, {u1, v1}, 0, 0, 0xfe00fe00};
-    v[2] = {{fx + fw - dx, fy + 0  - dy, blitOffset}, {u1, v0}, 0, 0, 0xfe00fe00};
-    v[3] = {{fx + 0  - dx, fy + 0  - dy, blitOffset}, {u0, v0}, 0, 0, 0xfe00fe00};
+    // The caller pre-bound the texture via textures->bindTexture(&LOC);
+    // currentBoundId() hands back that id so the DrawCall can capture
+    // it and render_frame resolves the right atlas later, no matter
+    // what else is bound by then.
+    const int tex_id = Minecraft::GetInstance()->textures->currentBoundId();
+    if (tex_id < 0) return;
 
-    rp::DrawCall dc{};
-    dc.source = rp::VertexSource::transient;
-    dc.transient = tvb;
-    RenderPath.submit_immediate(dc);
+    plce::ui::draw_textured_quad(
+        fx - dx, fy - dy, fx + fw - dx, fy + fh - dy,
+        (float)blitOffset,
+        u0, v0, u1, v1,
+        tex_id);
 }
 

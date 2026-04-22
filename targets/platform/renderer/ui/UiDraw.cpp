@@ -176,7 +176,38 @@ void draw_fill_gradient(int x0, int y0, int x1, int y1,
     rp::ui_overlay::push(dc);
 }
 
-// The remaining primitive helpers (draw_textured_quad, draw_glyph_quad,
+void draw_textured_quad(int x, int y, int w, int h,
+                        float u0, float v0, float u1, float v1,
+                        int texture_id, uint32_t tint_rgba) {
+    draw_textured_quad(float(x), float(y), float(x + w), float(y + h), 0.0f,
+                       u0, v0, u1, v1, texture_id, tint_rgba);
+}
+
+void draw_textured_quad(float x0, float y0, float x1, float y1, float z,
+                        float u0, float v0, float u1, float v1,
+                        int texture_id, uint32_t tint_rgba) {
+    auto [tvb, span] = RenderPath.alloc_transient_vertices(
+        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
+    if (span.empty()) return;
+
+    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
+    v[0] = {{x0, y1, z}, {u0, v1}, 0, 0, kVertexColorSentinel};
+    v[1] = {{x1, y1, z}, {u1, v1}, 0, 0, kVertexColorSentinel};
+    v[2] = {{x1, y0, z}, {u1, v0}, 0, 0, kVertexColorSentinel};
+    v[3] = {{x0, y0, z}, {u0, v0}, 0, 0, kVertexColorSentinel};
+
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::transient;
+    dc.transient              = tvb;
+    dc.material               = s_materials.textured_alpha;
+    dc.texture_override.index = uint32_t(texture_id);
+    unpack_rgba(tint_rgba, dc.tint_color);
+    snapshot_transform(dc.transform);
+
+    rp::ui_overlay::push(dc);
+}
+
+// The remaining primitive helpers (draw_glyph_quad,
 // draw_fullscreen_overlay, draw_vignette) land in subsequent commits
 // as their caller migrations land.
 

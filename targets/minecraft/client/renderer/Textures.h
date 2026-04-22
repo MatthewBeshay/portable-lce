@@ -327,6 +327,13 @@ public:
     // 4J Made public for use in XUI controls
     void bind(int id);
 
+    // Most recent id passed to bind(). Read-only query used by the
+    // modern UI draw path to capture the pre-bound texture into a
+    // DrawCall at push time (the DrawCall is recorded now but emitted
+    // later in render_frame, by which point the bound texture may have
+    // changed). -1 until bind() is first called.
+    [[nodiscard]] int currentBoundId() const { return lastBoundId; }
+
     ResourceLocation* getTextureLocation(std::shared_ptr<Entity> entity);
     ResourceLocation* getTextureLocation(int iconType);
 

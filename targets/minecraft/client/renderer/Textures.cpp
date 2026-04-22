@@ -542,18 +542,15 @@ void Textures::bindTextureLayers(ResourceLocation* resource) {
 }
 
 void Textures::bind(int id) {
-    // 4jcraft: Classic GUI code still performs some raw glBindTexture calls, so
-    // this path must always rebind rather than trusting lastBoundId to be in
-    // sync.
-    // TODO(4jcraft): Long term, route all texture binds through one
-    // synchronized path or invalidate lastBoundId at every raw glBindTexture
-    // call so this can safely use cached binds again without breaking font/UI
-    // rendering. if (id != lastBoundId)
-    {
-        if (id < 0) return;
-        RenderPath.TextureBind(id);
-        // lastBoundId = id;
-    }
+    // 4jcraft: Classic GUI code still performs some raw glBindTexture calls,
+    // so the cached-bind short-circuit (if id != lastBoundId) is still disabled.
+    // lastBoundId is now tracked for READ-ONLY queries (currentBoundId())
+    // that the modern UI draw path uses to capture the pre-bound texture into
+    // a DrawCall at push time. It is NOT used to skip redundant RenderPath.
+    // TextureBind calls.
+    if (id < 0) return;
+    RenderPath.TextureBind(id);
+    lastBoundId = id;
 }
 
 ResourceLocation* Textures::getTextureLocation(std::shared_ptr<Entity> entity) {
