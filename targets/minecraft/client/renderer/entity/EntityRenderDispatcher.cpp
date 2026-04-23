@@ -68,8 +68,8 @@
 #include "minecraft/client/model/SquidModel.h"
 #include "minecraft/client/model/WolfModel.h"
 #include "minecraft/client/model/ZombieModel.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/util/Log.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/world/entity/Entity.h"
 #include "minecraft/world/entity/LivingEntity.h"
 #include "minecraft/world/entity/player/Player.h"
@@ -324,10 +324,8 @@ void EntityRenderDispatcher::renderHitbox(std::shared_ptr<Entity> entity,
     RenderPath.StateSetBlendEnable(false);
 
     RenderPath.MatrixPush();
-    Tesselator* t = Tesselator::getInstance();
-
-    t->begin();
-    t->color(255, 255, 255, 32);
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+    mb.color(uint8_t(255), uint8_t(255), uint8_t(255), uint8_t(32));
 
     double wnx = -entity->bbWidth / 2;
     double wnz = -entity->bbWidth / 2;
@@ -341,27 +339,27 @@ void EntityRenderDispatcher::renderHitbox(std::shared_ptr<Entity> entity,
 
     double top = entity->bbHeight;
 
-    t->vertex(x + wnx, y + top, z + wnz);
-    t->vertex(x + wnx, y, z + wnz);
-    t->vertex(x + enx, y, z + enz);
-    t->vertex(x + enx, y + top, z + enz);
+    mb.vertex(x + wnx, y + top, z + wnz);
+    mb.vertex(x + wnx, y,       z + wnz);
+    mb.vertex(x + enx, y,       z + enz);
+    mb.vertex(x + enx, y + top, z + enz);
 
-    t->vertex(x + esx, y + top, z + esz);
-    t->vertex(x + esx, y, z + esz);
-    t->vertex(x + wsx, y, z + wsz);
-    t->vertex(x + wsx, y + top, z + wsz);
+    mb.vertex(x + esx, y + top, z + esz);
+    mb.vertex(x + esx, y,       z + esz);
+    mb.vertex(x + wsx, y,       z + wsz);
+    mb.vertex(x + wsx, y + top, z + wsz);
 
-    t->vertex(x + enx, y + top, z + enz);
-    t->vertex(x + enx, y, z + enz);
-    t->vertex(x + esx, y, z + esz);
-    t->vertex(x + esx, y + top, z + esz);
+    mb.vertex(x + enx, y + top, z + enz);
+    mb.vertex(x + enx, y,       z + enz);
+    mb.vertex(x + esx, y,       z + esz);
+    mb.vertex(x + esx, y + top, z + esz);
 
-    t->vertex(x + wsx, y + top, z + wsz);
-    t->vertex(x + wsx, y, z + wsz);
-    t->vertex(x + wnx, y, z + wnz);
-    t->vertex(x + wnx, y + top, z + wnz);
+    mb.vertex(x + wsx, y + top, z + wsz);
+    mb.vertex(x + wsx, y,       z + wsz);
+    mb.vertex(x + wnx, y,       z + wnz);
+    mb.vertex(x + wnx, y + top, z + wnz);
 
-    t->end();
+    mb.flush();
     RenderPath.MatrixPop();
 
     RenderPath.StateSetTextureEnable(true);
