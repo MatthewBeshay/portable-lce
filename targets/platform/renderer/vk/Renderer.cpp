@@ -1666,7 +1666,14 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     // turn off per-vertex directional lighting for every queued
     // entity / model DrawCall at drain time. Use the material's lit
     // flag instead — the Tier-C material table picks it per bucket.
-    pc.chunk_lit.w = m.lit ? 1.0f : 0.0f;
+    // Also zero chunk_lit.xyz: fill_push_constants reads the live
+    // chunk_offset_ register (set per-chunk during legacy terrain
+    // rendering and never reset at the end), so entity / UI DrawCalls
+    // that drain later in the frame add a stale (cx*16, cy*16, cz*16)
+    // offset to every vertex position — the whole draw shifts
+    // arbitrarily many tiles offscreen. Regular DrawCalls carry no
+    // chunk offset; only ChunkDrawCall does and it has its own path.
+    pc.chunk_lit = glm::vec4(0.0f, 0.0f, 0.0f, m.lit ? 1.0f : 0.0f);
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).
     // For screen-space UI overlays the transform is almost always identity
