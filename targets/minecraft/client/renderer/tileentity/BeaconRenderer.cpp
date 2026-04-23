@@ -4,8 +4,8 @@
 #include <memory>
 #include <numbers>
 
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/level/Level.h"
 #include "minecraft/world/level/tile/entity/BeaconTileEntity.h"
@@ -25,8 +25,6 @@ void BeaconRenderer::render(std::shared_ptr<TileEntity> _beacon, double x,
     float scale = beacon->getAndUpdateClientSideScale();
 
     if (scale > 0) {
-        Tesselator* t = Tesselator::getInstance();
-
         bindTexture(&BEAM_LOCATION);
 
         // TODO: 4J: Put this back in
@@ -48,8 +46,9 @@ void BeaconRenderer::render(std::shared_ptr<TileEntity> _beacon, double x,
 
             double rot = tt * .025 * (1 - (r & 1) * 2.5);
 
-            t->begin();
-            t->color(255, 255, 255, 32);
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.color(uint8_t(255), uint8_t(255), uint8_t(255), uint8_t(32));
 
             double rr1 = r * 0.2;
 
@@ -70,27 +69,27 @@ void BeaconRenderer::render(std::shared_ptr<TileEntity> _beacon, double x,
             double vv2 = -1 + texVOff;
             double vv1 = 256 * scale * (.5 / rr1) + vv2;
 
-            t->vertexUV(x + wnx, y + top, z + wnz, uu2, vv1);
-            t->vertexUV(x + wnx, y, z + wnz, uu2, vv2);
-            t->vertexUV(x + enx, y, z + enz, uu1, vv2);
-            t->vertexUV(x + enx, y + top, z + enz, uu1, vv1);
+            mb.vertexUV(x + wnx, y + top, z + wnz, uu2, vv1);
+            mb.vertexUV(x + wnx, y, z + wnz, uu2, vv2);
+            mb.vertexUV(x + enx, y, z + enz, uu1, vv2);
+            mb.vertexUV(x + enx, y + top, z + enz, uu1, vv1);
 
-            t->vertexUV(x + esx, y + top, z + esz, uu2, vv1);
-            t->vertexUV(x + esx, y, z + esz, uu2, vv2);
-            t->vertexUV(x + wsx, y, z + wsz, uu1, vv2);
-            t->vertexUV(x + wsx, y + top, z + wsz, uu1, vv1);
+            mb.vertexUV(x + esx, y + top, z + esz, uu2, vv1);
+            mb.vertexUV(x + esx, y, z + esz, uu2, vv2);
+            mb.vertexUV(x + wsx, y, z + wsz, uu1, vv2);
+            mb.vertexUV(x + wsx, y + top, z + wsz, uu1, vv1);
 
-            t->vertexUV(x + enx, y + top, z + enz, uu2, vv1);
-            t->vertexUV(x + enx, y, z + enz, uu2, vv2);
-            t->vertexUV(x + esx, y, z + esz, uu1, vv2);
-            t->vertexUV(x + esx, y + top, z + esz, uu1, vv1);
+            mb.vertexUV(x + enx, y + top, z + enz, uu2, vv1);
+            mb.vertexUV(x + enx, y, z + enz, uu2, vv2);
+            mb.vertexUV(x + esx, y, z + esz, uu1, vv2);
+            mb.vertexUV(x + esx, y + top, z + esz, uu1, vv1);
 
-            t->vertexUV(x + wsx, y + top, z + wsz, uu2, vv1);
-            t->vertexUV(x + wsx, y, z + wsz, uu2, vv2);
-            t->vertexUV(x + wnx, y, z + wnz, uu1, vv2);
-            t->vertexUV(x + wnx, y + top, z + wnz, uu1, vv1);
+            mb.vertexUV(x + wsx, y + top, z + wsz, uu2, vv1);
+            mb.vertexUV(x + wsx, y, z + wsz, uu2, vv2);
+            mb.vertexUV(x + wnx, y, z + wnz, uu1, vv2);
+            mb.vertexUV(x + wnx, y + top, z + wnz, uu1, vv1);
 
-            t->end();
+            mb.flush();
         }
 
         RenderPath.StateSetBlendEnable(true);
@@ -98,8 +97,9 @@ void BeaconRenderer::render(std::shared_ptr<TileEntity> _beacon, double x,
         RenderPath.StateSetDepthMask(false);
 
         {
-            t->begin();
-            t->color(255, 255, 255, 32);
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.color(uint8_t(255), uint8_t(255), uint8_t(255), uint8_t(32));
 
             double wnx = .2;
             double wnz = .2;
@@ -118,27 +118,27 @@ void BeaconRenderer::render(std::shared_ptr<TileEntity> _beacon, double x,
             double vv2 = -1 + texVOff;
             double vv1 = 256 * scale + vv2;
 
-            t->vertexUV(x + wnx, y + top, z + wnz, uu2, vv1);
-            t->vertexUV(x + wnx, y, z + wnz, uu2, vv2);
-            t->vertexUV(x + enx, y, z + enz, uu1, vv2);
-            t->vertexUV(x + enx, y + top, z + enz, uu1, vv1);
+            mb.vertexUV(x + wnx, y + top, z + wnz, uu2, vv1);
+            mb.vertexUV(x + wnx, y, z + wnz, uu2, vv2);
+            mb.vertexUV(x + enx, y, z + enz, uu1, vv2);
+            mb.vertexUV(x + enx, y + top, z + enz, uu1, vv1);
 
-            t->vertexUV(x + esx, y + top, z + esz, uu2, vv1);
-            t->vertexUV(x + esx, y, z + esz, uu2, vv2);
-            t->vertexUV(x + wsx, y, z + wsz, uu1, vv2);
-            t->vertexUV(x + wsx, y + top, z + wsz, uu1, vv1);
+            mb.vertexUV(x + esx, y + top, z + esz, uu2, vv1);
+            mb.vertexUV(x + esx, y, z + esz, uu2, vv2);
+            mb.vertexUV(x + wsx, y, z + wsz, uu1, vv2);
+            mb.vertexUV(x + wsx, y + top, z + wsz, uu1, vv1);
 
-            t->vertexUV(x + enx, y + top, z + enz, uu2, vv1);
-            t->vertexUV(x + enx, y, z + enz, uu2, vv2);
-            t->vertexUV(x + esx, y, z + esz, uu1, vv2);
-            t->vertexUV(x + esx, y + top, z + esz, uu1, vv1);
+            mb.vertexUV(x + enx, y + top, z + enz, uu2, vv1);
+            mb.vertexUV(x + enx, y, z + enz, uu2, vv2);
+            mb.vertexUV(x + esx, y, z + esz, uu1, vv2);
+            mb.vertexUV(x + esx, y + top, z + esz, uu1, vv1);
 
-            t->vertexUV(x + wsx, y + top, z + wsz, uu2, vv1);
-            t->vertexUV(x + wsx, y, z + wsz, uu2, vv2);
-            t->vertexUV(x + wnx, y, z + wnz, uu1, vv2);
-            t->vertexUV(x + wnx, y + top, z + wnz, uu1, vv1);
+            mb.vertexUV(x + wsx, y + top, z + wsz, uu2, vv1);
+            mb.vertexUV(x + wsx, y, z + wsz, uu2, vv2);
+            mb.vertexUV(x + wnx, y, z + wnz, uu1, vv2);
+            mb.vertexUV(x + wnx, y + top, z + wnz, uu1, vv1);
 
-            t->end();
+            mb.flush();
         }
 
         RenderPath.StateSetLightingEnable(true);
