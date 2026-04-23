@@ -1661,6 +1661,12 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     // dc.tint_color.
     pc.state_colour = glm::vec4(dc.tint_color[0], dc.tint_color[1],
                                 dc.tint_color[2], dc.tint_color[3]);
+    // And lighting_enabled_ leaks the same way: a late-frame
+    // StateSetLightingEnable(false) (HUD / text passes do this) would
+    // turn off per-vertex directional lighting for every queued
+    // entity / model DrawCall at drain time. Use the material's lit
+    // flag instead — the Tier-C material table picks it per bucket.
+    pc.chunk_lit.w = m.lit ? 1.0f : 0.0f;
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).
     // For screen-space UI overlays the transform is almost always identity
