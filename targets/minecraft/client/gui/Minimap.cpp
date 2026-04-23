@@ -11,7 +11,7 @@
 #include "minecraft/GameEnums.h"
 #include "minecraft/client/BufferedImage.h"
 #include "minecraft/client/Minecraft.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/Colours/ColourTable.h"
 #include "minecraft/world/entity/player/Player.h"
@@ -107,7 +107,6 @@ void Minimap::render(std::shared_ptr<Player> player, Textures* textures,
 
     int x = 0;
     int y = 0;
-    Tesselator* t = Tesselator::getInstance();
 
     float vo = 0;
 
@@ -115,19 +114,17 @@ void Minimap::render(std::shared_ptr<Player> player, Textures* textures,
     RenderPath.StateSetBlendEnable(true);
     RenderPath.StateSetBlendFunc(rp::BlendFactor::one, rp::BlendFactor::one_minus_src_alpha);
     RenderPath.StateSetAlphaTestEnable(false);
-    t->begin();
     // 4J - moved to -0.02 to stop z fighting ( was -0.01)
     // AP - Vita still has issues so push it a bit more
     float Offset = -0.02f;
-    t->vertexUV((float)(x + 0 + vo), (float)(y + h - vo), (float)(Offset),
-                (float)(0), (float)(1));
-    t->vertexUV((float)(x + w - vo), (float)(y + h - vo), (float)(Offset),
-                (float)(1), (float)(1));
-    t->vertexUV((float)(x + w - vo), (float)(y + 0 + vo), (float)(Offset),
-                (float)(1), (float)(0));
-    t->vertexUV((float)(x + 0 + vo), (float)(y + 0 + vo), (float)(Offset),
-                (float)(0), (float)(0));
-    t->end();
+    {
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+        mb.vertexUV((float)(x + 0 + vo), (float)(y + h - vo), Offset, 0, 1);
+        mb.vertexUV((float)(x + w - vo), (float)(y + h - vo), Offset, 1, 1);
+        mb.vertexUV((float)(x + w - vo), (float)(y + 0 + vo), Offset, 1, 0);
+        mb.vertexUV((float)(x + 0 + vo), (float)(y + 0 + vo), Offset, 0, 0);
+        mb.flush();
+    }
     RenderPath.StateSetAlphaTestEnable(true);
     RenderPath.StateSetBlendEnable(false);
 
@@ -181,16 +178,15 @@ void Minimap::render(std::shared_ptr<Player> player, Textures* textures,
         float u1 = (imgIndex % 4 + 1) / 4.0f;
         float v1 = (imgIndex / 4 + 1) / 4.0f;
 
-        t->begin();
-        t->vertexUV((float)(-1), (float)(+1), (float)(0), (float)(u0),
-                    (float)(v0));
-        t->vertexUV((float)(+1), (float)(+1), (float)(0), (float)(u1),
-                    (float)(v0));
-        t->vertexUV((float)(+1), (float)(-1), (float)(0), (float)(u1),
-                    (float)(v1));
-        t->vertexUV((float)(-1), (float)(-1), (float)(0), (float)(u0),
-                    (float)(v1));
-        t->end();
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::alpha_test, 0);
+            mb.vertexUV(-1, +1, 0, u0, v0);
+            mb.vertexUV(+1, +1, 0, u1, v0);
+            mb.vertexUV(+1, -1, 0, u1, v1);
+            mb.vertexUV(-1, -1, 0, u0, v1);
+            mb.flush();
+        }
         RenderPath.MatrixPop();
         fIconZ -= 0.01f;
     }
@@ -227,16 +223,15 @@ void Minimap::render(std::shared_ptr<Player> player, Textures* textures,
         float u1 = (imgIndex % 4 + 1) / 4.0f;
         float v1 = (imgIndex / 4 + 1) / 4.0f;
 
-        t->begin();
-        t->vertexUV((float)(-1), (float)(+1), (float)(0), (float)(u0),
-                    (float)(v0));
-        t->vertexUV((float)(+1), (float)(+1), (float)(0), (float)(u1),
-                    (float)(v0));
-        t->vertexUV((float)(+1), (float)(-1), (float)(0), (float)(u1),
-                    (float)(v1));
-        t->vertexUV((float)(-1), (float)(-1), (float)(0), (float)(u0),
-                    (float)(v1));
-        t->end();
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::alpha_test, 0);
+            mb.vertexUV(-1, +1, 0, u0, v0);
+            mb.vertexUV(+1, +1, 0, u1, v0);
+            mb.vertexUV(+1, -1, 0, u1, v1);
+            mb.vertexUV(-1, -1, 0, u0, v1);
+            mb.flush();
+        }
         RenderPath.MatrixPop();
         fIconZ -= 0.01f;
     }
