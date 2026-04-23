@@ -6,6 +6,7 @@
 #include "minecraft/client/renderer/GameRenderer.h"
 #include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/ui/UiDraw.h"
+#include "platform/renderer/world/WorldDraw.h"
 // Minecraft.cpp : Defines the entry point for the application.
 //
 
@@ -469,6 +470,9 @@ int main(int argc, const char* argv[]) {
     // plce::ui::draw_* primitives can run from anywhere without
     // lazy-init checks.
     plce::ui::init();
+    // Sibling world-draw module. Registers opaque / alpha_test /
+    // transparent world materials that MeshBuilder flushes into.
+    plce::world::init();
 
     // Read the file containing the product codes
     app.DebugPrintf("---ReadProductCodes()\n");

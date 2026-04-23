@@ -4,6 +4,10 @@
 # when the final executable links plce_platform_renderer.
 add_subdirectory(ui)
 
+# Backend-agnostic 3D world-draw helpers (MeshBuilder for entity /
+# tile-entity / particle / sky). Same shape as the ui/ module.
+add_subdirectory(world)
+
 if(PLCE_RENDERER STREQUAL "vulkan")
     find_path(VMA_INCLUDE_DIR "vma/vk_mem_alloc.h" REQUIRED)
 
