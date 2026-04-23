@@ -1688,20 +1688,15 @@ void Renderer::render_frame(const rp::FrameDesc& desc) {
     const uint32_t  saved_ubo_offset = current_frame_ubo_offset_;
 
     // --- Per-view processing --------------------------------------------
+    //
+    // During the Tier-C migration period most views are empty (legacy
+    // path still does the drawing), but we still process each view so
+    // subsystems can push DrawCalls incrementally into rp::world_draws
+    // and see them flow through without a renderer-side toggle.
+    // GameRenderer keeps view.clear.flags at CLEAR_NONE until Phase 5
+    // retires the legacy Clear() — see the comment next to
+    // current_view.clear in GameRenderer::renderLevel.
     for (const rp::ViewDesc& view : desc.views) {
-        // Skip views with no draws. During the Tier-C migration period,
-        // GameRenderer populates current_view with camera / fog / lighting
-        // / clear flags every frame but leaves the draw spans empty
-        // because the legacy path is still doing the work. Applying the
-        // view's clear + UBO swap on such a view would clobber the
-        // legacy-rendered frame for zero benefit.
-        if (view.chunk_opaque.empty()    && view.chunk_alpha_test.empty() &&
-            view.chunk_transparent.empty() && view.world_opaque.empty()  &&
-            view.world_alpha_test.empty()  && view.world_transparent.empty() &&
-            view.debug_overlay.empty()) {
-            continue;
-        }
-
         f.push_timestamp("view");
         ensure_pass();
 

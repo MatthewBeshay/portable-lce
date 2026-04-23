@@ -1093,7 +1093,13 @@ void GameRenderer::render(float a, bool bFirst) {
     for (uint8_t i = 0; i < captured_fog_count && i < 4; ++i)
         current_view.fog_profiles[i] = captured_fog_profiles[i];
     current_view.fog_profile_count = captured_fog_count > 0 ? captured_fog_count : 1;
-    current_view.clear.flags = rp::CLEAR_COLOR | rp::CLEAR_DEPTH;
+    // During the Tier-C migration period the legacy renderer still calls
+    // RenderPath.Clear(CLEAR_COLOR | CLEAR_DEPTH) at the top of renderLevel,
+    // so view.clear stays NONE — having both would double-clear and wipe
+    // whatever the legacy path rendered ahead of render_frame. Phase 5
+    // retires the legacy Clear() once chunks migrate, at which point the
+    // clear flags + colour move back onto current_view.clear.
+    current_view.clear.flags = rp::CLEAR_NONE;
     current_view.clear.color[0] = fr;
     current_view.clear.color[1] = fg;
     current_view.clear.color[2] = fb;
