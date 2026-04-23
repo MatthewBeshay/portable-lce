@@ -7,8 +7,8 @@
 #include "EntityRenderDispatcher.h"
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/multiplayer/MultiPlayerLocalPlayer.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/entity/Entity.h"
 #include "minecraft/world/entity/player/Player.h"
@@ -35,7 +35,6 @@ void FishingHookRenderer::render(std::shared_ptr<Entity> _hook, double x,
     int xi = 1;
     int yi = 2;
     bindTexture(hook);  // 4J was "/particles.png"
-    Tesselator* t = Tesselator::getInstance();
 
     float u0 = (xi * 8 + 0) / 128.0f;
     float u1 = (xi * 8 + 8) / 128.0f;
@@ -48,19 +47,16 @@ void FishingHookRenderer::render(std::shared_ptr<Entity> _hook, double x,
 
     RenderPath.MatrixRotate((180 - entityRenderDispatcher->playerRotY)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
     RenderPath.MatrixRotate((-entityRenderDispatcher->playerRotX)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
-    t->begin();
-    t->normal(0, 1, 0);
-    t->vertexUV((float)(0 - xo), (float)(0 - yo), (float)(0), (float)(u0),
-                (float)(v1));
-    t->vertexUV((float)(r - xo), (float)(0 - yo), (float)(0), (float)(u1),
-                (float)(v1));
-    t->vertexUV((float)(r - xo), (float)(1 - yo), (float)(0), (float)(u1),
-                (float)(v0));
-    t->vertexUV((float)(0 - xo), (float)(1 - yo), (float)(0), (float)(u0),
-                (float)(v0));
-    t->end();
+    {
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
+        mb.normal(0, 1, 0);
+        mb.vertexUV(0 - xo, 0 - yo, 0, u0, v1);
+        mb.vertexUV(r - xo, 0 - yo, 0, u1, v1);
+        mb.vertexUV(r - xo, 1 - yo, 0, u1, v0);
+        mb.vertexUV(0 - xo, 1 - yo, 0, u0, v0);
+        mb.flush();
+    }
 
-    (void)0;
     RenderPath.MatrixPop();
 
     if (hook->owner != nullptr) {
@@ -115,16 +111,20 @@ void FishingHookRenderer::render(std::shared_ptr<Entity> _hook, double x,
 
         RenderPath.StateSetTextureEnable(false);
         RenderPath.StateSetLightingEnable(false);
-        t->begin(0x0003);
-        t->color(0x000000);
-        int steps = 16;
-        for (int i = 0; i <= steps; i++) {
-            float aa = i / (float)steps;
-            t->vertex((float)(x + xa * aa),
-                      (float)(y + ya * (aa * aa + aa) * 0.5 + 4 / 16.0f),
-                      (float)(z + za * aa));
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::opaque, 0);
+            mb.set_topology(plce::world::Topology::line_strip);
+            mb.color(0x000000);
+            int steps = 16;
+            for (int i = 0; i <= steps; i++) {
+                float aa = i / (float)steps;
+                mb.vertex((float)(x + xa * aa),
+                          (float)(y + ya * (aa * aa + aa) * 0.5 + 4 / 16.0f),
+                          (float)(z + za * aa));
+            }
+            mb.flush();
         }
-        t->end();
         RenderPath.StateSetLightingEnable(true);
         RenderPath.StateSetTextureEnable(true);
     }
