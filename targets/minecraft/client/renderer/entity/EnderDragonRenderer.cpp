@@ -11,7 +11,7 @@
 #include "minecraft/client/model/dragon/DragonModel.h"
 #include "minecraft/client/model/geom/Model.h"
 #include "minecraft/client/renderer/BossMobGuiInfo.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/entity/MobRenderer.h"
 #include "minecraft/client/resources/ResourceLocation.h"
@@ -154,7 +154,8 @@ void EnderDragonRenderer::render(std::shared_ptr<Entity> _mob, double x,
             fRot = 0.0f;
         }
 
-        Tesselator* t = Tesselator::getInstance();
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+        mb.set_topology(plce::world::Topology::triangle_strip);
         Lighting::turnOff();
         RenderPath.StateSetFaceCull(false);
 
@@ -172,21 +173,16 @@ void EnderDragonRenderer::render(std::shared_ptr<Entity> _mob, double x,
         float v1 = sqrt(xd * xd + yd * yd + zd * zd) / 32.0f -
                    (mob->tickCount + a) * 0.005f;
 
-        t->begin(0x0005);
-
         int steps = 8;
         for (int i = 0; i <= steps; i++) {
-            double d = i % steps * std::numbers::pi * 2 / steps;
             float s = sin(i % steps * std::numbers::pi * 2 / steps) * 0.75f;
             float c = cos(i % steps * std::numbers::pi * 2 / steps) * 0.75f;
             float u = i % steps * 1.0f / steps;
-            // t->color(0x000000);
-            t->vertexUV(s * 0.2f, c * 0.2f, 0, u, v1);
-            // t->color(0xffffff);
-            t->vertexUV(s, c, dd, u, v0);
+            mb.vertexUV(s * 0.2f, c * 0.2f, 0, u, v1);
+            mb.vertexUV(s, c, dd, u, v0);
         }
 
-        t->end();
+        mb.flush();
         RenderPath.StateSetFaceCull(true);
         (void)0;
         RenderPath.StateSetBlendEnable(false);
@@ -208,7 +204,6 @@ void EnderDragonRenderer::additionalRendering(
     std::shared_ptr<EnderDragon> mob =
         std::dynamic_pointer_cast<EnderDragon>(_mob);
     MobRenderer::additionalRendering(mob, a);
-    Tesselator* t = Tesselator::getInstance();
 
     if (mob->dragonDeathTime > 0) {
         Lighting::turnOff();
@@ -235,17 +230,19 @@ void EnderDragonRenderer::additionalRendering(
             RenderPath.MatrixRotate((random.nextFloat() * 360)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
             RenderPath.MatrixRotate((random.nextFloat() * 360)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
             RenderPath.MatrixRotate((random.nextFloat() * 360 + tt * 90)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
-            t->begin(0x0006);
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.set_topology(plce::world::Topology::triangle_fan);
             float dist = random.nextFloat() * 20 + 5 + overDrive * 10;
             float w = random.nextFloat() * 2 + 1 + overDrive * 2;
-            t->color(0xffffff, (int)(255 * (1 - overDrive)));
-            t->vertex(0, 0, 0);
-            t->color(0xff00ff, 0);
-            t->vertex(-0.866 * w, dist, -0.5f * w);
-            t->vertex(+0.866 * w, dist, -0.5f * w);
-            t->vertex(0, dist, 1 * w);
-            t->vertex(-0.866 * w, dist, -0.5f * w);
-            t->end();
+            mb.color(0xffffff, (int)(255 * (1 - overDrive)));
+            mb.vertex(0, 0, 0);
+            mb.color(0xff00ff, 0);
+            mb.vertex(-0.866 * w, dist, -0.5f * w);
+            mb.vertex(+0.866 * w, dist, -0.5f * w);
+            mb.vertex(0, dist, 1 * w);
+            mb.vertex(-0.866 * w, dist, -0.5f * w);
+            mb.flush();
         }
         RenderPath.MatrixPop();
         RenderPath.StateSetDepthMask(true);
