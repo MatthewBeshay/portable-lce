@@ -9,6 +9,7 @@
 #include "LevelRenderer.h"
 #include "Tesselator.h"
 #include "minecraft/client/renderer/culling/AllowAllCuller.h"
+#include "platform/renderer/IRenderPath.h"
 
 namespace plce::world { class MeshBuilder; }
 #include "minecraft/world/phys/AABB.h"
@@ -51,13 +52,22 @@ public:
 
 private:
     // P4.4 transitional: TileRenderer now emits into a MeshBuilder via
-    // set_builder(). rebuild() creates a scratch one per layer so the
-    // tesselate* calls have a valid sink; vertices are dropped when the
-    // layer closes (chunks invisible until P5 wires the worker-to-main
-    // upload queue).
+    // set_builder(). rebuild() creates a scratch one per layer.
     std::unique_ptr<plce::world::MeshBuilder> chunk_builder_;
 
 public:
+    // P5 minimal upload path. Worker fills pending_vertices_[layer]
+    // during rebuild; main thread in LevelRenderer::renderChunks
+    // drains into a persistent MeshHandle (mesh_handles_[layer]) via
+    // Renderer::create_mesh and submits one ChunkDrawCall per visible
+    // chunk-layer. `pending_dirty_` guards the hand-off: workers flip
+    // it under the bounds mutex, main thread clears it after upload.
+    std::vector<rp::WorldStandardVertex> pending_vertices_[2];
+    rp::MeshHandle mesh_handles_[2]{};
+    bool pending_dirty_[2] = {false, false};
+    // Lock for pending_vertices_ / pending_dirty_ — rebuild and upload
+    // can race on chunk re-rebuild while main thread uploads.
+    std::mutex pending_mutex_;
     static int updates;
 
     int x, y, z;

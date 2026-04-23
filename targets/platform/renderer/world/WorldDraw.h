@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
+#include <vector>
+
+#include "platform/renderer/IRenderPath.h"
 
 // Modern 3D world-space draw primitives. Callers (entity renderers,
 // tile-entity renderers, particle subclasses, sky / clouds / weather)
@@ -51,6 +55,12 @@ enum class MaterialKind : uint8_t {
 // the RenderPath global is set (i.e. after Renderer construction).
 // Companion to plce::ui::init().
 void init();
+
+// Look up the internal MaterialHandle registered for a given kind.
+// Intended for chunk / cloud submission code that builds its own
+// DrawCall + MeshHandle pair without going through MeshBuilder.
+// Returns an invalid handle before init() has run.
+[[nodiscard]] ::rp::MaterialHandle world_material(MaterialKind kind);
 
 // Accumulates 3D world-space geometry and flushes it as a single
 // DrawCall into rp::world_draws. Construct per draw (or reuse across
@@ -144,6 +154,21 @@ public:
     // defaults. Kind + texture + persistent vertex state (color /
     // normal / offset / u / v) are preserved.
     void reset();
+
+    // Number of quads currently accumulated (size() / 4 for the
+    // quads topology, size() / 3 for triangles, etc.). Worker code
+    // checks this to decide whether to upload a chunk layer.
+    [[nodiscard]] size_t vertex_count() const;
+
+    // Transfer the raw WorldStandardVertex bytes out of the builder
+    // without running through the GPU flush path. For worker threads
+    // that build chunk meshes off the render thread — the main thread
+    // later feeds the bytes to Renderer::create_mesh. After this call
+    // the builder's buffer is empty (moved-from). Quad topology is
+    // expanded to triangle_list during the move so the output can
+    // feed straight into a persistent MeshHandle without further
+    // processing.
+    [[nodiscard]] std::vector<::rp::WorldStandardVertex> take_vertices();
 
     // Non-copyable (internal std::vector, no gain from copies).
     MeshBuilder(const MeshBuilder&) = delete;

@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "Chunk.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "GameRenderer.h"
 #include "Tesselator.h"
 #include "app/common/Audio/ConsoleSoundEngine.h"
@@ -894,17 +895,56 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha) {
         RenderPath.render_terrain(mvp_arr, frustum, uint8_t(layer));
         count = int(sortList.size());
 #else
-        for (ClipChunk* chunk : sortList) {
-            int list = chunk->globalIdx * 2 + layer;
-            list += chunkLists;
+        // P5 chunk path: each visible chunk carries a MeshHandle per
+        // layer built by create_mesh from the worker's accumulated
+        // vertex bytes. Upload pending bytes on the main thread here
+        // (first time we see a dirty layer), then submit one sync
+        // DrawCall per chunk.
+        for (ClipChunk* clip : sortList) {
+            Chunk* ch = clip->chunk;
+            if (!ch) continue;
 
-            RenderPath.SetChunkOffset((float)chunk->chunk->x,
-                                      (float)chunk->chunk->y,
-                                      (float)chunk->chunk->z);
-
-            if (RenderPath.CBuffCall(list, first)) {
-                first = false;
+            // Drain pending-vertices → MeshHandle. Guarded by the
+            // Chunk's own mutex so a concurrent rebuild writing into
+            // pending_vertices_ doesn't race with the take here.
+            std::vector<rp::WorldStandardVertex> verts;
+            bool had_pending = false;
+            {
+                std::lock_guard<std::mutex> lk(ch->pending_mutex_);
+                if (ch->pending_dirty_[layer]) {
+                    verts = std::move(ch->pending_vertices_[layer]);
+                    ch->pending_dirty_[layer] = false;
+                    had_pending = true;
+                }
             }
+            if (had_pending) {
+                if (ch->mesh_handles_[layer]) {
+                    RenderPath.destroy_mesh(ch->mesh_handles_[layer]);
+                    ch->mesh_handles_[layer] = {};
+                }
+                if (!verts.empty()) {
+                    rp::MeshDesc d{};
+                    d.vertex_data  = verts.data();
+                    d.vertex_count = uint32_t(verts.size());
+                    d.layout       = rp::VertexLayout::world_standard;
+                    d.primitive    = rp::PrimitiveType::triangle_list;
+                    d.debug_name   = "chunk_layer";
+                    ch->mesh_handles_[layer] = RenderPath.create_mesh(d);
+                }
+            }
+
+            if (!ch->mesh_handles_[layer]) continue;
+
+            RenderPath.SetChunkOffset((float)ch->x, (float)ch->y,
+                                      (float)ch->z);
+            rp::DrawCall dc{};
+            dc.source   = rp::VertexSource::mesh;
+            dc.mesh     = ch->mesh_handles_[layer];
+            dc.material = (layer == 0)
+                ? plce::world::world_material(plce::world::MaterialKind::alpha_test)
+                : plce::world::world_material(plce::world::MaterialKind::transparent);
+            dc.self_describing = false;
+            RenderPath.submit_draw_call(dc);
             count++;
         }
         RenderPath.SetChunkOffset(0.f, 0.f, 0.f);

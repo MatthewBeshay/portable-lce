@@ -202,7 +202,11 @@ void Chunk::translateToPos() {
 }
 
 Chunk::Chunk() {}
-Chunk::~Chunk() = default;
+Chunk::~Chunk() {
+    for (int l = 0; l < 2; ++l) {
+        if (mesh_handles_[l]) RenderPath.destroy_mesh(mesh_handles_[l]);
+    }
+}
 
 void Chunk::makeCopyForRebuild(Chunk* source) {
     this->level = source->level;
@@ -553,10 +557,19 @@ void Chunk::rebuild() {
 #endif
             t->useCompactVertices(false);  // 4J added
             t->offset(0, 0, 0);
-            // Unbind the scratch MeshBuilder and drop the accumulated
-            // vertices — P5 wires the real worker-to-main upload path.
+            // P5 hand-off: move the worker-accumulated vertex bytes
+            // into pending_vertices_[layer] under the chunk mutex.
+            // Main thread picks this up in LevelRenderer::renderChunks
+            // and feeds it to Renderer::create_mesh to produce a
+            // persistent MeshHandle for this chunk layer.
             tileRenderer->set_builder(nullptr);
+            auto verts = chunk_builder_->take_vertices();
             chunk_builder_.reset();
+            {
+                std::lock_guard<std::mutex> lk(pending_mutex_);
+                pending_vertices_[currentLayer] = std::move(verts);
+                pending_dirty_[currentLayer] = true;
+            }
         } else {
             rendered = false;
         }

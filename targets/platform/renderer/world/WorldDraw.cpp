@@ -33,6 +33,13 @@ rp::MaterialHandle material_for_kind(MaterialKind k) {
     }
     return {};
 }
+}  // namespace
+
+rp::MaterialHandle world_material(MaterialKind kind) {
+    return material_for_kind(kind);
+}
+
+namespace {
 
 // Pack an XYZ float normal into the R8G8B8A8_SNORM encoding the basic
 // vertex shader expects. Shared with UiDraw's item-in-hand mesh build
@@ -359,6 +366,36 @@ void MeshBuilder::reset() {
     impl_->forced_lod = -1;
     impl_->tint[0] = impl_->tint[1] = impl_->tint[2] = impl_->tint[3] = 1.0f;
     impl_->verts.clear();
+}
+
+size_t MeshBuilder::vertex_count() const { return impl_->verts.size(); }
+
+std::vector<rp::WorldStandardVertex> MeshBuilder::take_vertices() {
+    auto& v = impl_->verts;
+    if (v.empty()) return {};
+
+    // Expand quad input to triangle_list so callers get a mesh that
+    // Renderer::create_mesh can feed straight to vkCmdDraw without an
+    // intermediate index buffer. Non-quad topologies pass through.
+    if (impl_->topology != Topology::quads) {
+        std::vector<rp::WorldStandardVertex> out;
+        out.swap(v);
+        return out;
+    }
+    const size_t quads = v.size() / 4;
+    std::vector<rp::WorldStandardVertex> out;
+    out.reserve(quads * 6);
+    for (size_t q = 0; q < quads; ++q) {
+        const size_t i = q * 4;
+        out.push_back(v[i + 0]);
+        out.push_back(v[i + 1]);
+        out.push_back(v[i + 2]);
+        out.push_back(v[i + 0]);
+        out.push_back(v[i + 2]);
+        out.push_back(v[i + 3]);
+    }
+    v.clear();
+    return out;
 }
 
 }  // namespace plce::world
