@@ -9,7 +9,7 @@
 #include "minecraft/client/gui/Screen.h"
 #include "minecraft/client/gui/ScreenSizeCalculator.h"
 #include "minecraft/client/gui/particle/GuiParticles.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/network/INetworkService.h"
 #include "minecraft/server/MinecraftServer.h"
 #include "minecraft/server/ServerAction.h"
@@ -190,24 +190,15 @@ void Screen::renderDirtBackground(int vo) {
 #ifdef ENABLE_JAVA_GUIS
     RenderPath.StateSetLightingEnable(false);
     RenderPath.StateSetFogEnable(false);
-    Tesselator* t = Tesselator::getInstance();
-    RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_GUI_BACKGROUND));
+    RenderPath.TextureBind(minecraft->textures->loadTexture(TN_GUI_BACKGROUND));
     float s = 32;
-    t->begin();
-    t->color(0x404040);
-    t->vertexUV(static_cast<float>(0), static_cast<float>(height),
-                static_cast<float>(0), static_cast<float>(0),
-                static_cast<float>(height / s + vo));
-    t->vertexUV(static_cast<float>(width), static_cast<float>(height),
-                static_cast<float>(0), static_cast<float>(width / s),
-                static_cast<float>(height / s + vo));
-    t->vertexUV(static_cast<float>(width), static_cast<float>(0),
-                static_cast<float>(0), static_cast<float>(width / s),
-                static_cast<float>(0 + vo));
-    t->vertexUV(static_cast<float>(0), static_cast<float>(0),
-                static_cast<float>(0), static_cast<float>(0),
-                static_cast<float>(0 + vo));
-    t->end();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
+    mb.color(0x404040);
+    mb.vertexUV(0.0f,          (float)height, 0.0f, 0.0f,           height / s + vo);
+    mb.vertexUV((float)width,  (float)height, 0.0f, width / s,      height / s + vo);
+    mb.vertexUV((float)width,  0.0f,          0.0f, width / s,      0 + vo);
+    mb.vertexUV(0.0f,          0.0f,          0.0f, 0.0f,           0 + vo);
+    mb.flush();
 #endif
 }
 
