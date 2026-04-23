@@ -255,6 +255,15 @@ struct DrawCall {
     // self-describing (record_draw_call overrides the live tex_stack).
     float uv_scale[2]  = {1.0f, 1.0f};
     float uv_offset[2] = {0.0f, 0.0f};
+
+    // Snapshot of the modelview matrix at push time, used to derive the
+    // normal matrix for per-vertex lighting. `transform` already carries
+    // the full live proj*mv the shader applies to vertex positions; the
+    // rotation part of that is what lights need for `mat3(mv) * normal`.
+    // Default identity — UI paths that pass through unlit materials
+    // (fonts, fills, lines) ignore it. Column-major, same convention as
+    // `transform`.
+    float mv_transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 };
 
 struct ChunkDrawCall {

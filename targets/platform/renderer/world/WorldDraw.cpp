@@ -73,6 +73,15 @@ void snapshot_uv_transform(float scale[2], float offset[2]) {
     offset[1] = tm[13];
 }
 
+// Capture just the modelview matrix — shader's normal matrix comes from
+// mat3(dc.mv_transform). Kept separate from snapshot_transform's
+// proj*mv so per-vertex lighting can rotate model normals into world
+// space without the projection leaking into the normal path.
+void snapshot_mv_transform(float out[16]) {
+    const float* mv = RenderPath.MatrixGet(rp::MatrixStack::modelview);
+    std::memcpy(out, mv, sizeof(float) * 16);
+}
+
 void push_to_bucket(MaterialKind kind, const rp::DrawCall& dc) {
     switch (kind) {
         case MaterialKind::opaque:      rp::world_draws::push_opaque(dc);      break;
@@ -336,6 +345,7 @@ void MeshBuilder::flush() {
     dc.tint_color[3] = impl_->tint[3];
     if (impl_->forced_lod >= 0) dc.forced_lod = int8_t(impl_->forced_lod);
     snapshot_transform(dc.transform);
+    snapshot_mv_transform(dc.mv_transform);
     snapshot_uv_transform(dc.uv_scale, dc.uv_offset);
 
     push_to_bucket(impl_->kind, dc);

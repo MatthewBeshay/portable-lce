@@ -1653,6 +1653,20 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     pc.nm1.w    = dc.uv_scale[1];
     pc.nm2.w    = dc.uv_offset[0];
     pc.tex_mv.x = dc.uv_offset[1];
+    // Normal matrix: mat3 of the snapshotted modelview. fill_push_constants
+    // pulled it from mv_stack_ which is forced to identity in the view /
+    // ui_overlay loops, so the DrawCall has to carry its own to get
+    // per-vertex lighting right (normal rotated into the same space as
+    // the light direction in the FrameUBO). Column-major mat4, mat3 is
+    // the upper-left 3x3.
+    {
+        glm::mat4 mv_snap(1.0f);
+        std::memcpy(&mv_snap[0][0], dc.mv_transform, sizeof(float) * 16);
+        glm::mat3 nm(mv_snap);
+        pc.nm0.x = nm[0].x; pc.nm0.y = nm[0].y; pc.nm0.z = nm[0].z;
+        pc.nm1.x = nm[1].x; pc.nm1.y = nm[1].y; pc.nm1.z = nm[1].z;
+        pc.nm2.x = nm[2].x; pc.nm2.y = nm[2].y; pc.nm2.z = nm[2].z;
+    }
     // Same story for state_colour: fill_push_constants multiplies the
     // live state_colour_ register into tint, which means queued
     // ui_overlay / world_draws DrawCalls that drain later in the frame
