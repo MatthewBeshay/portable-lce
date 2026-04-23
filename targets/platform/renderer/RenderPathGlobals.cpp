@@ -44,3 +44,52 @@ std::span<const DrawCall> get() {
 }
 
 }  // namespace rp::ui_overlay
+
+namespace rp::world_draws {
+
+// Frame-scoped DrawCall / ChunkDrawCall buffers feeding ViewDesc's
+// six world_/chunk_ spans. Main-thread only — same discipline as
+// ui_overlay. The thread-id capture is shared with ui_overlay (first
+// push() on either wins); world draws and UI draws always run on the
+// same host thread, so piggybacking a single guard is enough.
+static std::vector<DrawCall>      s_world_opaque;
+static std::vector<DrawCall>      s_world_alpha_test;
+static std::vector<DrawCall>      s_world_transparent;
+static std::vector<ChunkDrawCall> s_chunk_opaque;
+static std::vector<ChunkDrawCall> s_chunk_alpha_test;
+static std::vector<ChunkDrawCall> s_chunk_transparent;
+static std::thread::id            s_world_thread{};
+
+namespace {
+inline void check_thread() {
+    const auto tid = std::this_thread::get_id();
+    if (s_world_thread == std::thread::id{}) s_world_thread = tid;
+    assert(tid == s_world_thread &&
+           "rp::world_draws push called from a non-main thread");
+}
+}  // namespace
+
+void push_opaque     (const DrawCall& dc) { check_thread(); s_world_opaque.push_back(dc); }
+void push_alpha_test (const DrawCall& dc) { check_thread(); s_world_alpha_test.push_back(dc); }
+void push_transparent(const DrawCall& dc) { check_thread(); s_world_transparent.push_back(dc); }
+void push_chunk_opaque     (const ChunkDrawCall& c) { check_thread(); s_chunk_opaque.push_back(c); }
+void push_chunk_alpha_test (const ChunkDrawCall& c) { check_thread(); s_chunk_alpha_test.push_back(c); }
+void push_chunk_transparent(const ChunkDrawCall& c) { check_thread(); s_chunk_transparent.push_back(c); }
+
+void clear() {
+    s_world_opaque.clear();
+    s_world_alpha_test.clear();
+    s_world_transparent.clear();
+    s_chunk_opaque.clear();
+    s_chunk_alpha_test.clear();
+    s_chunk_transparent.clear();
+}
+
+std::span<const DrawCall>      opaque()            { return {s_world_opaque.data(),      s_world_opaque.size()}; }
+std::span<const DrawCall>      alpha_test()        { return {s_world_alpha_test.data(),  s_world_alpha_test.size()}; }
+std::span<const DrawCall>      transparent()       { return {s_world_transparent.data(), s_world_transparent.size()}; }
+std::span<const ChunkDrawCall> chunk_opaque()      { return {s_chunk_opaque.data(),      s_chunk_opaque.size()}; }
+std::span<const ChunkDrawCall> chunk_alpha_test()  { return {s_chunk_alpha_test.data(),  s_chunk_alpha_test.size()}; }
+std::span<const ChunkDrawCall> chunk_transparent() { return {s_chunk_transparent.data(), s_chunk_transparent.size()}; }
+
+}  // namespace rp::world_draws

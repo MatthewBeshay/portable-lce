@@ -609,6 +609,44 @@ void clear();
 }  // namespace ui_overlay
 
 // ---------------------------------------------------------------------------
+// World draw collection — frame-scoped DrawCall / ChunkDrawCall buffers
+// that feed ViewDesc's six world_/chunk_ spans. Mirrors ui_overlay but
+// split by material kind (opaque / alpha_test / transparent) and by
+// vertex source (world_ uses DrawCall + MeshHandle-or-transient;
+// chunk_ uses ChunkDrawCall + chunk_offset).
+//
+// The main loop clears the buffers once per frame, then assigns spans
+// over them into `FrameDesc::views[0]`. Subsystems that have migrated
+// off the legacy stateful API push into the appropriate bucket during
+// their normal draw flow.
+//
+// Not thread-safe for world_* draws — entity / tile-entity / particle
+// migration all runs on the main thread. The chunk_* pushes will come
+// from main thread too: worker-thread chunk meshing produces a
+// MeshHandle asynchronously but the ChunkDrawCall submission remains
+// on the main thread's render loop.
+// ---------------------------------------------------------------------------
+namespace world_draws {
+
+void push_opaque(const DrawCall& dc);
+void push_alpha_test(const DrawCall& dc);
+void push_transparent(const DrawCall& dc);
+void push_chunk_opaque(const ChunkDrawCall& dc);
+void push_chunk_alpha_test(const ChunkDrawCall& dc);
+void push_chunk_transparent(const ChunkDrawCall& dc);
+
+void clear();
+
+[[nodiscard]] std::span<const DrawCall> opaque();
+[[nodiscard]] std::span<const DrawCall> alpha_test();
+[[nodiscard]] std::span<const DrawCall> transparent();
+[[nodiscard]] std::span<const ChunkDrawCall> chunk_opaque();
+[[nodiscard]] std::span<const ChunkDrawCall> chunk_alpha_test();
+[[nodiscard]] std::span<const ChunkDrawCall> chunk_transparent();
+
+}  // namespace world_draws
+
+// ---------------------------------------------------------------------------
 // Vertex format matching the Tesselator world_standard layout (32 bytes)
 // ---------------------------------------------------------------------------
 

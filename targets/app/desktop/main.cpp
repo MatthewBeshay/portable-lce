@@ -558,6 +558,10 @@ int main(int argc, const char* argv[]) {
         // subsystems append into it via rp::ui_overlay::push during the
         // normal draw flow; we hand the span to render_frame below.
         rp::ui_overlay::clear();
+        // Same for the world-draw buffers that back ViewDesc's world_*
+        // / chunk_* spans. Tier-C migrated subsystems push into these;
+        // the spans get wired into frame.views[0] below.
+        rp::world_draws::clear();
 
         rp::FrameDesc frame{};
         {
@@ -624,6 +628,16 @@ int main(int argc, const char* argv[]) {
 
         if (pMinecraft->gameRenderer) {
             rp::ViewDesc& gv = pMinecraft->gameRenderer->current_view;
+            // Publish the per-frame world-draw buffers as spans on the
+            // primary view. Phase 3+ subsystems push DrawCalls into
+            // rp::world_draws; until they do, these spans stay empty
+            // and render_frame's view loop skips accordingly.
+            gv.world_opaque       = rp::world_draws::opaque();
+            gv.world_alpha_test   = rp::world_draws::alpha_test();
+            gv.world_transparent  = rp::world_draws::transparent();
+            gv.chunk_opaque       = rp::world_draws::chunk_opaque();
+            gv.chunk_alpha_test   = rp::world_draws::chunk_alpha_test();
+            gv.chunk_transparent  = rp::world_draws::chunk_transparent();
             frame.views = {&gv, 1};
         }
         frame.ui_overlay = rp::ui_overlay::get();
