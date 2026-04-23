@@ -5,12 +5,12 @@
 #include <memory>
 #include <numbers>
 
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/entity/Entity.h"
 #include "minecraft/world/entity/projectile/Arrow.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 ResourceLocation ArrowRenderer::ARROW_LOCATION =
@@ -43,7 +43,7 @@ void ArrowRenderer::render(std::shared_ptr<Entity> _arrow, double x, double y,
     RenderPath.MatrixRotate((yRotO + (yRot - yRotO) * a - 90)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
     RenderPath.MatrixRotate((xRotO + (xRot - xRotO) * a)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
     int type = 0;
 
     float u0 = 0 / 32.0f;
@@ -56,7 +56,6 @@ void ArrowRenderer::render(std::shared_ptr<Entity> _arrow, double x, double y,
     float v02 = (5 + type * 10) / 32.0f;
     float v12 = (10 + type * 10) / 32.0f;
     float ss = 0.9f / 16.0f;
-    (void)0;
     float shake = arrow->shakeTime - a;
     if (shake > 0) {
         float pow = -sinf(shake * 3) * shake;
@@ -67,49 +66,33 @@ void ArrowRenderer::render(std::shared_ptr<Entity> _arrow, double x, double y,
 
     RenderPath.MatrixTranslate(-4, 0, 0);
 
-    //    (void)0;		// 4J - changed to use tesselator
-    t->begin();
-    t->normal(1, 0, 0);
-    t->vertexUV((float)(-7), (float)(-2), (float)(-2), (float)(u02),
-                (float)(v02));
-    t->vertexUV((float)(-7), (float)(-2), (float)(+2), (float)(u12),
-                (float)(v02));
-    t->vertexUV((float)(-7), (float)(+2), (float)(+2), (float)(u12),
-                (float)(v12));
-    t->vertexUV((float)(-7), (float)(+2), (float)(-2), (float)(u02),
-                (float)(v12));
-    t->end();
+    // Each quad was its own Tesselator begin/end — a separate draw
+    // under whatever matrix state was live at that point. Preserve
+    // that per-quad flush so the rotations interleaved with the
+    // draws below each land on the right draw.
+    mb.normal(1, 0, 0);
+    mb.vertexUV(-7, -2, -2, u02, v02);
+    mb.vertexUV(-7, -2, +2, u12, v02);
+    mb.vertexUV(-7, +2, +2, u12, v12);
+    mb.vertexUV(-7, +2, -2, u02, v12);
+    mb.flush();
 
-    //    (void)0;	// 4J - changed to use tesselator
-    t->begin();
-    t->normal(-1, 0, 0);
-    t->vertexUV((float)(-7), (float)(+2), (float)(-2), (float)(u02),
-                (float)(v02));
-    t->vertexUV((float)(-7), (float)(+2), (float)(+2), (float)(u12),
-                (float)(v02));
-    t->vertexUV((float)(-7), (float)(-2), (float)(+2), (float)(u12),
-                (float)(v12));
-    t->vertexUV((float)(-7), (float)(-2), (float)(-2), (float)(u02),
-                (float)(v12));
-    t->end();
+    mb.normal(-1, 0, 0);
+    mb.vertexUV(-7, +2, -2, u02, v02);
+    mb.vertexUV(-7, +2, +2, u12, v02);
+    mb.vertexUV(-7, -2, +2, u12, v12);
+    mb.vertexUV(-7, -2, -2, u02, v12);
+    mb.flush();
 
     for (int i = 0; i < 4; i++) {
         RenderPath.MatrixRotate((90)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
-        //        (void)0;		// 4J - changed to use
-        //        tesselator
-        t->begin();
-        t->normal(0, 0, 1);
-        t->vertexUV((float)(-8), (float)(-2), (float)(0), (float)(u0),
-                    (float)(v0));
-        t->vertexUV((float)(+8), (float)(-2), (float)(0), (float)(u1),
-                    (float)(v0));
-        t->vertexUV((float)(+8), (float)(+2), (float)(0), (float)(u1),
-                    (float)(v1));
-        t->vertexUV((float)(-8), (float)(+2), (float)(0), (float)(u0),
-                    (float)(v1));
-        t->end();
+        mb.normal(0, 0, 1);
+        mb.vertexUV(-8, -2, 0, u0, v0);
+        mb.vertexUV(+8, -2, 0, u1, v0);
+        mb.vertexUV(+8, +2, 0, u1, v1);
+        mb.vertexUV(-8, +2, 0, u0, v1);
+        mb.flush();
     }
-    (void)0;
     RenderPath.MatrixPop();
 }
 

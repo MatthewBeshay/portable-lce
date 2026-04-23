@@ -4,7 +4,6 @@
 #include <numbers>
 
 #include "EntityRenderDispatcher.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/entity/EntityRenderer.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
 #include "minecraft/world/Icon.h"
@@ -14,6 +13,7 @@
 #include "minecraft/world/item/PotionItem.h"
 #include "minecraft/world/item/alchemy/PotionBrewing.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 ItemSpriteRenderer::ItemSpriteRenderer(Item* sourceItem,
@@ -43,7 +43,6 @@ void ItemSpriteRenderer::render(std::shared_ptr<Entity> e, double x, double y,
     (void)0;
     RenderPath.MatrixScale(1 / 2.0f, 1 / 2.0f, 1 / 2.0f);
     bindTexture(e);
-    Tesselator* t = Tesselator::getInstance();
 
     if (icon == PotionItem::getTexture(PotionItem::THROWABLE_ICON)) {
         int col = PotionBrewing::getColorValue(
@@ -55,18 +54,17 @@ void ItemSpriteRenderer::render(std::shared_ptr<Entity> e, double x, double y,
 
         RenderPath.StateSetColour(red, g, b, 1.0f);
         RenderPath.MatrixPush();
-        renderIcon(t, PotionItem::getTexture(PotionItem::CONTENTS_ICON));
+        renderIcon(PotionItem::getTexture(PotionItem::CONTENTS_ICON));
         RenderPath.MatrixPop();
         RenderPath.StateSetColour(1, 1, 1, 1.0f);
     }
 
-    renderIcon(t, icon);
+    renderIcon(icon);
 
-    (void)0;
     RenderPath.MatrixPop();
 }
 
-void ItemSpriteRenderer::renderIcon(Tesselator* t, Icon* icon) {
+void ItemSpriteRenderer::renderIcon(Icon* icon) {
     float u0 = icon->getU0();
     float u1 = icon->getU1();
     float v0 = icon->getV0();
@@ -78,17 +76,14 @@ void ItemSpriteRenderer::renderIcon(Tesselator* t, Icon* icon) {
 
     RenderPath.MatrixRotate((180 - entityRenderDispatcher->playerRotY)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
     RenderPath.MatrixRotate((-entityRenderDispatcher->playerRotX)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
-    t->begin();
-    t->normal(0, 1, 0);
-    t->vertexUV((float)(0 - xo), (float)(0 - yo), (float)(0), (float)(u0),
-                (float)(v1));
-    t->vertexUV((float)(r - xo), (float)(0 - yo), (float)(0), (float)(u1),
-                (float)(v1));
-    t->vertexUV((float)(r - xo), (float)(r - yo), (float)(0), (float)(u1),
-                (float)(v0));
-    t->vertexUV((float)(0 - xo), (float)(r - yo), (float)(0), (float)(u0),
-                (float)(v0));
-    t->end();
+
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
+    mb.normal(0, 1, 0);
+    mb.vertexUV(0 - xo, 0 - yo, 0, u0, v1);
+    mb.vertexUV(r - xo, 0 - yo, 0, u1, v1);
+    mb.vertexUV(r - xo, r - yo, 0, u1, v0);
+    mb.vertexUV(0 - xo, r - yo, 0, u0, v0);
+    mb.flush();
 }
 
 ResourceLocation* ItemSpriteRenderer::getTextureLocation(

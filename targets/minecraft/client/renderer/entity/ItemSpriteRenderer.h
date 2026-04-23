@@ -3,7 +3,6 @@
 
 class Item;
 class Icon;
-class Tesselator;
 
 class ItemSpriteRenderer : public EntityRenderer {
 private:
@@ -18,5 +17,5 @@ public:
     virtual ResourceLocation* getTextureLocation(std::shared_ptr<Entity> mob);
 
 private:
-    void renderIcon(Tesselator* t, Icon* icon);
+    void renderIcon(Icon* icon);
 };
