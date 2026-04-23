@@ -1463,131 +1463,121 @@ void Gui::displayClientMessage(int messageId, int iPad) {
     addMessage(languageString, iPad);
 }
 
+namespace {
+// Convert a legacy 0xAARRGGBB colour int into UiDraw's 0xAABBGGRR
+// layout (byte 0 = R, byte 3 = A). The graph renderers build colours
+// as `0xFF000000 + cc * shift` where the shift targets one of R/G/B;
+// the byte-swap flips the R/B bytes to match the modern layout.
+uint32_t graph_argb_to_rgba(int col) {
+    return  (uint32_t(col >> 16) & 0xFFu)         |
+           ((uint32_t(col >>  8) & 0xFFu) <<  8)  |
+           ((uint32_t(col      ) & 0xFFu) << 16)  |
+           ((uint32_t(col >> 24) & 0xFFu) << 24);
+}
+}  // namespace
+
 // 4J Added
 void Gui::renderGraph(int dataLength, int dataPos, int64_t* dataA,
                       float dataAScale, int dataAWarning, int64_t* dataB,
                       float dataBScale, int dataBWarning) {
-    int height = minecraft->height;
-    // This causes us to cover xScale*dataLength pixels in the horizontal
-    int xScale = 1;
-    if (dataA != nullptr && dataB != nullptr) xScale = 2;
+    const int height = minecraft->height;
+    // Covers xScale * dataLength pixels horizontally.
+    const int xScale = (dataA != nullptr && dataB != nullptr) ? 2 : 1;
 
-    RenderPath.Clear(rp::CLEAR_DEPTH);
+    // The legacy code set its own ortho (0..width × 0..height, depth
+    // 1000..3000) via MatrixMode calls and drew via Tesselator line
+    // list. draw_untextured_lines snapshots the live proj*mv into the
+    // DrawCall's transform at call time, so the MatrixMode scaffolding
+    // is still needed — keep it. Once all graph state is migrated the
+    // scaffolding can fold into a baked ortho inside UiDraw.
     RenderPath.MatrixMode(rp::MatrixStack::projection);
     RenderPath.MatrixSetIdentity();
-    RenderPath.MatrixOrthogonal(0, (float)minecraft->width, (float)height, 0, 1000, 3000);
+    RenderPath.MatrixOrthogonal(0, (float)minecraft->width, (float)height,
+                                 0, 1000, 3000);
     RenderPath.MatrixMode(rp::MatrixStack::modelview);
     RenderPath.MatrixSetIdentity();
     RenderPath.MatrixTranslate(0, 0, -2000);
 
-    RenderPath.StateSetLineWidth(1);
-    RenderPath.StateSetTextureEnable(false);
-    Tesselator* t = Tesselator::getInstance();
+    std::vector<plce::ui::LineVertex> verts;
+    verts.reserve(size_t(dataLength) * 4);
 
-    t->begin(0x0001);
     for (int i = 0; i < dataLength; i++) {
-        int col = ((i - dataPos) & (dataLength - 1)) * 255 / dataLength;
+        const int col = ((i - dataPos) & (dataLength - 1)) * 255 / dataLength;
         int cc = col * col / 255;
         cc = cc * cc / 255;
-        int cc2 = cc * cc / 255;
-        cc2 = cc2 * cc2 / 255;
 
         if (dataA != nullptr) {
-            if (dataA[i] > dataAWarning) {
-                t->color(0xff000000 + cc * 65536);
-            } else {
-                t->color(0xff000000 + cc * 256);
-            }
-
-            int64_t aVal = dataA[i] / dataAScale;
-
-            t->vertex((float)(xScale * i + 0.5f), (float)(height - aVal + 0.5f),
-                      (float)(0));
-            t->vertex((float)(xScale * i + 0.5f), (float)(height + 0.5f),
-                      (float)(0));
+            const int argb = (dataA[i] > dataAWarning)
+                ? (0xff000000 + cc * 65536)   // red tint
+                : (0xff000000 + cc * 256);    // green tint
+            const uint32_t rgba = graph_argb_to_rgba(argb);
+            const int64_t aVal = dataA[i] / dataAScale;
+            verts.push_back({(float)(xScale * i + 0.5f),
+                             (float)(height - aVal + 0.5f), rgba});
+            verts.push_back({(float)(xScale * i + 0.5f),
+                             (float)(height + 0.5f), rgba});
         }
 
         if (dataB != nullptr) {
-            if (dataB[i] > dataBWarning) {
-                t->color(0xff000000 + cc * 65536 + cc * 256 + cc * 1);
-            } else {
-                t->color(0xff808080 + cc / 2 * 256);
-            }
-
-            int64_t bVal = dataB[i] / dataBScale;
-
-            t->vertex((float)(xScale * i + (xScale - 1) + 0.5f),
-                      (float)(height - bVal + 0.5f), (float)(0));
-            t->vertex((float)(xScale * i + (xScale - 1) + 0.5f),
-                      (float)(height + 0.5f), (float)(0));
+            const int argb = (dataB[i] > dataBWarning)
+                ? (0xff000000 + cc * 65536 + cc * 256 + cc * 1)  // warning
+                : (0xff808080 + cc / 2 * 256);                    // normal
+            const uint32_t rgba = graph_argb_to_rgba(argb);
+            const int64_t bVal = dataB[i] / dataBScale;
+            verts.push_back({(float)(xScale * i + (xScale - 1) + 0.5f),
+                             (float)(height - bVal + 0.5f), rgba});
+            verts.push_back({(float)(xScale * i + (xScale - 1) + 0.5f),
+                             (float)(height + 0.5f), rgba});
         }
     }
-    t->end();
 
-    RenderPath.StateSetTextureEnable(true);
+    plce::ui::draw_untextured_lines(verts.data(), verts.size());
 }
 
 void Gui::renderStackedGraph(int dataPos, int dataLength, int dataSources,
                              int64_t (*func)(unsigned int dataPos,
                                              unsigned int dataSource)) {
-    int height = minecraft->height;
+    const int height = minecraft->height;
 
-    RenderPath.Clear(rp::CLEAR_DEPTH);
     RenderPath.MatrixMode(rp::MatrixStack::projection);
     RenderPath.MatrixSetIdentity();
-    RenderPath.MatrixOrthogonal(0, (float)minecraft->width, (float)height, 0, 1000, 3000);
+    RenderPath.MatrixOrthogonal(0, (float)minecraft->width, (float)height,
+                                 0, 1000, 3000);
     RenderPath.MatrixMode(rp::MatrixStack::modelview);
     RenderPath.MatrixSetIdentity();
     RenderPath.MatrixTranslate(0, 0, -2000);
 
-    RenderPath.StateSetLineWidth(1);
-    RenderPath.StateSetTextureEnable(false);
-    Tesselator* t = Tesselator::getInstance();
+    std::vector<plce::ui::LineVertex> verts;
+    verts.reserve(size_t(dataLength) * (dataSources * 2 + 12));
 
-    t->begin(0x0001);
-    int64_t thisVal = 0;
-    int64_t topVal = 0;
     for (int i = 0; i < dataLength; i++) {
-        thisVal = 0;
-        topVal = 0;
-        int col = ((i - dataPos) & (dataLength - 1)) * 255 / dataLength;
-        int cc = col * col / 255;
-        cc = cc * cc / 255;
-        int cc2 = cc * cc / 255;
-        cc2 = cc2 * cc2 / 255;
+        int64_t topVal = 0;
 
-        for (unsigned int source = 0; source < dataSources; ++source) {
-            thisVal = func(i, source);
+        for (unsigned int source = 0; source < unsigned(dataSources); ++source) {
+            const int64_t thisVal = func(i, source);
+            if (thisVal <= 0) continue;
 
-            if (thisVal > 0) {
-                float vary = (float)source / dataSources;
-                int fColour = floor(vary * 0xffffff);
+            const float vary      = (float)source / dataSources;
+            const int   fColour   = (int)std::floor(vary * 0xffffff);
+            const int   argb      = 0xff000000 + fColour;
+            const uint32_t rgba   = graph_argb_to_rgba(argb);
 
-                int colour = 0xff000000 + fColour;
-                // printf("Colour is %x\n", colour);
-                t->color(colour);
-
-                t->vertex((float)(i + 0.5f),
-                          (float)(height - topVal - thisVal + 0.5f),
-                          (float)(0));
-                t->vertex((float)(i + 0.5f), (float)(height - topVal + 0.5f),
-                          (float)(0));
-
-                topVal += thisVal;
-            }
+            verts.push_back({(float)(i + 0.5f),
+                             (float)(height - topVal - thisVal + 0.5f), rgba});
+            verts.push_back({(float)(i + 0.5f),
+                             (float)(height - topVal + 0.5f), rgba});
+            topVal += thisVal;
         }
 
-        // Draw some horizontals
+        // Horizontal grid lines at 100-unit intervals.
+        const uint32_t grid_rgba = graph_argb_to_rgba(0xff000000);
         for (unsigned int horiz = 1; horiz < 7; ++horiz) {
-            t->color(0xff000000);
-
-            t->vertex((float)(0 + 0.5f), (float)(height - (horiz * 100) + 0.5f),
-                      (float)(0));
-            t->vertex((float)(dataLength + 0.5f),
-                      (float)(height - (horiz * 100) + 0.5f), (float)(0));
+            verts.push_back({0.5f,
+                             (float)(height - (horiz * 100) + 0.5f), grid_rgba});
+            verts.push_back({(float)(dataLength + 0.5f),
+                             (float)(height - (horiz * 100) + 0.5f), grid_rgba});
         }
     }
-    t->end();
 
-    RenderPath.StateSetTextureEnable(true);
+    plce::ui::draw_untextured_lines(verts.data(), verts.size());
 }

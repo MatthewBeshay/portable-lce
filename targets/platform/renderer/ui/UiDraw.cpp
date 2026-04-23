@@ -20,6 +20,7 @@ namespace {
 struct MaterialTable {
     rp::MaterialHandle untextured_alpha{};
     rp::MaterialHandle untextured_alpha_no_depth{};  // for fullscreen overlays
+    rp::MaterialHandle line_alpha{};                 // for untextured line-list draws
     rp::MaterialHandle textured_alpha{};
     rp::MaterialHandle font_glyph{};
     rp::MaterialHandle fullscreen_overlay{};
@@ -89,6 +90,21 @@ void init() {
     untex_nd.depth_write = false;
     untex_nd.cull        = rp::CullMode::none;
     s_materials.untextured_alpha_no_depth = RenderPath.create_material(untex_nd);
+
+    // Line primitive material — untextured, alpha blend, depth off.
+    // Separate from untextured_alpha_no_depth because record_draw_call
+    // already branches on DrawCall.transient.primitive for topology;
+    // the material just needs to keep every other state right.
+    rp::MaterialDesc line{};
+    line.shader      = rp::ShaderPath::standard;
+    line.blend       = rp::BlendMode::alpha;
+    line.textured    = false;
+    line.lit         = false;
+    line.fog_enabled = false;
+    line.depth_test  = rp::DepthTest::off;
+    line.depth_write = false;
+    line.cull        = rp::CullMode::none;
+    s_materials.line_alpha = RenderPath.create_material(line);
 
     rp::MaterialDesc textured{};
     textured.shader      = rp::ShaderPath::standard;
@@ -285,6 +301,41 @@ void draw_vignette(int w, int h, int texture_id, const float rgba[4]) {
     push_fullscreen_quad(w, h, texture_id,
                          s_materials.vignette, rgba,
                          0.0f, 0.0f, 1.0f, 1.0f);
+}
+
+void draw_untextured_lines(const LineVertex* vertices, size_t vertex_count) {
+    if (!vertices || vertex_count < 2) return;
+
+    auto [tvb, span] = RenderPath.alloc_transient_vertices(
+        uint32_t(vertex_count), rp::VertexLayout::world_standard,
+        rp::PrimitiveType::line_list);
+    if (span.empty()) return;
+
+    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
+    for (size_t i = 0; i < vertex_count; ++i) {
+        v[i] = {{vertices[i].x, vertices[i].y, 0.0f},
+                {0.0f, 0.0f},
+                vertices[i].rgba,
+                0,
+                0};
+    }
+
+    rp::DrawCall dc{};
+    dc.source    = rp::VertexSource::transient;
+    dc.transient = tvb;
+    dc.material  = s_materials.line_alpha;
+    // Per-vertex colour drives the line shading. The shader treats
+    // rgb=0 as a sentinel meaning "use pc.state_colour instead"; set
+    // tint to opaque black so 0xFF000000 vertices (common in the F3
+    // graph at the leftmost data point) still render black rather
+    // than snap to white.
+    dc.tint_color[0] = 0.0f;
+    dc.tint_color[1] = 0.0f;
+    dc.tint_color[2] = 0.0f;
+    dc.tint_color[3] = 1.0f;
+    snapshot_transform(dc.transform);
+
+    rp::ui_overlay::push(dc);
 }
 
 void draw_fullscreen_fill(int w, int h, uint32_t rgba) {
