@@ -39,6 +39,7 @@
 #include "platform/stubs.h"
 #include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/ui/UiDraw.h"
+#include "platform/renderer/world/WorldDraw.h"
 
 #include <cstdint>
 #include <vector>
@@ -663,21 +664,15 @@ void ItemInHandRenderer::render(float a) {
 
         minecraft->textures->bindTexture(
             &MAP_BACKGROUND_LOCATION);  // 4J was "/misc/mapbg.png"
-        Tesselator* t = Tesselator::getInstance();
 
-        //        (void)0;	// 4J - changed to use tesselator
-        t->begin();
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
         int vo = 7;
-        t->normal(0, 0, -1);
-        t->vertexUV((float)(0 - vo), (float)(128 + vo), (float)(0), (float)(0),
-                    (float)(1));
-        t->vertexUV((float)(128 + vo), (float)(128 + vo), (float)(0),
-                    (float)(1), (float)(1));
-        t->vertexUV((float)(128 + vo), (float)(0 - vo), (float)(0), (float)(1),
-                    (float)(0));
-        t->vertexUV((float)(0 - vo), (float)(0 - vo), (float)(0), (float)(0),
-                    (float)(0));
-        t->end();
+        mb.normal(0, 0, -1);
+        mb.vertexUV(0 - vo,    128 + vo, 0, 0, 1);
+        mb.vertexUV(128 + vo,  128 + vo, 0, 1, 1);
+        mb.vertexUV(128 + vo,  0 - vo,   0, 1, 0);
+        mb.vertexUV(0 - vo,    0 - vo,   0, 0, 0);
+        mb.flush();
 
         std::shared_ptr<MapItemSavedData> data =
             Item::map->getSavedData(item, minecraft->level);
@@ -908,10 +903,7 @@ void ItemInHandRenderer::renderTex(float a, Icon* slot) {
     minecraft->textures->bindTexture(
         &TextureAtlas::LOCATION_BLOCKS);  // TODO: get this data from Icon
 
-    Tesselator* t = Tesselator::getInstance();
-
     float br = 0.1f;
-    br = 0.1f;
     RenderPath.StateSetColour(br, br, br, 0.5f);
 
     RenderPath.MatrixPush();
@@ -922,22 +914,17 @@ void ItemInHandRenderer::renderTex(float a, Icon* slot) {
     float y1 = +1;
     float z0 = -0.5f;
 
-    float r = 2 / 256.0f;
     float u0 = slot->getU0();
     float u1 = slot->getU1();
     float v0 = slot->getV0();
     float v1 = slot->getV1();
 
-    t->begin();
-    t->vertexUV((float)(x0), (float)(y0), (float)(z0), (float)(u1),
-                (float)(v1));
-    t->vertexUV((float)(x1), (float)(y0), (float)(z0), (float)(u0),
-                (float)(v1));
-    t->vertexUV((float)(x1), (float)(y1), (float)(z0), (float)(u0),
-                (float)(v0));
-    t->vertexUV((float)(x0), (float)(y1), (float)(z0), (float)(u1),
-                (float)(v0));
-    t->end();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+    mb.vertexUV(x0, y0, z0, u1, v1);
+    mb.vertexUV(x1, y0, z0, u0, v1);
+    mb.vertexUV(x1, y1, z0, u0, v0);
+    mb.vertexUV(x0, y1, z0, u1, v0);
+    mb.flush();
     RenderPath.MatrixPop();
 
     RenderPath.StateSetColour(1, 1, 1, 1);
@@ -945,8 +932,6 @@ void ItemInHandRenderer::renderTex(float a, Icon* slot) {
 
 void ItemInHandRenderer::renderWater(float a) {
     minecraft->textures->bindTexture(&UNDERWATER_LOCATION);
-
-    Tesselator* t = Tesselator::getInstance();
 
     float br = minecraft->player->getBrightness(a);
     RenderPath.StateSetColour(br, br, br, 0.5f);
@@ -966,16 +951,12 @@ void ItemInHandRenderer::renderWater(float a) {
     float uo = -minecraft->player->yRot / 64.0f;
     float vo = +minecraft->player->xRot / 64.0f;
 
-    t->begin();
-    t->vertexUV((float)(x0), (float)(y0), (float)(z0), (float)(size + uo),
-                (float)(size + vo));
-    t->vertexUV((float)(x1), (float)(y0), (float)(z0), (float)(0 + uo),
-                (float)(size + vo));
-    t->vertexUV((float)(x1), (float)(y1), (float)(z0), (float)(0 + uo),
-                (float)(0 + vo));
-    t->vertexUV((float)(x0), (float)(y1), (float)(z0), (float)(size + uo),
-                (float)(0 + vo));
-    t->end();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+    mb.vertexUV(x0, y0, z0, size + uo, size + vo);
+    mb.vertexUV(x1, y0, z0, 0 + uo,    size + vo);
+    mb.vertexUV(x1, y1, z0, 0 + uo,    0 + vo);
+    mb.vertexUV(x0, y1, z0, size + uo, 0 + vo);
+    mb.flush();
     RenderPath.MatrixPop();
 
     RenderPath.StateSetColour(1, 1, 1, 1);
@@ -983,8 +964,6 @@ void ItemInHandRenderer::renderWater(float a) {
 }
 
 void ItemInHandRenderer::renderFire(float a) {
-    Tesselator* t = Tesselator::getInstance();
-
     unsigned int col = Minecraft::GetInstance()->getColourTable()->getColor(
         eMinecraftColour_Fire_Overlay);
     float aCol = ((col >> 24) & 0xFF) / 255.0f;
@@ -1016,16 +995,13 @@ void ItemInHandRenderer::renderFire(float a) {
         RenderPath.MatrixTranslate(-(i * 2 - 1) * 0.24f, -0.3f, 0);
         RenderPath.MatrixRotate(((i * 2 - 1) * 10.0f)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
 
-        t->begin();
-        t->vertexUV((float)(x0), (float)(y0), (float)(z0), (float)(u1),
-                    (float)(v1));
-        t->vertexUV((float)(x1), (float)(y0), (float)(z0), (float)(u0),
-                    (float)(v1));
-        t->vertexUV((float)(x1), (float)(y1), (float)(z0), (float)(u0),
-                    (float)(v0));
-        t->vertexUV((float)(x0), (float)(y1), (float)(z0), (float)(u1),
-                    (float)(v0));
-        t->end();
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::transparent, 0);
+        mb.vertexUV(x0, y0, z0, u1, v1);
+        mb.vertexUV(x1, y0, z0, u0, v1);
+        mb.vertexUV(x1, y1, z0, u0, v0);
+        mb.vertexUV(x0, y1, z0, u1, v0);
+        mb.flush();
         RenderPath.MatrixPop();
     }
     RenderPath.StateSetColour(1, 1, 1, 1);
