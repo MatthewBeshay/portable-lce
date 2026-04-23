@@ -1700,12 +1700,18 @@ void Renderer::render_frame(const rp::FrameDesc& desc) {
         f.push_timestamp("view");
         ensure_pass();
 
-        // Camera: write view-space and projection directly into the matrix
-        // stacks. DrawCall.transform composes on top as model-space.
-        std::memcpy(&proj_stack_.top()[0][0], view.camera.projection,
-                    sizeof(float) * 16);
-        std::memcpy(&mv_stack_.top()[0][0],   view.camera.view,
-                    sizeof(float) * 16);
+        // Matrix convention for view.world_* draws: force both stacks to
+        // identity, same as the ui_overlay loop below. Migrated Tier-C
+        // producers (plce::world::MeshBuilder) snapshot the full live
+        // proj*mv at flush() time into DrawCall.transform — replaying that
+        // on top of a non-identity view.camera would double-apply the
+        // world camera (view.proj * view.view * (live_proj * live_mv)) and
+        // smear / shrink every entity / tile-entity / beacon / weather
+        // draw. view.camera stays on ViewDesc for future chunk_*
+        // processing, which will consume it directly (ChunkDrawCall
+        // carries chunk_offset, not a full transform).
+        proj_stack_.top() = glm::mat4(1.0f);
+        mv_stack_.top()   = glm::mat4(1.0f);
 
         // Viewport + scissor override. Legacy viewport_layout_ stays
         // untouched; we set the VkViewport + VkRect2D directly on the
