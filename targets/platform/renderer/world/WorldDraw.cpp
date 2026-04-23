@@ -139,6 +139,7 @@ void init() {
 
 struct MeshBuilder::Impl {
     MaterialKind kind = MaterialKind::opaque;
+    Topology     topology = Topology::quads;
     int          texture_id = 0;
     int          forced_lod = -1;
     float        tint[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -149,7 +150,7 @@ struct MeshBuilder::Impl {
     uint32_t cur_normal = 0u;
     float    ox = 0.0f, oy = 0.0f, oz = 0.0f;
 
-    std::vector<rp::WorldStandardVertex> verts;  // input quads (4/face)
+    std::vector<rp::WorldStandardVertex> verts;  // input vertices
 };
 
 MeshBuilder::MeshBuilder(MaterialKind kind, int texture_id)
@@ -162,6 +163,12 @@ MeshBuilder::~MeshBuilder() { delete impl_; }
 
 void MeshBuilder::set_material(MaterialKind kind) { impl_->kind = kind; }
 void MeshBuilder::set_texture(int atlas_id)       { impl_->texture_id = atlas_id; }
+void MeshBuilder::set_topology(Topology t) {
+    impl_->topology = t;
+    // Switching topology discards any pending vertices — the caller
+    // is expected to have flushed first if they cared about them.
+    impl_->verts.clear();
+}
 void MeshBuilder::set_forced_lod(int lod)         { impl_->forced_lod = lod; }
 void MeshBuilder::set_tint(float r, float g, float b, float a) {
     impl_->tint[0] = r; impl_->tint[1] = g; impl_->tint[2] = b; impl_->tint[3] = a;
@@ -239,28 +246,65 @@ void MeshBuilder::quad(const QuadVertex corners[4]) {
 void MeshBuilder::flush() {
     auto& v = impl_->verts;
     if (v.empty()) return;
-    // Quads in, triangles out. Drop any trailing partial quad so a
-    // mid-build flush during a faulty migration doesn't produce
-    // non-manifold draws — log-worthy eventually; right now just
-    // silently truncate to a 4-multiple.
-    const size_t quads = v.size() / 4;
-    if (quads == 0) { v.clear(); return; }
+
+    // Choose the output DrawCall primitive + vertex count based on
+    // input topology. Quads expand to triangle_list (6 verts per 4);
+    // every other input topology passes straight through.
+    rp::PrimitiveType out_prim = rp::PrimitiveType::triangle_list;
+    uint32_t          out_count = 0;
+    size_t            quads = 0;
+
+    switch (impl_->topology) {
+        case Topology::quads: {
+            quads = v.size() / 4;
+            if (quads == 0) { v.clear(); return; }
+            out_prim  = rp::PrimitiveType::triangle_list;
+            out_count = uint32_t(quads * 6);
+            break;
+        }
+        case Topology::triangles:
+            out_prim  = rp::PrimitiveType::triangle_list;
+            out_count = uint32_t(v.size() - v.size() % 3);
+            break;
+        case Topology::triangle_strip:
+            if (v.size() < 3) { v.clear(); return; }
+            out_prim  = rp::PrimitiveType::triangle_strip;
+            out_count = uint32_t(v.size());
+            break;
+        case Topology::triangle_fan:
+            if (v.size() < 3) { v.clear(); return; }
+            out_prim  = rp::PrimitiveType::triangle_fan;
+            out_count = uint32_t(v.size());
+            break;
+        case Topology::line_list:
+            out_prim  = rp::PrimitiveType::line_list;
+            out_count = uint32_t(v.size() - v.size() % 2);
+            break;
+        case Topology::line_strip:
+            if (v.size() < 2) { v.clear(); return; }
+            out_prim  = rp::PrimitiveType::line_strip;
+            out_count = uint32_t(v.size());
+            break;
+    }
+    if (out_count == 0) { v.clear(); return; }
 
     auto [tvb, span] = RenderPath.alloc_transient_vertices(
-        uint32_t(quads * 6),
-        rp::VertexLayout::world_standard,
-        rp::PrimitiveType::triangle_list);
+        out_count, rp::VertexLayout::world_standard, out_prim);
     if (span.empty()) { v.clear(); return; }
 
     auto* out = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
-    for (size_t q = 0; q < quads; ++q) {
-        const size_t i = q * 4;
-        out[q * 6 + 0] = v[i + 0];
-        out[q * 6 + 1] = v[i + 1];
-        out[q * 6 + 2] = v[i + 2];
-        out[q * 6 + 3] = v[i + 0];
-        out[q * 6 + 4] = v[i + 2];
-        out[q * 6 + 5] = v[i + 3];
+    if (impl_->topology == Topology::quads) {
+        for (size_t q = 0; q < quads; ++q) {
+            const size_t i = q * 4;
+            out[q * 6 + 0] = v[i + 0];
+            out[q * 6 + 1] = v[i + 1];
+            out[q * 6 + 2] = v[i + 2];
+            out[q * 6 + 3] = v[i + 0];
+            out[q * 6 + 4] = v[i + 2];
+            out[q * 6 + 5] = v[i + 3];
+        }
+    } else {
+        std::memcpy(out, v.data(), size_t(out_count) * sizeof(rp::WorldStandardVertex));
     }
 
     rp::DrawCall dc{};

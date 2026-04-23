@@ -18,6 +18,21 @@
 
 namespace plce::world {
 
+// Input topology for MeshBuilder. The default (`quads`) matches the
+// legacy Tesselator mode 0x0007 and gets expanded to a triangle_list
+// on flush so the underlying DrawCall can feed the plain vkCmdDraw
+// path (no shared quad index buffer). The others pass straight
+// through — use them for leash strips, line graphs, fan-centred
+// geometry etc.
+enum class Topology : uint8_t {
+    quads,
+    triangles,
+    triangle_strip,
+    triangle_fan,
+    line_list,
+    line_strip,
+};
+
 // Material families the builder can emit into. Every legacy entity /
 // particle draw reduces to one of these three buckets:
 //   - opaque:    no alpha_test, no blend (grass, wool, solid mobs).
@@ -61,6 +76,10 @@ public:
     // partial vertex pushes) is undefined.
     void set_material(MaterialKind kind);
     void set_texture(int atlas_id);
+
+    // Switch input topology. Clears any buffered vertices from an
+    // earlier topology (flush() first if you need those emitted).
+    void set_topology(Topology t);
 
     // Optional per-draw overrides. Applied to the DrawCall emitted
     // on the next flush().

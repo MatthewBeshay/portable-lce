@@ -3,10 +3,10 @@
 #include <memory>
 
 #include "java/Random.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/world/entity/Entity.h"
 #include "minecraft/world/entity/global/LightningBolt.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 void LightningBoltRenderer::render(std::shared_ptr<Entity> _bolt, double x,
@@ -16,7 +16,8 @@ void LightningBoltRenderer::render(std::shared_ptr<Entity> _bolt, double x,
     std::shared_ptr<LightningBolt> bolt =
         std::dynamic_pointer_cast<LightningBolt>(_bolt);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+    mb.set_topology(plce::world::Topology::triangle_strip);
 
     RenderPath.StateSetTextureEnable(false);
     RenderPath.StateSetLightingEnable(false);
@@ -57,9 +58,8 @@ void LightningBoltRenderer::render(std::shared_ptr<Entity> _bolt, double x,
                     zo0 += random->nextInt(31) - 15;
                 }
 
-                t->begin(0x0005);
                 float br = 0.5f;
-                t->color(0.9f * br, 0.9f * br, 1 * br, 0.3f);
+                mb.color(0.9f * br, 0.9f * br, 1 * br, 0.3f);
 
                 double rr1 = (0.1 + r * 0.2);
                 if (p == 0) rr1 *= (h * 0.1 + 1);
@@ -78,13 +78,13 @@ void LightningBoltRenderer::render(std::shared_ptr<Entity> _bolt, double x,
                     if (i == 1 || i == 2) xx2 += rr2 * 2;
                     if (i == 2 || i == 3) zz2 += rr2 * 2;
 
-                    t->vertex((float)(xx2 + xo0), (float)(y + (h) * 16),
+                    mb.vertex((float)(xx2 + xo0), (float)(y + (h) * 16),
                               (float)(zz2 + zo0));
-                    t->vertex((float)(xx1 + xo1), (float)(y + (h + 1) * 16),
+                    mb.vertex((float)(xx1 + xo1), (float)(y + (h + 1) * 16),
                               (float)(zz1 + zo1));
                 }
 
-                t->end();
+                mb.flush();
             }
         }
     }

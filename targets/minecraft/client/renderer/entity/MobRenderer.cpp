@@ -9,7 +9,7 @@
 #include "java/Class.h"
 #include "minecraft/GameEnums.h"
 #include "minecraft/client/Minecraft.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/resources/Colours/ColourTable.h"
 #include "minecraft/util/Mth.h"
 #include "minecraft/world/entity/Entity.h"
@@ -46,7 +46,8 @@ void MobRenderer::renderLeash(std::shared_ptr<Mob> entity, double x, double y,
         RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1.0f);
 
         y -= (1.6 - entity->bbHeight) * .5;
-        Tesselator* tessellator = Tesselator::getInstance();
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
+        mb.set_topology(plce::world::Topology::triangle_strip);
         double roperYRot =
             lerp(roper->yRotO, roper->yRot, a * .5f) * Mth::DEG_TO_RAD;
         double roperXRot =
@@ -103,49 +104,47 @@ void MobRenderer::renderLeash(std::shared_ptr<Mob> entity, double x, double y,
 
         int steps = 24;
         double width = .025;
-        tessellator->begin(0x0005);
         for (int k = 0; k <= steps; k++) {
             if (k % 2 == 0) {
-                tessellator->color(rLightCol, gLightCol, bLightCol, 1.0F);
+                mb.color(rLightCol, gLightCol, bLightCol, 1.0F);
             } else {
-                tessellator->color(rDarkCol, gDarkCol, bDarkCol, 1.0F);
+                mb.color(rDarkCol, gDarkCol, bDarkCol, 1.0F);
             }
             float aa = (float)k / (float)steps;
-            tessellator->vertex(
+            mb.vertex(
                 x + (dx * aa) + 0,
                 y + (dy * ((aa * aa) + aa) * 0.5) +
                     ((((float)steps - (float)k) / (steps * 0.75F)) + 0.125F),
                 z + (dz * aa));
-            tessellator->vertex(
+            mb.vertex(
                 x + (dx * aa) + width,
                 y + (dy * ((aa * aa) + aa) * 0.5) +
                     ((((float)steps - (float)k) / (steps * 0.75F)) + 0.125F) +
                     width,
                 z + (dz * aa));
         }
-        tessellator->end();
+        mb.flush();
 
-        tessellator->begin(0x0005);
         for (int k = 0; k <= steps; k++) {
             if (k % 2 == 0) {
-                tessellator->color(rLightCol, gLightCol, bLightCol, 1.0F);
+                mb.color(rLightCol, gLightCol, bLightCol, 1.0F);
             } else {
-                tessellator->color(rDarkCol, gDarkCol, bDarkCol, 1.0F);
+                mb.color(rDarkCol, gDarkCol, bDarkCol, 1.0F);
             }
             float aa = (float)k / (float)steps;
-            tessellator->vertex(
+            mb.vertex(
                 x + (dx * aa) + 0,
                 y + (dy * ((aa * aa) + aa) * 0.5) +
                     ((((float)steps - (float)k) / (steps * 0.75F)) + 0.125F) +
                     width,
                 z + (dz * aa));
-            tessellator->vertex(
+            mb.vertex(
                 x + (dx * aa) + width,
                 y + (dy * ((aa * aa) + aa) * 0.5) +
                     ((((float)steps - (float)k) / (steps * 0.75F)) + 0.125F),
                 z + (dz * aa) + width);
         }
-        tessellator->end();
+        mb.flush();
 
         RenderPath.StateSetLightingEnable(true);
         RenderPath.StateSetTextureEnable(true);
