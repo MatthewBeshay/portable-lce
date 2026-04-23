@@ -617,12 +617,10 @@ void ItemRenderer::renderGuiItemDecorations(Font* font, Textures* textures,
                 amount = toWString<int>(item->count);
             }
         }
-        RenderPath.StateSetLightingEnable(false);
-        RenderPath.StateSetDepthTestEnable(false);
+        // Font glyph material runs lit=false / depth=off already; the
+        // wrap-with-StateSet* pair the legacy path used is dead.
         font->drawShadow(amount, x + 19 - 2 - font->width(amount), y + 6 + 3,
                          0xffffff | (((unsigned int)(fAlpha * 0xff)) << 24));
-        RenderPath.StateSetLightingEnable(true);
-        RenderPath.StateSetDepthTestEnable(true);
     }
 
     if (item->isDamaged()) {
@@ -631,44 +629,25 @@ void ItemRenderer::renderGuiItemDecorations(Font* font, Textures* textures,
         int cc =
             (int)Math::round(255.0 - (double)item->getDamageValue() * 255.0 /
                                          (double)item->getMaxDamage());
-        RenderPath.StateSetLightingEnable(false);
-        RenderPath.StateSetDepthTestEnable(false);
-        RenderPath.StateSetTextureEnable(false);
 
-        Tesselator* t = Tesselator::getInstance();
-
+        // fillRect routes through plce::ui::draw_fill — untextured-alpha
+        // material handles its own state. The old StateSet wrappers
+        // (lighting off, depth off, texture off) don't touch it.
         int ca = (255 - cc) << 16 | (cc) << 8;
         int cb = ((255 - cc) / 4) << 16 | (255 / 4) << 8;
-        fillRect(t, x + 2, y + 13, 13, 2, 0x000000);
-        fillRect(t, x + 2, y + 13, 12, 1, cb);
-        fillRect(t, x + 2, y + 13, p, 1, ca);
-
-        RenderPath.StateSetTextureEnable(true);
-        RenderPath.StateSetLightingEnable(true);
-        RenderPath.StateSetDepthTestEnable(true);
-        RenderPath.StateSetColour(1, 1, 1, 1);
+        fillRect(nullptr, x + 2, y + 13, 13, 2, 0x000000);
+        fillRect(nullptr, x + 2, y + 13, 12, 1, cb);
+        fillRect(nullptr, x + 2, y + 13, p, 1, ca);
     } else if (item->hasPotionStrengthBar()) {
-        RenderPath.StateSetLightingEnable(false);
-        RenderPath.StateSetDepthTestEnable(false);
-        RenderPath.StateSetTextureEnable(false);
-
-        Tesselator* t = Tesselator::getInstance();
-
-        fillRect(t, x + 3, y + 13, 11, 2, 0x000000);
+        fillRect(nullptr, x + 3, y + 13, 11, 2, 0x000000);
         // fillRect(t, x + 2, y + 13, 13, 1, 0x1dabc0);
-        fillRect(t, x + 3, y + 13,
+        fillRect(nullptr, x + 3, y + 13,
                  m_iPotionStrengthBarWidth[item->GetPotionStrength()], 2,
                  0x00e1eb);
-        fillRect(t, x + 2 + 3, y + 13, 1, 2, 0x000000);
-        fillRect(t, x + 2 + 3 + 3, y + 13, 1, 2, 0x000000);
-        fillRect(t, x + 2 + 3 + 3 + 3, y + 13, 1, 2, 0x000000);
-
-        RenderPath.StateSetTextureEnable(true);
-        RenderPath.StateSetLightingEnable(true);
-        RenderPath.StateSetDepthTestEnable(true);
-        RenderPath.StateSetColour(1, 1, 1, 1);
+        fillRect(nullptr, x + 2 + 3, y + 13, 1, 2, 0x000000);
+        fillRect(nullptr, x + 2 + 3 + 3, y + 13, 1, 2, 0x000000);
+        fillRect(nullptr, x + 2 + 3 + 3 + 3, y + 13, 1, 2, 0x000000);
     }
-    RenderPath.StateSetBlendEnable(false);
 }
 
 const int ItemRenderer::m_iPotionStrengthBarWidth[] = {3, 6, 9, 11};
