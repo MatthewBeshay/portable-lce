@@ -157,6 +157,7 @@ struct MeshBuilder::Impl {
     float    cur_u = 0.0f, cur_v = 0.0f;
     uint32_t cur_color = 0x00000000u;  // 0 = sentinel "use state_colour"
     uint32_t cur_normal = 0u;
+    uint32_t cur_tex2 = kNoLightmapSentinel;  // global-lightmap fallback
     float    ox = 0.0f, oy = 0.0f, oz = 0.0f;
 
     std::vector<rp::WorldStandardVertex> verts;  // input vertices
@@ -221,6 +222,8 @@ void MeshBuilder::color(int packed_rgb, int alpha) {
 }
 void MeshBuilder::color_packed(uint32_t rgba) { impl_->cur_color = rgba; }
 
+void MeshBuilder::tex2(uint32_t packed_uv) { impl_->cur_tex2 = packed_uv; }
+
 void MeshBuilder::offset(float xo, float yo, float zo) {
     impl_->ox = xo; impl_->oy = yo; impl_->oz = zo;
 }
@@ -240,7 +243,7 @@ void MeshBuilder::vertexUV(float x, float y, float z, float u, float v) {
     wv.uv[1]  = v;
     wv.color  = impl_->cur_color;
     wv.normal = impl_->cur_normal;
-    wv.tex2   = kNoLightmapSentinel;
+    wv.tex2   = impl_->cur_tex2;
     impl_->verts.push_back(wv);
 }
 
@@ -255,7 +258,7 @@ void MeshBuilder::quad(const QuadVertex corners[4]) {
         wv.uv[1]  = c.v;
         wv.color  = c.packed_color;
         wv.normal = impl_->cur_normal;
-        wv.tex2   = kNoLightmapSentinel;
+        wv.tex2   = impl_->cur_tex2;
         impl_->verts.push_back(wv);
     }
 }

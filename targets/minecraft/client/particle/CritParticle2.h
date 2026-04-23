@@ -17,7 +17,7 @@ public:
     CritParticle2(Level* level, double x, double y, double z, double xa,
                   double ya, double za, float scale);
     void CritParticle2PostConstructor(void);
-    void render(Tesselator* t, float a, float xa, float ya, float za, float xa2,
+    void render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za, float xa2,
                 float za2);
     void tick();
     void SetAgeUniformly();

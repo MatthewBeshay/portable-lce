@@ -7,11 +7,12 @@
 #include "minecraft/core/particles/ParticleTypes.h"
 #include "minecraft/world/entity/Entity.h"
 
-class Tesselator;
 class CompoundTag;
 class Icon;
 class Level;
 class Textures;
+
+namespace plce::world { class MeshBuilder; }
 
 class Particle : public Entity {
 protected:
@@ -52,8 +53,8 @@ protected:
 
 public:
     virtual void tick();
-    virtual void render(Tesselator* t, float a, float xa, float ya, float za,
-                        float xa2, float za2);
+    virtual void render(plce::world::MeshBuilder& mb, float a, float xa,
+                        float ya, float za, float xa2, float za2);
     virtual int getParticleTexture();
     virtual void addAdditonalSaveData(CompoundTag* entityTag);
     virtual void readAdditionalSaveData(CompoundTag* tag);

@@ -24,11 +24,11 @@ FlameParticle::FlameParticle(Level* level, double x, double y, double z,
     setMiscTex(48);
 }
 
-void FlameParticle::render(Tesselator* t, float a, float xa, float ya, float za,
+void FlameParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                            float xa2, float za2) {
     float s = (age + a) / (float)lifetime;
     size = oSize * (1 - s * s * 0.5f);
-    Particle::render(t, a, xa, ya, za, xa2, za2);
+    Particle::render(mb, a, xa, ya, za, xa2, za2);
 }
 
 // 4J - brought forward from 1.8.2

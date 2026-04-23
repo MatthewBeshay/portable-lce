@@ -34,7 +34,7 @@ ExplodeParticle::ExplodeParticle(Level* level, double x, double y, double z,
     //        noPhysics = true;
 }
 
-void ExplodeParticle::render(Tesselator* t, float a, float xa, float ya,
+void ExplodeParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                              float za, float xa2, float za2) {
     // 4J - don't render explosion particles that are less than 3 metres away,
     // to try and avoid large particles that are causing us problems with
@@ -46,7 +46,7 @@ void ExplodeParticle::render(Tesselator* t, float a, float xa, float ya,
     float distSq = (x * x + y * y + z * z);
     if (distSq < (3.0f * 3.0f)) return;
 
-    Particle::render(t, a, xa, ya, za, xa2, za2);
+    Particle::render(mb, a, xa, ya, za, xa2, za2);
 }
 
 void ExplodeParticle::tick() {

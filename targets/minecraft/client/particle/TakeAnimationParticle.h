@@ -22,7 +22,7 @@ public:
     TakeAnimationParticle(Level* level, std::shared_ptr<Entity> item,
                           std::shared_ptr<Entity> target, float yOffs);
     ~TakeAnimationParticle();
-    virtual void render(Tesselator* t, float a, float xa, float ya, float za,
+    virtual void render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                         float xa2, float za2);
     virtual void tick();
     virtual int getParticleTexture();

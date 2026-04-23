@@ -36,11 +36,11 @@ int LavaParticle::getLightColor(float a) {
 
 float LavaParticle::getBrightness(float a) { return 1; }
 
-void LavaParticle::render(Tesselator* t, float a, float xa, float ya, float za,
+void LavaParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                           float xa2, float za2) {
     float s = (age + a) / (float)lifetime;
     size = oSize * (1 - s * s);
-    Particle::render(t, a, xa, ya, za, xa2, za2);
+    Particle::render(mb, a, xa, ya, za, xa2, za2);
 }
 
 void LavaParticle::tick() {

@@ -46,14 +46,14 @@ NetherPortalParticle::NetherPortalParticle(Level* level, double x, double y,
     setMiscTex((int)(Math::random() * 8));
 }
 
-void NetherPortalParticle::render(Tesselator* t, float a, float xa, float ya,
+void NetherPortalParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                                   float za, float xa2, float za2) {
     float s = (age + a) / (float)lifetime;
     s = 1 - s;
     s = s * s;
     s = 1 - s;
     size = oSize * (s);
-    Particle::render(t, a, xa, ya, za, xa2, za2);
+    Particle::render(mb, a, xa, ya, za, xa2, za2);
 }
 
 // 4J - brought forward from 1.8.2

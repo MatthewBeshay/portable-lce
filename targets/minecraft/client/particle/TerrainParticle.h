@@ -23,6 +23,6 @@ public:
         int x, int y, int z, int data);  // 4J - added data parameter
     std::shared_ptr<TerrainParticle> init(int data);
     virtual int getParticleTexture();
-    virtual void render(Tesselator* t, float a, float xa, float ya, float za,
+    virtual void render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                         float xa2, float za2);
 };

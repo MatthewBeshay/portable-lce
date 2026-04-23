@@ -17,7 +17,7 @@ HugeExplosionSeedParticle::HugeExplosionSeedParticle(Level* level, double x,
     lifeTime = 8;
 }
 
-void HugeExplosionSeedParticle::render(Tesselator* t, float a, float xa,
+void HugeExplosionSeedParticle::render(plce::world::MeshBuilder& mb, float a, float xa,
                                        float ya, float za, float xa2,
                                        float za2) {}
 

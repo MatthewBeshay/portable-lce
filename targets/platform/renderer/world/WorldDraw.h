@@ -102,6 +102,12 @@ public:
     // 0x00RRGGBB; `alpha` is a 0..255 byte.
     void color(int packed_rgb, int alpha);
     void color_packed(uint32_t rgba);
+    // Sticky per-vertex lightmap coord. Packed as `u | (v << 16)`
+    // (16-bit each, matching Tesselator::tex2(int)). Every vertex
+    // written after this call carries the given packed lightmap
+    // until overridden. Default is the sentinel `0xfe00fe00` which
+    // the vertex shader treats as "use the global fallback".
+    void tex2(uint32_t packed_uv);
     void offset(float xo, float yo, float zo);
 
     // Push a vertex. vertexUV sets the current (u, v) before writing;

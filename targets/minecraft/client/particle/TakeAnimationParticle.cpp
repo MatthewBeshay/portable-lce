@@ -29,7 +29,7 @@ TakeAnimationParticle::TakeAnimationParticle(Level* level,
 
 TakeAnimationParticle::~TakeAnimationParticle() {}
 
-void TakeAnimationParticle::render(Tesselator* t, float a, float xa, float ya,
+void TakeAnimationParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                                    float za, float xa2, float za2) {
     float time = (life + a) / lifeTime;
     time = time * time;

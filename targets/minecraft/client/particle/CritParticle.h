@@ -25,7 +25,7 @@ public:
     CritParticle(Level* level, std::shared_ptr<Entity> entity,
                  ePARTICLE_TYPE type);
     void CritParticlePostConstructor(void);
-    void render(Tesselator* t, float a, float xa, float ya, float za, float xa2,
+    void render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za, float xa2,
                 float za2);
     void tick();
     int getParticleTexture();

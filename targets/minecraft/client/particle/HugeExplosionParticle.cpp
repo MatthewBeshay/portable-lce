@@ -6,7 +6,7 @@
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/particle/Particle.h"
 #include "minecraft/client/particle/ParticleEngine.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/Colours/ColourTable.h"
 #include "minecraft/client/resources/ResourceLocation.h"
@@ -42,7 +42,7 @@ HugeExplosionParticle::HugeExplosionParticle(Textures* textures, Level* level,
     size = 1 - (float)xa * 0.5f;
 }
 
-void HugeExplosionParticle::render(Tesselator* t, float a, float xa, float ya,
+void HugeExplosionParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                                    float za, float xa2, float za2) {
     int tex = (int)((life + a) * 15 / lifeTime);
     if (tex > 15) return;
@@ -68,15 +68,13 @@ void HugeExplosionParticle::render(Tesselator* t, float a, float xa, float ya,
     RenderPath.StateSetColour(1, 1, 1, 1);
     RenderPath.StateSetLightingEnable(false);
     Lighting::turnOff();
-    t->begin();
-    t->color(rCol, gCol, bCol, 1.0f);
-    t->normal(0, 1, 0);
-    t->tex2(0x00f0);
-    t->vertexUV(x - xa * r - xa2 * r, y - ya * r, z - za * r - za2 * r, u1, v1);
-    t->vertexUV(x - xa * r + xa2 * r, y + ya * r, z - za * r + za2 * r, u1, v0);
-    t->vertexUV(x + xa * r + xa2 * r, y + ya * r, z + za * r + za2 * r, u0, v0);
-    t->vertexUV(x + xa * r - xa2 * r, y - ya * r, z + za * r - za2 * r, u0, v1);
-    t->end();
+    mb.color(rCol, gCol, bCol, 1.0f);
+    mb.normal(0, 1, 0);
+    mb.tex2(0x00f0);
+    mb.vertexUV(x - xa * r - xa2 * r, y - ya * r, z - za * r - za2 * r, u1, v1);
+    mb.vertexUV(x - xa * r + xa2 * r, y + ya * r, z - za * r + za2 * r, u1, v0);
+    mb.vertexUV(x + xa * r + xa2 * r, y + ya * r, z + za * r + za2 * r, u0, v0);
+    mb.vertexUV(x + xa * r - xa2 * r, y - ya * r, z + za * r - za2 * r, u0, v1);
     RenderPath.StateSetDepthSlopeAndBias(0, 0.0f);
     RenderPath.StateSetLightingEnable(true);
 }

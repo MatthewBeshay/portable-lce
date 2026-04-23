@@ -3,7 +3,7 @@
 #include "minecraft/SharedConstants.h"
 #include "minecraft/client/particle/Particle.h"
 #include "minecraft/client/particle/ParticleEngine.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/world/Icon.h"
 #include "minecraft/world/item/Item.h"
 #include "minecraft/world/level/tile/Tile.h"
@@ -43,7 +43,7 @@ int BreakingItemParticle::getParticleTexture() {
     return ParticleEngine::ITEM_TEXTURE;
 }
 
-void BreakingItemParticle::render(Tesselator* t, float a, float xa, float ya,
+void BreakingItemParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                                   float za, float xa2, float za2) {
     float u0 = (texX + uo / 4.0f) / 16.0f;
     float u1 = u0 + 0.999f / 16.0f / 4;
@@ -65,14 +65,14 @@ void BreakingItemParticle::render(Tesselator* t, float a, float xa, float ya,
         SharedConstants::TEXTURE_LIGHTING
             ? 1
             : getBrightness(a);  // 4J - change brought forward from 1.8.2
-    t->color(br * rCol, br * gCol, br * bCol);
+    mb.color(br * rCol, br * gCol, br * bCol);
 
-    t->vertexUV((float)(x - xa * r - xa2 * r), (float)(y - ya * r),
+    mb.vertexUV((float)(x - xa * r - xa2 * r), (float)(y - ya * r),
                 (float)(z - za * r - za2 * r), (float)(u0), (float)(v1));
-    t->vertexUV((float)(x - xa * r + xa2 * r), (float)(y + ya * r),
+    mb.vertexUV((float)(x - xa * r + xa2 * r), (float)(y + ya * r),
                 (float)(z - za * r + za2 * r), (float)(u0), (float)(v0));
-    t->vertexUV((float)(x + xa * r + xa2 * r), (float)(y + ya * r),
+    mb.vertexUV((float)(x + xa * r + xa2 * r), (float)(y + ya * r),
                 (float)(z + za * r + za2 * r), (float)(u1), (float)(v0));
-    t->vertexUV((float)(x + xa * r - xa2 * r), (float)(y - ya * r),
+    mb.vertexUV((float)(x + xa * r - xa2 * r), (float)(y - ya * r),
                 (float)(z + za * r - za2 * r), (float)(u1), (float)(v1));
 }

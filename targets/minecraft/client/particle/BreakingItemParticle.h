@@ -18,6 +18,6 @@ public:
                          double ya, double za, Item* item, Textures* textures,
                          int data = 0);
     virtual int getParticleTexture();
-    virtual void render(Tesselator* t, float a, float xa, float ya, float za,
+    virtual void render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                         float xa2, float za2);
 };

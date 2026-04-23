@@ -28,7 +28,7 @@ public:
         FireworksStarter(Level* level, double x, double y, double z, double xd,
                          double yd, double zd, ParticleEngine* engine,
                          CompoundTag* infoTag);
-        virtual void render(Tesselator* t, float a, float xa, float ya,
+        virtual void render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                             float za, float xa2, float za2);
         virtual void tick();
         bool isFarAwayFromCamera();
@@ -79,7 +79,7 @@ public:
         void setFadeColor(int rgb);
         virtual AABB* getCollideBox();
         virtual bool isPushable();
-        virtual void render(Tesselator* t, float a, float xa, float ya,
+        virtual void render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                             float za, float xa2, float za2);
         virtual void tick();
         virtual void setBaseTex(int baseTex);
@@ -93,7 +93,7 @@ public:
 
         FireworksOverlayParticle(Level* level, double x, double y, double z);
 
-        void render(Tesselator* t, float a, float xa, float ya, float za,
+        void render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                     float xa2, float za2);
     };
 };

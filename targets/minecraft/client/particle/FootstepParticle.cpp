@@ -4,7 +4,7 @@
 
 #include "minecraft/client/particle/Particle.h"
 #include "minecraft/client/particle/ParticleEngine.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/level/Level.h"
@@ -26,7 +26,7 @@ FootstepParticle::FootstepParticle(Textures* textures, Level* level, double x,
     lifeTime = 200;
 }
 
-void FootstepParticle::render(Tesselator* t, float a, float xa, float ya,
+void FootstepParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya,
                               float za, float xa2, float za2) {
     float time = (life + a) / lifeTime;
     time = time * time;
@@ -49,18 +49,15 @@ void FootstepParticle::render(Tesselator* t, float a, float xa, float ya,
     RenderPath.StateSetBlendEnable(true);
     RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
 
-    t->begin();
-    t->color(br, br, br, alpha);
-    t->vertexUV((float)(xx - r), (float)(yy), (float)(zz + r), (float)(0),
+    mb.color(br, br, br, alpha);
+    mb.vertexUV((float)(xx - r), (float)(yy), (float)(zz + r), (float)(0),
                 (float)(1));
-    t->vertexUV((float)(xx + r), (float)(yy), (float)(zz + r), (float)(1),
+    mb.vertexUV((float)(xx + r), (float)(yy), (float)(zz + r), (float)(1),
                 (float)(1));
-    t->vertexUV((float)(xx + r), (float)(yy), (float)(zz - r), (float)(1),
+    mb.vertexUV((float)(xx + r), (float)(yy), (float)(zz - r), (float)(1),
                 (float)(0));
-    t->vertexUV((float)(xx - r), (float)(yy), (float)(zz - r), (float)(0),
+    mb.vertexUV((float)(xx - r), (float)(yy), (float)(zz - r), (float)(0),
                 (float)(0));
-    t->end();
-
     RenderPath.StateSetBlendEnable(false);
     RenderPath.StateSetLightingEnable(true);
 }

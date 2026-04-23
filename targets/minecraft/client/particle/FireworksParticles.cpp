@@ -12,7 +12,7 @@
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/particle/Particle.h"
 #include "minecraft/client/particle/ParticleEngine.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/world/entity/LivingEntity.h"
 #include "minecraft/world/item/FireworksItem.h"
 #include "minecraft/world/level/Level.h"
@@ -58,7 +58,7 @@ FireworksParticles::FireworksStarter::FireworksStarter(
     }
 }
 
-void FireworksParticles::FireworksStarter::render(Tesselator* t, float a,
+void FireworksParticles::FireworksStarter::render(plce::world::MeshBuilder& mb, float a,
                                                   float xa, float ya, float za,
                                                   float xa2, float za2) {
     // Do nothing
@@ -365,12 +365,12 @@ AABB* FireworksParticles::FireworksSparkParticle::getCollideBox() {
 
 bool FireworksParticles::FireworksSparkParticle::isPushable() { return false; }
 
-void FireworksParticles::FireworksSparkParticle::render(Tesselator* t, float a,
+void FireworksParticles::FireworksSparkParticle::render(plce::world::MeshBuilder& mb, float a,
                                                         float xa, float ya,
                                                         float za, float xa2,
                                                         float za2) {
     if (!flicker || age < (lifetime / 3) || (((age + lifetime) / 3) % 2) == 0) {
-        Particle::render(t, a, xa, ya, za, xa2, za2);
+        Particle::render(mb, a, xa, ya, za, xa2, za2);
     }
 }
 
@@ -441,11 +441,9 @@ FireworksParticles::FireworksOverlayParticle::FireworksOverlayParticle(
     lifetime = 4;
 }
 
-void FireworksParticles::FireworksOverlayParticle::render(Tesselator* t,
-                                                          float a, float xa,
-                                                          float ya, float za,
-                                                          float xa2,
-                                                          float za2) {
+void FireworksParticles::FireworksOverlayParticle::render(
+    plce::world::MeshBuilder& mb,
+    float a, float xa, float ya, float za, float xa2, float za2) {
     float u0 = 32.0f / 128.0f;
     float u1 = u0 + 32.0f / 128.0f;
     float v0 = 16.0f / 128.0f;
@@ -457,10 +455,10 @@ void FireworksParticles::FireworksOverlayParticle::render(Tesselator* t,
     float y = (float)(yo + (this->y - yo) * a - yOff);
     float z = (float)(zo + (this->z - zo) * a - zOff);
 
-    t->color(rCol, gCol, bCol, alpha);
+    mb.color(rCol, gCol, bCol, alpha);
 
-    t->vertexUV(x - xa * r - xa2 * r, y - ya * r, z - za * r - za2 * r, u1, v1);
-    t->vertexUV(x - xa * r + xa2 * r, y + ya * r, z - za * r + za2 * r, u1, v0);
-    t->vertexUV(x + xa * r + xa2 * r, y + ya * r, z + za * r + za2 * r, u0, v0);
-    t->vertexUV(x + xa * r - xa2 * r, y - ya * r, z + za * r - za2 * r, u0, v1);
+    mb.vertexUV(x - xa * r - xa2 * r, y - ya * r, z - za * r - za2 * r, u1, v1);
+    mb.vertexUV(x - xa * r + xa2 * r, y + ya * r, z - za * r + za2 * r, u1, v0);
+    mb.vertexUV(x + xa * r + xa2 * r, y + ya * r, z + za * r + za2 * r, u0, v0);
+    mb.vertexUV(x + xa * r - xa2 * r, y - ya * r, z + za * r - za2 * r, u0, v1);
 }

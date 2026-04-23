@@ -42,14 +42,14 @@ CritParticle2::CritParticle2(Level* level, double x, double y, double z,
 
 void CritParticle2::CritParticle2PostConstructor(void) { tick(); }
 
-void CritParticle2::render(Tesselator* t, float a, float xa, float ya, float za,
+void CritParticle2::render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                            float xa2, float za2) {
     float l = ((age + a) / lifetime) * 32;
     if (l < 0) l = 0;
     if (l > 1) l = 1;
 
     size = oSize * l;
-    Particle::render(t, a, xa, ya, za, xa2, za2);
+    Particle::render(mb, a, xa, ya, za, xa2, za2);
 }
 
 void CritParticle2::SetAgeUniformly() { m_bAgeUniformly = true; }

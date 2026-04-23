@@ -9,8 +9,8 @@
 #include "minecraft/SharedConstants.h"
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/particle/ParticleEngine.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/world/Icon.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/world/entity/Entity.h"
 
 class Level;
@@ -134,8 +134,8 @@ void Particle::tick() {
     }
 }
 
-void Particle::render(Tesselator* t, float a, float xa, float ya, float za,
-                      float xa2, float za2) {
+void Particle::render(plce::world::MeshBuilder& mb, float a, float xa,
+                      float ya, float za, float xa2, float za2) {
     float u0 = texX / 16.0f;
     float u1 = u0 + 0.999f / 16.0f;
     float v0 = texY / 16.0f;
@@ -158,16 +158,12 @@ void Particle::render(Tesselator* t, float a, float xa, float ya, float za,
         br = getBrightness(a);
     }
 
-    t->color(rCol * br, gCol * br, bCol * br, alpha);
+    mb.color(rCol * br, gCol * br, bCol * br, alpha);
 
-    t->vertexUV((float)(x - xa * r - xa2 * r), (float)(y - ya * r),
-                (float)(z - za * r - za2 * r), (float)(u1), (float)(v1));
-    t->vertexUV((float)(x - xa * r + xa2 * r), (float)(y + ya * r),
-                (float)(z - za * r + za2 * r), (float)(u1), (float)(v0));
-    t->vertexUV((float)(x + xa * r + xa2 * r), (float)(y + ya * r),
-                (float)(z + za * r + za2 * r), (float)(u0), (float)(v0));
-    t->vertexUV((float)(x + xa * r - xa2 * r), (float)(y - ya * r),
-                (float)(z + za * r - za2 * r), (float)(u0), (float)(v1));
+    mb.vertexUV(x - xa * r - xa2 * r, y - ya * r, z - za * r - za2 * r, u1, v1);
+    mb.vertexUV(x - xa * r + xa2 * r, y + ya * r, z - za * r + za2 * r, u1, v0);
+    mb.vertexUV(x + xa * r + xa2 * r, y + ya * r, z + za * r + za2 * r, u0, v0);
+    mb.vertexUV(x + xa * r - xa2 * r, y - ya * r, z + za * r - za2 * r, u0, v1);
 }
 
 int Particle::getParticleTexture() { return ParticleEngine::MISC_TEXTURE; }

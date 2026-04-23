@@ -67,14 +67,14 @@ NoteParticle::NoteParticle(Level* level, double x, double y, double z,
     init(level, x, y, z, xa, ya, za, scale);
 }
 
-void NoteParticle::render(Tesselator* t, float a, float xa, float ya, float za,
+void NoteParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                           float xa2, float za2) {
     float l = ((age + a) / lifetime) * 32;
     if (l < 0) l = 0;
     if (l > 1) l = 1;
 
     size = oSize * l;
-    Particle::render(t, a, xa, ya, za, xa2, za2);
+    Particle::render(mb, a, xa, ya, za, xa2, za2);
 }
 
 void NoteParticle::tick() {

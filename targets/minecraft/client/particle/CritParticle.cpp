@@ -35,7 +35,7 @@ CritParticle::CritParticle(Level* level, std::shared_ptr<Entity> entity,
 // needed in the ctor
 void CritParticle::CritParticlePostConstructor(void) { tick(); }
 
-void CritParticle::render(Tesselator* t, float a, float xa, float ya, float za,
+void CritParticle::render(plce::world::MeshBuilder& mb, float a, float xa, float ya, float za,
                           float xa2, float za2) {}
 
 void CritParticle::tick() {

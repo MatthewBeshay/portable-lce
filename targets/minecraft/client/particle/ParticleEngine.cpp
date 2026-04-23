@@ -11,8 +11,8 @@
 #include "java/Random.h"
 #include "minecraft/SharedConstants.h"
 #include "minecraft/client/Camera.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/entity/Entity.h"
@@ -126,25 +126,27 @@ void ParticleEngine::render(std::shared_ptr<Entity> player, float a, int list) {
                 textures->bindTexture(&TextureAtlas::LOCATION_BLOCKS);
             if (tt == ITEM_TEXTURE)
                 textures->bindTexture(&TextureAtlas::LOCATION_ITEMS);
-            Tesselator* t = Tesselator::getInstance();
             RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1);
 
-            t->begin();
+            // One sync-flushed MeshBuilder per (sheet, layer) batch —
+            // particles are alpha-blended billboards with per-particle
+            // tint, so the transparent material matches. Reserve
+            // capacity up-front: 4 verts per particle.
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
             for (unsigned int i = 0; i < particles[l][tt][list].size(); i++) {
-                if (t->hasMaxVertices()) {
-                    t->end();
-                    t->begin();
-                }
                 std::shared_ptr<Particle> p = particles[l][tt][list][i];
 
-                if (SharedConstants::TEXTURE_LIGHTING)  // 4J - change brought
-                                                        // forward from 1.8.2
-                {
-                    t->tex2(p->getLightColor(a));
+                if (SharedConstants::TEXTURE_LIGHTING) {
+                    // 4J - change brought forward from 1.8.2. Legacy
+                    // Tesselator::tex2(int) packed `u | (v<<16)`; keep
+                    // the same layout so the shader's lightmap-sample
+                    // path reads identical values.
+                    mb.tex2(uint32_t(p->getLightColor(a)));
                 }
-                p->render(t, a, xa, ya, za, xa2, za2);
+                p->render(mb, a, xa, ya, za, xa2, za2);
             }
-            t->end();
+            mb.flush();
         }
     }
 
@@ -176,17 +178,17 @@ void ParticleEngine::renderLit(std::shared_ptr<Entity> player, float a,
     int tt = ENTITY_PARTICLE_TEXTURE;
 
     if (!particles[l][tt][list].empty()) {
-        Tesselator* t = Tesselator::getInstance();
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::transparent, 0);
         for (unsigned int i = 0; i < particles[l][tt][list].size(); i++) {
             std::shared_ptr<Particle> p = particles[l][tt][list][i];
 
-            if (SharedConstants::TEXTURE_LIGHTING)  // 4J - change brought
-                                                    // forward from 1.8.2
-            {
-                t->tex2(p->getLightColor(a));
+            if (SharedConstants::TEXTURE_LIGHTING) {
+                mb.tex2(uint32_t(p->getLightColor(a)));
             }
-            p->render(t, a, xa, ya, za, xa2, za2);
+            p->render(mb, a, xa, ya, za, xa2, za2);
         }
+        mb.flush();
     }
 }
 
