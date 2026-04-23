@@ -319,7 +319,17 @@ void MeshBuilder::flush() {
     dc.source                 = rp::VertexSource::transient;
     dc.transient              = tvb;
     dc.material               = material_for_kind(impl_->kind);
-    dc.texture_override.index = uint32_t(impl_->texture_id);
+    // Snapshot the currently-bound texture at flush time when the caller
+    // hasn't provided an explicit override. The legacy entity pipeline
+    // binds via RenderPath.TextureBind(id) before calling
+    // ModelPart::render, and the bound slot would otherwise leak: queued
+    // DrawCalls that drain in render_frame later get whichever texture
+    // the latest legacy bind landed on (font atlas, glint, etc.), which
+    // manifested as invisible / wrong-texture entity parts (e.g. the
+    // first-person arm losing its skin).
+    int captured_tex = impl_->texture_id;
+    if (captured_tex <= 0) captured_tex = RenderPath.TextureGetBoundId();
+    dc.texture_override.index = uint32_t(captured_tex);
     dc.tint_color[0] = impl_->tint[0];
     dc.tint_color[1] = impl_->tint[1];
     dc.tint_color[2] = impl_->tint[2];

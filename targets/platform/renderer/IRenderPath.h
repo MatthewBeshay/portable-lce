@@ -458,6 +458,13 @@ public:
     virtual void TextureFree(int idx) = 0;
     virtual void TextureBind(int idx) = 0;
     virtual void TextureBindVertex(int idx, bool scaleLight = false) = 0;
+    /// Currently-bound diffuse texture id at the backend level — what
+    /// the next draw would sample if it didn't carry a texture_override.
+    /// Needed by Tier-C modern draws (MeshBuilder / plce::ui) to snapshot
+    /// the texture at push time so the drained DrawCall doesn't inherit
+    /// whichever texture the legacy pipeline happens to have bound when
+    /// render_frame runs.
+    [[nodiscard]] virtual int TextureGetBoundId() const { return 0; }
     virtual void TextureSetTextureLevels(int levels) = 0;
     virtual void TextureData(int width, int height, void* data, int level,
                              int format = 0) = 0;

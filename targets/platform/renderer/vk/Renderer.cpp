@@ -1277,6 +1277,7 @@ void Renderer::pop_debug_event() {
 int Renderer::TextureCreate() { return tex_mgr_.create(); }
 void Renderer::TextureFree(int idx) { tex_mgr_.free(idx, frame().deletions); }
 void Renderer::TextureBind(int idx) { tex_mgr_.bind(idx); }
+int Renderer::TextureGetBoundId() const { return tex_mgr_.bound_tex(); }
 void Renderer::TextureData(int w, int h, void* data, int level, int) { tex_mgr_.data(w, h, data, level); }
 void Renderer::TextureDataUpdate(int xo, int yo, int w, int h, void* data, int lvl) { tex_mgr_.data_update(xo, yo, w, h, data, lvl); }
 std::optional<rp::LoadedImage> Renderer::load_texture_data(const char* filename) {

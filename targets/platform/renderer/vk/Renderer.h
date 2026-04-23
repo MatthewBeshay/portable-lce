@@ -98,6 +98,7 @@ public:
     [[nodiscard]] int TextureCreate() override;
     void TextureFree(int idx) override;
     void TextureBind(int idx) override;
+    [[nodiscard]] int TextureGetBoundId() const override;
     void TextureBindVertex(int idx, bool) override { tex_mgr_.bind_vertex(idx); }
     void TextureSetTextureLevels(int) override {}
     void TextureData(int w, int h, void* data, int level, int format) override;
