@@ -432,7 +432,6 @@ void Minecraft::renderLoadingScreen() {
 
     int lw = 256;
     int lh = 256;
-    RenderPath.StateSetColour(1, 1, 1, 1);
     t->color(0xffffff);
     blit((ssc.getWidth() - lw) / 2, (ssc.getHeight() - lh) / 2, 0, 0, lw, lh);
     RenderPath.StateSetLightingEnable(false);

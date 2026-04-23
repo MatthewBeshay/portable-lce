@@ -401,7 +401,6 @@ void TitleScreen::render(int xm, int ym, float a) {
 #endif
 
     RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_TITLE_MCLOGO));
-    RenderPath.StateSetColour(1, 1, 1, 1);
     blit(logoX + 0, logoY + 0, 0, 0, 155, 44);
     blit(logoX + 155, logoY + 0, 0, 45, 155, 44);
     t->color(0xffffff);
