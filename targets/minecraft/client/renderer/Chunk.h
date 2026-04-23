@@ -9,6 +9,8 @@
 #include "LevelRenderer.h"
 #include "Tesselator.h"
 #include "minecraft/client/renderer/culling/AllowAllCuller.h"
+
+namespace plce::world { class MeshBuilder; }
 #include "minecraft/world/phys/AABB.h"
 
 class Level;
@@ -47,6 +49,14 @@ public:
     static uint8_t* GetTileIdsStorage();
 #endif
 
+private:
+    // P4.4 transitional: TileRenderer now emits into a MeshBuilder via
+    // set_builder(). rebuild() creates a scratch one per layer so the
+    // tesselate* calls have a valid sink; vertices are dropped when the
+    // layer closes (chunks invisible until P5 wires the worker-to-main
+    // upload queue).
+    std::unique_ptr<plce::world::MeshBuilder> chunk_builder_;
+
 public:
     static int updates;
 
@@ -75,6 +85,10 @@ public:
           std::mutex& globalRenderableTileEntities_cs, int x, int y, int z,
           ClipChunk* clipChunk);
     Chunk();
+    // Out-of-line so the chunk_builder_ unique_ptr can hold an
+    // incomplete plce::world::MeshBuilder forward decl without
+    // forcing every Chunk.h consumer to include WorldDraw.h.
+    ~Chunk();
 
     void setPos(int x, int y, int z);
 

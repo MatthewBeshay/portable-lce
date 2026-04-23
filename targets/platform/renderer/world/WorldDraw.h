@@ -108,7 +108,16 @@ public:
     // until overridden. Default is the sentinel `0xfe00fe00` which
     // the vertex shader treats as "use the global fallback".
     void tex2(uint32_t packed_uv);
+    // Legacy Tesselator shim — mipmap filtering on migrated call
+    // sites is now driven by the material / forced_lod, not a
+    // per-batch Tesselator flag. Kept as a no-op returning the
+    // previous value (always false) so the save-restore idiom
+    // that TileRenderer uses in the cross/cactus paths compiles.
+    bool setMipmapEnable(bool /*enable*/) { return false; }
     void offset(float xo, float yo, float zo);
+    // Incremental offset — Tesselator::addOffset parity. Shifts vertex
+    // positions by (dx, dy, dz) on top of the current sticky offset.
+    void addOffset(float dx, float dy, float dz);
 
     // Push a vertex. vertexUV sets the current (u, v) before writing;
     // vertex uses whatever (u, v) is current. Four consecutive vertex

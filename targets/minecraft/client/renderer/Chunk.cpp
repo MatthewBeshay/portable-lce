@@ -11,6 +11,7 @@
 #include "LevelRenderer.h"
 #include "TileRenderer.h"
 #include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/culling/Culler.h"
 #include "minecraft/client/renderer/tileentity/TileEntityRenderDispatcher.h"
 #include "minecraft/world/entity/Entity.h"
@@ -201,6 +202,7 @@ void Chunk::translateToPos() {
 }
 
 Chunk::Chunk() {}
+Chunk::~Chunk() = default;
 
 void Chunk::makeCopyForRebuild(Chunk* source) {
     this->level = source->level;
@@ -488,6 +490,20 @@ void Chunk::rebuild() {
                             t->begin();
                             t->offset((float)(-this->x), (float)(-this->y),
                                       (float)(-this->z));
+                            // P4.4 transitional stub: TileRenderer now emits
+                            // into a MeshBuilder via current_builder_. Chunk
+                            // meshing runs off the main thread, so a real
+                            // flush() would touch RenderPath and crash — for
+                            // now we bind a scratch builder that the worker
+                            // fills and the rebuild then drops on scope exit.
+                            // Legacy CBuff output is therefore empty and the
+                            // chunk won't render; P5 wires an OfflineMesh-
+                            // Builder + main-thread upload queue to restore
+                            // terrain. Invisible chunks are an expected
+                            // mid-migration regression.
+                            chunk_builder_.reset(new plce::world::MeshBuilder(
+                                plce::world::MaterialKind::alpha_test, 0));
+                            tileRenderer->set_builder(chunk_builder_.get());
                         }
 
                         Tile* tile = Tile::tiles[tileId];
@@ -537,6 +553,10 @@ void Chunk::rebuild() {
 #endif
             t->useCompactVertices(false);  // 4J added
             t->offset(0, 0, 0);
+            // Unbind the scratch MeshBuilder and drop the accumulated
+            // vertices — P5 wires the real worker-to-main upload path.
+            tileRenderer->set_builder(nullptr);
+            chunk_builder_.reset();
         } else {
             rendered = false;
         }

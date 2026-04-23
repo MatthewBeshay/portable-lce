@@ -10,7 +10,7 @@
 
 #include "EntityTileRenderer.h"
 #include "GameRenderer.h"
-#include "Tesselator.h"
+#include "../../../platform/renderer/world/WorldDraw.h"
 #include "minecraft/Direction.h"
 #include "minecraft/Facing.h"
 #include "minecraft/GameEnums.h"
@@ -306,7 +306,7 @@ bool TileRenderer::tesselateInWorld(
     std::shared_ptr<TileEntity>
         forceEntity)  // 4J added forceData, forceEntity param
 {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     int shape = tt->getRenderShape();
     if (shape == Tile::SHAPE_BLOCK) {
         FRAME_PROFILE_SCOPE(ChunkBlockShape);
@@ -535,7 +535,7 @@ bool TileRenderer::tesselateAirPortalFrameInWorld(TheEndPortalFrameTile* tt,
 }
 
 bool TileRenderer::tesselateBedInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     int data = level->getData(x, y, z);
     int direction = BedTile::getDirection(data);
@@ -774,7 +774,7 @@ bool TileRenderer::tesselateBrewingStandInWorld(BrewingStandTile* tt, int x,
 
     clearFixedTexture();
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -834,7 +834,7 @@ bool TileRenderer::tesselateCauldronInWorld(CauldronTile* tt, int x, int y,
     // bounding box first
     tesselateBlockInWorld(tt, x, y, z);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -887,7 +887,7 @@ bool TileRenderer::tesselateFlowerPotInWorld(FlowerPotTile* tt, int x, int y,
     // bounding box first
     tesselateBlockInWorld(tt, x, y, z);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -1009,7 +1009,7 @@ bool TileRenderer::tesselateAnvilInWorld(AnvilTile* tt, int x, int y, int z) {
 
 bool TileRenderer::tesselateAnvilInWorld(AnvilTile* tt, int x, int y, int z,
                                          int data) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -1112,36 +1112,19 @@ float TileRenderer::tesselateAnvilPiece(AnvilTile* tt, int x, int y, int z,
              0.5f + length);
 
     if (render) {
-        Tesselator* t = Tesselator::getInstance();
-        t->begin();
+        plce::world::MeshBuilder* t = current_builder_;
         t->normal(0, -1, 0);
         renderFaceDown(tt, 0, 0, 0, getTexture(tt, 0, data));
-        t->end();
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tt, 0, 0, 0, getTexture(tt, 1, data));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, -1);
         renderNorth(tt, 0, 0, 0, getTexture(tt, 2, data));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, 1);
         renderSouth(tt, 0, 0, 0, getTexture(tt, 3, data));
-        t->end();
-
-        t->begin();
         t->normal(-1, 0, 0);
         renderWest(tt, 0, 0, 0, getTexture(tt, 4, data));
-        t->end();
-
-        t->begin();
         t->normal(1, 0, 0);
         renderEast(tt, 0, 0, 0, getTexture(tt, 5, data));
-        t->end();
     } else {
         tesselateBlockInWorld(tt, x, y, z);
     }
@@ -1152,7 +1135,7 @@ float TileRenderer::tesselateAnvilPiece(AnvilTile* tt, int x, int y, int z,
 bool TileRenderer::tesselateTorchInWorld(Tile* tt, int x, int y, int z) {
     int dir = level->getData(x, y, z);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(getLightColor(tt, level, x, y, z));
@@ -1186,7 +1169,7 @@ bool TileRenderer::tesselateRepeaterInWorld(RepeaterTile* tt, int x, int y,
     int dir = data & DiodeTile::DIRECTION_MASK;
     int delay = (data & RepeaterTile::DELAY_MASK) >> RepeaterTile::DELAY_SHIFT;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(tt->getLightColor(level, x, y, z));
@@ -1289,7 +1272,7 @@ bool TileRenderer::tesselateRepeaterInWorld(RepeaterTile* tt, int x, int y,
 
 bool TileRenderer::tesselateComparatorInWorld(ComparatorTile* tt, int x, int y,
                                               int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(tt->getLightColor(level, x, y, z));
@@ -1356,7 +1339,7 @@ bool TileRenderer::tesselateComparatorInWorld(ComparatorTile* tt, int x, int y,
 }
 
 bool TileRenderer::tesselateDiodeInWorld(DiodeTile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     tesselateDiodeInWorld(tt, x, y, z,
                           level->getData(x, y, z) & DiodeTile::DIRECTION_MASK);
@@ -1369,7 +1352,7 @@ void TileRenderer::tesselateDiodeInWorld(DiodeTile* tt, int x, int y, int z,
     // render half-block edges
     tesselateBlockInWorld(tt, x, y, z);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(getLightColor(tt, level, x, y, z));
@@ -1557,7 +1540,7 @@ void TileRenderer::renderPistonArmUpDown(float x0, float x1, float y0, float y1,
     Icon* armTex = PistonBaseTile::getTexture(PistonBaseTile::EDGE_TEX);
     if (hasFixedTexture()) armTex = fixedTexture;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     // upwards arm
     float u00 = armTex->getU0(true);
@@ -1579,7 +1562,7 @@ void TileRenderer::renderPistonArmNorthSouth(float x0, float x1, float y0,
     Icon* armTex = PistonBaseTile::getTexture(PistonBaseTile::EDGE_TEX);
     if (hasFixedTexture()) armTex = fixedTexture;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     // upwards arm
     float u00 = armTex->getU0(true);
@@ -1601,7 +1584,7 @@ void TileRenderer::renderPistonArmEastWest(float x0, float x1, float y0,
     Icon* armTex = PistonBaseTile::getTexture(PistonBaseTile::EDGE_TEX);
     if (hasFixedTexture()) armTex = fixedTexture;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     // upwards arm
     float u00 = armTex->getU0(true);
@@ -1642,7 +1625,7 @@ bool TileRenderer::tesselatePistonExtensionInWorld(
     const float armLength = fullArm ? 1.0f : 0.5f;
     const float armLengthPixels = fullArm ? 16.0f : 8.0f;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     switch (facing) {
         case Facing::DOWN:
             northFlip = FLIP_180;
@@ -1822,7 +1805,7 @@ bool TileRenderer::tesselateLeverInWorld(Tile* tt, int x, int y, int z) {
     int dir = data & 7;
     bool flipped = (data & 8) > 0;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     bool hadFixed = hasFixedTexture();
     if (!hadFixed) this->setFixedTexture(getTexture(Tile::cobblestone));
@@ -1977,7 +1960,7 @@ bool TileRenderer::tesselateLeverInWorld(Tile* tt, int x, int y, int z) {
 
 bool TileRenderer::tesselateTripwireSourceInWorld(Tile* tt, int x, int y,
                                                   int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     int data = level->getData(x, y, z);
     int dir = data & TripWireSourceTile::MASK_DIR;
     bool attached = (data & TripWireSourceTile::MASK_ATTACHED) ==
@@ -2276,7 +2259,7 @@ bool TileRenderer::tesselateTripwireSourceInWorld(Tile* tt, int x, int y,
 }
 
 bool TileRenderer::tesselateTripwireInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     Icon* tex = getTexture(tt, 0);
     int data = level->getData(x, y, z);
     bool attached =
@@ -2411,7 +2394,7 @@ bool TileRenderer::tesselateTripwireInWorld(Tile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateFireInWorld(FireTile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* firstTex = tt->getTextureLayer(0);
     Icon* secondTex = tt->getTextureLayer(1);
@@ -2704,7 +2687,7 @@ bool TileRenderer::tesselateFireInWorld(FireTile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateDustInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     int data = level->getData(x, y, z);
     Icon* crossTexture =
@@ -3040,7 +3023,7 @@ bool TileRenderer::tesselateDustInWorld(Tile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateRailInWorld(RailTile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     int data = level->getData(x, y, z);
 
     Icon* tex = getTexture(tt, 0, data);
@@ -3127,7 +3110,7 @@ bool TileRenderer::tesselateRailInWorld(RailTile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateLadderInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = getTexture(tt, 0);
 
@@ -3195,7 +3178,7 @@ bool TileRenderer::tesselateLadderInWorld(Tile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateVineInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = getTexture(tt, 0);
 
@@ -3280,7 +3263,7 @@ bool TileRenderer::tesselateVineInWorld(Tile* tt, int x, int y, int z) {
 
 bool TileRenderer::tesselateThinPaneInWorld(Tile* tt, int x, int y, int z) {
     int depth = level->getMaxBuildHeight();
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     t->tex2(tt->getLightColor(level, x, y, z));
     int col = tt->getColor(level, x, y, z);
@@ -3646,7 +3629,7 @@ bool TileRenderer::tesselateThinPaneInWorld(Tile* tt, int x, int y, int z) {
 bool TileRenderer::tesselateThinFenceInWorld(ThinFenceTile* tt, int x, int y,
                                              int z) {
     int depth = level->getMaxBuildHeight();
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -4095,7 +4078,7 @@ bool TileRenderer::tesselateThinFenceInWorld(ThinFenceTile* tt, int x, int y,
 }
 
 bool TileRenderer::tesselateCrossInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -4143,7 +4126,7 @@ bool TileRenderer::tesselateCrossInWorld(Tile* tt, int x, int y, int z) {
 
 bool TileRenderer::tesselateStemInWorld(Tile* _tt, int x, int y, int z) {
     StemTile* tt = (StemTile*)_tt;
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -4183,7 +4166,7 @@ bool TileRenderer::tesselateStemInWorld(Tile* _tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateRowInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(getLightColor(tt, level, x, y, z));
@@ -4199,7 +4182,7 @@ bool TileRenderer::tesselateRowInWorld(Tile* tt, int x, int y, int z) {
 
 void TileRenderer::tesselateTorch(Tile* tt, float x, float y, float z,
                                   float xxa, float zza, int data) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     Icon* tex = getTexture(tt, Facing::DOWN, data);
 
     if (hasFixedTexture()) tex = fixedTexture;
@@ -4281,7 +4264,7 @@ void TileRenderer::tesselateTorch(Tile* tt, float x, float y, float z,
 
 void TileRenderer::tesselateCrossTexture(Tile* tt, int data, float x, float y,
                                          float z, float scale) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = getTexture(tt, 0, data);
 
@@ -4336,7 +4319,7 @@ void TileRenderer::tesselateCrossTexture(Tile* tt, int data, float x, float y,
 
 void TileRenderer::tesselateStemTexture(Tile* tt, int data, float h, float x,
                                         float y, float z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = getTexture(tt, 0, data);
 
@@ -4373,7 +4356,7 @@ void TileRenderer::tesselateStemTexture(Tile* tt, int data, float h, float x,
 }
 
 bool TileRenderer::tesselateLilypadInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = getTexture(tt, Facing::UP);
 
@@ -4417,7 +4400,7 @@ bool TileRenderer::tesselateLilypadInWorld(Tile* tt, int x, int y, int z) {
 
 void TileRenderer::tesselateStemDirTexture(StemTile* tt, int data, int dir,
                                            float h, float x, float y, float z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = tt->getAngledTexture();
 
@@ -4466,7 +4449,7 @@ void TileRenderer::tesselateStemDirTexture(StemTile* tt, int data, int dir,
 
 void TileRenderer::tesselateRowTexture(Tile* tt, int data, float x, float y,
                                        float z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     Icon* tex = getTexture(tt, 0, data);
 
@@ -4562,7 +4545,7 @@ void TileRenderer::tesselateRowTexture(Tile* tt, int data, float x, float y,
 bool TileRenderer::tesselateWaterInWorld(Tile* tt, int x, int y, int z) {
     // 4J Java comment
     // TODO: This all needs to change. Somehow.
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     int col = tt->getColor(level, x, y, z);
     float r = (col >> 16 & 0xff) / 255.0f;
@@ -4814,8 +4797,7 @@ void TileRenderer::renderBlock(Tile* tt, Level* level, int x, int y, int z,
     float c2 = 0.8f;
     float c3 = 0.6f;
 
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
+    plce::world::MeshBuilder* t = current_builder_;
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(getLightColor(tt, level, x, y, z));
     }
@@ -4864,7 +4846,6 @@ void TileRenderer::renderBlock(Tile* tt, Level* level, int x, int y, int z,
     if (br < center) br = center;
     t->color(c3 * br, c3 * br, c3 * br);
     renderEast(tt, -0.5f, -0.5f, -0.5f, getTexture(tt, 5, data));
-    t->end();
 }
 
 bool TileRenderer::tesselateBlockInWorld(Tile* tt, int x, int y, int z) {
@@ -4977,7 +4958,7 @@ bool TileRenderer::tesselateQuartzInWorld(Tile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateCocoaInWorld(CocoaTile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (SharedConstants::TEXTURE_LIGHTING) {
         t->tex2(getLightColor(tt, level, x, y, z));
@@ -5228,7 +5209,7 @@ bool TileRenderer::tesselateBlockInWorldWithAmbienceOcclusionTexLighting(
 
     int centerColor = getLightColor(tt, level, pX, pY, pZ);
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     t->tex2(0xf000f);
 
     if (uniformTex == nullptr) {
@@ -6102,7 +6083,7 @@ bool TileRenderer::tesselateBlockInWorld(Tile* tt, int x, int y, int z, float r,
                                          float g, float b) {
     applyAmbienceOcclusion = false;
 
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     bool changed = false;
     float c10 = 0.5f;
@@ -6307,7 +6288,7 @@ bool TileRenderer::tesselateCactusInWorld(Tile* tt, int x, int y, int z) {
 
 bool TileRenderer::tesselateCactusInWorld(Tile* tt, int x, int y, int z,
                                           float r, float g, float b) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     bool changed = false;
     float c10 = 0.5f;
@@ -6752,7 +6733,7 @@ bool TileRenderer::tesselateFenceGateInWorld(FenceGateTile* tt, int x, int y,
 }
 
 bool TileRenderer::tesselateHopperInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     float br;
     if (SharedConstants::TEXTURE_LIGHTING) {
@@ -6782,7 +6763,7 @@ bool TileRenderer::tesselateHopperInWorld(Tile* tt, int x, int y, int z) {
 
 bool TileRenderer::tesselateHopperInWorld(Tile* tt, int x, int y, int z,
                                           int data, bool render) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
     int facing = HopperTile::getAttachedFace(data);
 
     // bounding box first
@@ -6790,35 +6771,18 @@ bool TileRenderer::tesselateHopperInWorld(Tile* tt, int x, int y, int z,
     setShape(0, bottom, 0, 1, 1, 1);
 
     if (render) {
-        t->begin();
         t->normal(0, -1, 0);
         renderFaceDown(tt, 0, 0, 0, getTexture(tt, 0, data));
-        t->end();
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tt, 0, 0, 0, getTexture(tt, 1, data));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, -1);
         renderNorth(tt, 0, 0, 0, getTexture(tt, 2, data));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, 1);
         renderSouth(tt, 0, 0, 0, getTexture(tt, 3, data));
-        t->end();
-
-        t->begin();
         t->normal(-1, 0, 0);
         renderWest(tt, 0, 0, 0, getTexture(tt, 4, data));
-        t->end();
-
-        t->begin();
         t->normal(1, 0, 0);
         renderEast(tt, 0, 0, 0, getTexture(tt, 5, data));
-        t->end();
     } else {
         tesselateBlockInWorld(tt, x, y, z);
     }
@@ -6854,30 +6818,16 @@ bool TileRenderer::tesselateHopperInWorld(Tile* tt, int x, int y, int z,
     float cWidth = 2.0f / 16.0f;
 
     if (render) {
-        t->begin();
         t->normal(1, 0, 0);
         renderEast(tt, -1.0f + cWidth, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(-1, 0, 0);
         renderWest(tt, 1.0f - cWidth, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, 0, 1);
         renderSouth(tt, 0, 0, -1.0f + cWidth, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, 0, -1);
         renderNorth(tt, 0, 0, 1.0f - cWidth, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tt, 0, -1.0f + bottom, 0, bottomTex);
-        t->end();
     } else {
         renderEast(tt, x - 1.0f + cWidth, y, z, hopperTex);
         renderWest(tt, x + 1.0f - cWidth, y, z, hopperTex);
@@ -6894,35 +6844,18 @@ bool TileRenderer::tesselateHopperInWorld(Tile* tt, int x, int y, int z,
     setShape(inset, lboxy0, inset, 1.0 - inset, lboxy1 - .002, 1.0 - inset);
 
     if (render) {
-        t->begin();
         t->normal(1, 0, 0);
         renderEast(tt, 0, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(-1, 0, 0);
         renderWest(tt, 0, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, 0, 1);
         renderSouth(tt, 0, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, 0, -1);
         renderNorth(tt, 0, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tt, 0, 0, 0, hopperTex);
-        t->end();
-
-        t->begin();
         t->normal(0, -1, 0);
         renderFaceDown(tt, 0, 0, 0, hopperTex);
-        t->end();
     } else {
         tesselateBlockInWorld(tt, x, y, z);
     }
@@ -6986,7 +6919,7 @@ bool TileRenderer::tesselateStairsInWorld(StairTile* tt, int x, int y, int z) {
 }
 
 bool TileRenderer::tesselateDoorInWorld(Tile* tt, int x, int y, int z) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     // skip rendering if the other half of the door is missing,
     // to avoid rendering doors that are about to be removed
@@ -7112,7 +7045,7 @@ bool TileRenderer::tesselateDoorInWorld(Tile* tt, int x, int y, int z) {
 void TileRenderer::renderFaceDown(Tile* tt, double x, double y, double z,
                                   Icon* tex) {
     FRAME_PROFILE_SCOPE(ChunkBlockEmit);
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (hasFixedTexture()) tex = fixedTexture;
     float u00 = tex->getU(tileShapeX0 * 16.0f, true);
@@ -7218,7 +7151,7 @@ void TileRenderer::renderFaceDown(Tile* tt, double x, double y, double z,
 void TileRenderer::renderFaceUp(Tile* tt, double x, double y, double z,
                                 Icon* tex) {
     FRAME_PROFILE_SCOPE(ChunkBlockEmit);
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (hasFixedTexture()) tex = fixedTexture;
     float u00 = tex->getU(tileShapeX0 * 16.0f, true);
@@ -7325,7 +7258,7 @@ void TileRenderer::renderFaceUp(Tile* tt, double x, double y, double z,
 void TileRenderer::renderNorth(Tile* tt, double x, double y, double z,
                                Icon* tex) {
     FRAME_PROFILE_SCOPE(ChunkBlockEmit);
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (hasFixedTexture()) tex = fixedTexture;
     double u00 = tex->getU(tileShapeX0 * 16.0f, true);
@@ -7437,7 +7370,7 @@ void TileRenderer::renderNorth(Tile* tt, double x, double y, double z,
 void TileRenderer::renderSouth(Tile* tt, double x, double y, double z,
                                Icon* tex) {
     FRAME_PROFILE_SCOPE(ChunkBlockEmit);
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (hasFixedTexture()) tex = fixedTexture;
     double u00 = tex->getU(tileShapeX0 * 16.0f, true);
@@ -7549,7 +7482,7 @@ void TileRenderer::renderSouth(Tile* tt, double x, double y, double z,
 void TileRenderer::renderWest(Tile* tt, double x, double y, double z,
                               Icon* tex) {
     FRAME_PROFILE_SCOPE(ChunkBlockEmit);
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (hasFixedTexture()) tex = fixedTexture;
     double u00 = tex->getU(tileShapeZ0 * 16.0f, true);
@@ -7661,7 +7594,7 @@ void TileRenderer::renderWest(Tile* tt, double x, double y, double z,
 void TileRenderer::renderEast(Tile* tt, double x, double y, double z,
                               Icon* tex) {
     FRAME_PROFILE_SCOPE(ChunkBlockEmit);
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (hasFixedTexture()) tex = fixedTexture;
     double u00 = tex->getU(tileShapeZ0 * 16.0f, true);
@@ -7772,7 +7705,7 @@ void TileRenderer::renderEast(Tile* tt, double x, double y, double z,
 
 void TileRenderer::renderCube(Tile* tile, float alpha) {
     int shape = tile->getRenderShape();
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     if (shape == Tile::SHAPE_BLOCK) {
         tile->updateDefaultShape();
@@ -7781,8 +7714,6 @@ void TileRenderer::renderCube(Tile* tile, float alpha) {
         float c11 = 1;
         float c2 = 0.8f;
         float c3 = 0.6f;
-
-        t->begin();
         t->color(c11, c11, c11, alpha);
         renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0));
         t->color(c10, c10, c10, alpha);
@@ -7793,16 +7724,13 @@ void TileRenderer::renderCube(Tile* tile, float alpha) {
         t->color(c3, c3, c3, alpha);
         renderWest(tile, 0, 0, 0, getTexture(tile, 4));
         renderEast(tile, 0, 0, 0, getTexture(tile, 5));
-
-        t->end();
-
         RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
     }
 }
 
 void TileRenderer::renderTile(Tile* tile, int data, float brightness,
                               float fAlpha, bool useCompiled) {
-    Tesselator* t = Tesselator::getInstance();
+    plce::world::MeshBuilder* t = current_builder_;
 
     bool isGrass = tile->id == Tile::grass_Id;
 
@@ -7840,11 +7768,8 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
         RenderPath.MatrixRotate((90)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
 
         RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-        t->begin();
         t->normal(0, -1, 0);
         renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0, data));
-        t->end();
-
         if (isGrass && setColor) {
             int col = tile->getColor(data);
             float red = ((col >> 16) & 0xff) / 255.0f;
@@ -7853,21 +7778,13 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
 
             RenderPath.StateSetColour(red * brightness, g * brightness, b * brightness, fAlpha);
         }
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1, data));
-        t->end();
-
         if (isGrass && setColor) {
             RenderPath.StateSetColour(brightness, brightness, brightness, fAlpha);
         }
-
-        t->begin();
         t->normal(0, 0, -1);
         renderNorth(tile, 0, 0, 0, getTexture(tile, 2, data));
-        t->end();
-
         if (isGrass && setColor) {
             int col = tile->getColor(data);
             float red = ((col >> 16) & 0xff) / 255.0f;
@@ -7875,20 +7792,12 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             float b = ((col) & 0xff) / 255.0f;
 
             RenderPath.StateSetColour(red * brightness, g * brightness, b * brightness, fAlpha);
-
-            t->begin();
             t->normal(0, 0, -1);
             renderNorth(tile, 0, 0, 0, GrassTile::getSideTextureOverlay());
-            t->end();
-
             RenderPath.StateSetColour(brightness, brightness, brightness, fAlpha);
         }
-
-        t->begin();
         t->normal(0, 0, 1);
         renderSouth(tile, 0, 0, 0, getTexture(tile, 3, data));
-        t->end();
-
         if (isGrass && setColor) {
             int col = tile->getColor(data);
             float red = ((col >> 16) & 0xff) / 255.0f;
@@ -7896,20 +7805,12 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             float b = ((col) & 0xff) / 255.0f;
 
             RenderPath.StateSetColour(red * brightness, g * brightness, b * brightness, fAlpha);
-
-            t->begin();
             t->normal(0, 0, 1);
             renderSouth(tile, 0, 0, 0, GrassTile::getSideTextureOverlay());
-            t->end();
-
             RenderPath.StateSetColour(brightness, brightness, brightness, fAlpha);
         }
-
-        t->begin();
         t->normal(-1, 0, 0);
         renderWest(tile, 0, 0, 0, getTexture(tile, 4, data));
-        t->end();
-
         if (isGrass && setColor) {
             int col = tile->getColor(data);
             float red = ((col >> 16) & 0xff) / 255.0f;
@@ -7917,20 +7818,12 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             float b = ((col) & 0xff) / 255.0f;
 
             RenderPath.StateSetColour(red * brightness, g * brightness, b * brightness, fAlpha);
-
-            t->begin();
             t->normal(-1, 0, 0);
             renderWest(tile, 0, 0, 0, GrassTile::getSideTextureOverlay());
-            t->end();
-
             RenderPath.StateSetColour(brightness, brightness, brightness, fAlpha);
         }
-
-        t->begin();
         t->normal(1, 0, 0);
         renderEast(tile, 0, 0, 0, getTexture(tile, 5, data));
-        t->end();
-
         if (isGrass && setColor) {
             int col = tile->getColor(data);
             float red = ((col >> 16) & 0xff) / 255.0f;
@@ -7938,74 +7831,46 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             float b = ((col) & 0xff) / 255.0f;
 
             RenderPath.StateSetColour(red * brightness, g * brightness, b * brightness, fAlpha);
-
-            t->begin();
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, GrassTile::getSideTextureOverlay());
-            t->end();
-
             RenderPath.StateSetColour(brightness, brightness, brightness, fAlpha);
         }
 
         RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
     } else if (shape == Tile::SHAPE_CROSS_TEXTURE) {
-        t->begin();
         t->normal(0, -1, 0);
         tesselateCrossTexture(tile, data, -0.5f, -0.5f, -0.5f, 1);
-        t->end();
     } else if (shape == Tile::SHAPE_STEM) {
-        t->begin();
         t->normal(0, -1, 0);
         tile->updateDefaultShape();
         tesselateStemTexture(tile, data, tileShapeY1, -0.5f, -0.5f, -0.5f);
-        t->end();
     } else if (shape == Tile::SHAPE_LILYPAD) {
-        t->begin();
         t->normal(0, -1, 0);
         tile->updateDefaultShape();
-        t->end();
     } else if (shape == Tile::SHAPE_CACTUS) {
         tile->updateDefaultShape();
         RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
         float s = 1 / 16.0f;
-        t->begin();
         t->normal(0, -1, 0);
         renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0));
-        t->end();
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, -1);
         t->addOffset(0, 0, s);
         renderNorth(tile, 0, 0, 0, getTexture(tile, 2));
         t->addOffset(0, 0, -s);
-        t->end();
-
-        t->begin();
         t->normal(0, 0, 1);
         t->addOffset(0, 0, -s);
         renderSouth(tile, 0, 0, 0, getTexture(tile, 3));
         t->addOffset(0, 0, s);
-        t->end();
-
-        t->begin();
         t->normal(-1, 0, 0);
         t->addOffset(s, 0, 0);
         renderWest(tile, 0, 0, 0, getTexture(tile, 4));
         t->addOffset(-s, 0, 0);
-        t->end();
-
-        t->begin();
         t->normal(1, 0, 0);
         t->addOffset(-s, 0, 0);
         renderEast(tile, 0, 0, 0, getTexture(tile, 5));
         t->addOffset(s, 0, 0);
-        t->end();
-
         RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
     } else if (shape == Tile::SHAPE_ENTITYTILE_ANIMATED) {
         RenderPath.MatrixRotate((90)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
@@ -8014,57 +7879,34 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
                                              setColor, useCompiled);
         (void)0;
     } else if (shape == Tile::SHAPE_ROWS) {
-        t->begin();
         t->normal(0, -1, 0);
         tesselateRowTexture(tile, data, -0.5f, -0.5f, -0.5f);
-        t->end();
     } else if (shape == Tile::SHAPE_TORCH) {
-        t->begin();
         t->normal(0, -1, 0);
         tesselateTorch(tile, -0.5f, -0.5f, -0.5f, 0, 0, 0);
-        t->end();
     } else if (shape == Tile::SHAPE_STAIRS) {
         for (int i = 0; i < 2; i++) {
             if (i == 0) setShape(0, 0, 0, 1, 1, 0.5f);
             if (i == 1) setShape(0, 0, 0.5f, 1, 0.5f, 1);
 
             RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-            t->begin();
             t->normal(0, -1, 0);
             renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0));
-            t->end();
-
-            t->begin();
             t->normal(0, 1, 0);
             renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, -1);
             renderNorth(tile, 0, 0, 0, getTexture(tile, 2));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, 1);
             renderSouth(tile, 0, 0, 0, getTexture(tile, 3));
-            t->end();
-
-            t->begin();
             t->normal(-1, 0, 0);
             renderWest(tile, 0, 0, 0, getTexture(tile, 4));
-            t->end();
-
-            t->begin();
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, getTexture(tile, 5));
-            t->end();
-
             RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
         }
     } else if (shape == Tile::SHAPE_EGG) {
         int y0 = 0;
         RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-        t->begin();
         for (int i = 0; i < 8; i++) {
             int ww = 0;
             int hh = 1;
@@ -8106,7 +7948,6 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, getTexture(tile, 5));
         }
-        t->end();
         RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
         setShape(0, 0, 0, 1, 1, 1);
     }
@@ -8125,36 +7966,18 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
                          1 + w * 2);
 
             RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-            t->begin();
             t->normal(0, -1, 0);
             renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0));
-            t->end();
-
-            t->begin();
             t->normal(0, 1, 0);
             renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, -1);
             renderNorth(tile, 0, 0, 0, getTexture(tile, 2));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, 1);
             renderSouth(tile, 0, 0, 0, getTexture(tile, 3));
-            t->end();
-
-            t->begin();
             t->normal(-1, 0, 0);
             renderWest(tile, 0, 0, 0, getTexture(tile, 4));
-            t->end();
-
-            t->begin();
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, getTexture(tile, 5));
-            t->end();
-
             RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
         }
         setShape(0, 0, 0, 1, 1, 1);
@@ -8167,36 +7990,18 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             if (i == 2) setShape(0.5f - w, .5f, 0, 0.5f + w, 1 - w, 1);
 
             RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-            t->begin();
             t->normal(0, -1, 0);
             renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0));
-            t->end();
-
-            t->begin();
             t->normal(0, 1, 0);
             renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, -1);
             renderNorth(tile, 0, 0, 0, getTexture(tile, 2));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, 1);
             renderSouth(tile, 0, 0, 0, getTexture(tile, 3));
-            t->end();
-
-            t->begin();
             t->normal(-1, 0, 0);
             renderWest(tile, 0, 0, 0, getTexture(tile, 4));
-            t->end();
-
-            t->begin();
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, getTexture(tile, 5));
-            t->end();
-
             RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
         }
     } else if (shape == Tile::SHAPE_WALL) {
@@ -8210,36 +8015,18 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
                          WallTile::POST_HEIGHT, .5f + WallTile::POST_WIDTH);
 
             RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-            t->begin();
             t->normal(0, -1, 0);
             renderFaceDown(tile, 0, 0, 0, tile->getTexture(0, data));
-            t->end();
-
-            t->begin();
             t->normal(0, 1, 0);
             renderFaceUp(tile, 0, 0, 0, tile->getTexture(1, data));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, -1);
             renderNorth(tile, 0, 0, 0, tile->getTexture(2, data));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, 1);
             renderSouth(tile, 0, 0, 0, tile->getTexture(3, data));
-            t->end();
-
-            t->begin();
             t->normal(-1, 0, 0);
             renderWest(tile, 0, 0, 0, tile->getTexture(4, data));
-            t->end();
-
-            t->begin();
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, tile->getTexture(5, data));
-            t->end();
-
             RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
         }
         setShape(0, 0, 0, 1, 1, 1);
@@ -8252,36 +8039,18 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
         setShape(0, 0, 0, 1, 13.0f / 16.0f, 1);
 
         RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-        t->begin();
         t->normal(0, -1, 0);
         renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0, 0));
-        t->end();
-
-        t->begin();
         t->normal(0, 1, 0);
         renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1, 0));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, -1);
         renderNorth(tile, 0, 0, 0, getTexture(tile, 2, 0));
-        t->end();
-
-        t->begin();
         t->normal(0, 0, 1);
         renderSouth(tile, 0, 0, 0, getTexture(tile, 3, 0));
-        t->end();
-
-        t->begin();
         t->normal(-1, 0, 0);
         renderWest(tile, 0, 0, 0, getTexture(tile, 4, 0));
-        t->end();
-
-        t->begin();
         t->normal(1, 0, 0);
         renderEast(tile, 0, 0, 0, getTexture(tile, 5, 0));
-        t->end();
-
         RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
 
         tile->updateDefaultShape();
@@ -8302,36 +8071,18 @@ void TileRenderer::renderTile(Tile* tile, int data, float brightness,
             }
 
             RenderPath.MatrixTranslate(-0.5f, -0.5f, -0.5f);
-            t->begin();
             t->normal(0, -1, 0);
             renderFaceDown(tile, 0, 0, 0, getTexture(tile, 0, data));
-            t->end();
-
-            t->begin();
             t->normal(0, 1, 0);
             renderFaceUp(tile, 0, 0, 0, getTexture(tile, 1, data));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, -1);
             renderNorth(tile, 0, 0, 0, getTexture(tile, 2, data));
-            t->end();
-
-            t->begin();
             t->normal(0, 0, 1);
             renderSouth(tile, 0, 0, 0, getTexture(tile, 3, data));
-            t->end();
-
-            t->begin();
             t->normal(-1, 0, 0);
             renderWest(tile, 0, 0, 0, getTexture(tile, 4, data));
-            t->end();
-
-            t->begin();
             t->normal(1, 0, 0);
             renderEast(tile, 0, 0, 0, getTexture(tile, 5, data));
-            t->end();
-
             RenderPath.MatrixTranslate(0.5f, 0.5f, 0.5f);
         }
         setShape(0, 0, 0, 1, 1, 1);

@@ -137,7 +137,14 @@ void ItemRenderer::render(std::shared_ptr<Entity> _itemEntity, double x,
             float br = SharedConstants::TEXTURE_LIGHTING
                            ? 1.0f
                            : itemEntity->getBrightness(a);
-            tileRenderer->renderTile(tile, item->getAuxValue(), br);
+            {
+                plce::world::MeshBuilder mb_tile(
+                    plce::world::MaterialKind::alpha_test, 0);
+                tileRenderer->set_builder(&mb_tile);
+                tileRenderer->renderTile(tile, item->getAuxValue(), br);
+                tileRenderer->set_builder(nullptr);
+                mb_tile.flush();
+            }
             RenderPath.MatrixPop();
         }
     } else if (item->getIconType() == Icon::TYPE_ITEM &&
@@ -393,7 +400,14 @@ void ItemRenderer::renderGuiItem(Font* font, Textures* textures,
         // the rest of the block
         RenderPath.MatrixRotate((-90.0f)*(std::numbers::pi_v<float>/180.f), 0.0f, 1.0f, 0.0f);
 
-        tileRenderer->renderTile(tile, itemAuxValue, 1, fAlpha, useCompiled);
+        {
+            plce::world::MeshBuilder mb_tile(
+                plce::world::MaterialKind::alpha_test, 0);
+            tileRenderer->set_builder(&mb_tile);
+            tileRenderer->renderTile(tile, itemAuxValue, 1, fAlpha, useCompiled);
+            tileRenderer->set_builder(nullptr);
+            mb_tile.flush();
+        }
 
         RenderPath.MatrixPop();
 

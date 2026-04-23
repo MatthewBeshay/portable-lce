@@ -78,15 +78,25 @@ void ItemFrameRenderer::drawFrame(std::shared_ptr<ItemFrame> itemFrame) {
     float width = 12.0f / 16.0f;
     float widthHalf = width / 2.0f;
 
+    // Each frame face is a separate matrix scope + separate draw,
+    // so scope the MeshBuilder around each renderTile individually.
+    auto draw_tile_scope = [this](Tile* t) {
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::alpha_test, 0);
+        tileRenderer->set_builder(&mb);
+        tileRenderer->renderTile(t, 0, 1);
+        tileRenderer->set_builder(nullptr);
+        mb.flush();
+    };
+
     // Back
     RenderPath.MatrixPush();
-
     tileRenderer->setFixedShape(0, 0.5f - widthHalf + 1.0f / 16.0f,
                                 0.5f - widthHalf + 1.0f / 16.0f, depth * .5f,
                                 0.5f + widthHalf - 1.0f / 16.0f,
                                 0.5f + widthHalf - 1.0f / 16.0f);
     tileRenderer->setFixedTexture(backTexture);
-    tileRenderer->renderTile(wood, 0, 1);
+    draw_tile_scope(wood);
     tileRenderer->clearFixedTexture();
     tileRenderer->clearFixedShape();
     RenderPath.MatrixPop();
@@ -99,7 +109,7 @@ void ItemFrameRenderer::drawFrame(std::shared_ptr<ItemFrame> itemFrame) {
     tileRenderer->setFixedShape(0, 0.5f - widthHalf, 0.5f - widthHalf,
                                 depth + 0.0001f, depth + 0.5f - widthHalf,
                                 0.5f + widthHalf);
-    tileRenderer->renderTile(wood, 0, 1);
+    draw_tile_scope(wood);
     RenderPath.MatrixPop();
 
     // Top
@@ -107,21 +117,21 @@ void ItemFrameRenderer::drawFrame(std::shared_ptr<ItemFrame> itemFrame) {
     tileRenderer->setFixedShape(0, 0.5f + widthHalf - depth, 0.5f - widthHalf,
                                 depth + 0.0001f, 0.5f + widthHalf,
                                 0.5f + widthHalf);
-    tileRenderer->renderTile(wood, 0, 1);
+    draw_tile_scope(wood);
     RenderPath.MatrixPop();
 
     // Right
     RenderPath.MatrixPush();
     tileRenderer->setFixedShape(0, 0.5f - widthHalf, 0.5f - widthHalf, depth,
                                 0.5f + widthHalf, depth + 0.5f - widthHalf);
-    tileRenderer->renderTile(wood, 0, 1);
+    draw_tile_scope(wood);
     RenderPath.MatrixPop();
 
     // Left
     RenderPath.MatrixPush();
     tileRenderer->setFixedShape(0, 0.5f - widthHalf, 0.5f + widthHalf - depth,
                                 depth, 0.5f + widthHalf, 0.5f + widthHalf);
-    tileRenderer->renderTile(wood, 0, 1);
+    draw_tile_scope(wood);
     RenderPath.MatrixPop();
 
     tileRenderer->clearFixedShape();

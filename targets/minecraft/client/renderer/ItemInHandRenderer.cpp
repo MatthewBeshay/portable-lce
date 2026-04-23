@@ -358,12 +358,17 @@ void ItemInHandRenderer::renderItem(std::shared_ptr<LivingEntity> mob,
         TileRenderer::canRender(tile->getRenderShape())) {
         minecraft->textures->bindTexture(
             minecraft->textures->getTextureLocation(Icon::TYPE_TERRAIN));
+        plce::world::MeshBuilder mb_tile(
+            plce::world::MaterialKind::alpha_test, 0);
+        tileRenderer->set_builder(&mb_tile);
         tileRenderer->renderTile(
             Tile::tiles[item->id], item->getAuxValue(),
             SharedConstants::TEXTURE_LIGHTING
                 ? 1.0f
                 : mob->getBrightness(
                       1));  // 4J - change brought forward from 1.8.2
+        tileRenderer->set_builder(nullptr);
+        mb_tile.flush();
     } else {
         Icon* icon = mob->getItemInHandIcon(item, layer);
         if (icon == nullptr) {

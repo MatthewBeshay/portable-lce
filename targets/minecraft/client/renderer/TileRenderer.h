@@ -31,6 +31,8 @@ class HopperTile;
 class Icon;
 class Minecraft;
 
+namespace plce::world { class MeshBuilder; }
+
 class TileRenderer {
     friend class FallingTileRenderer;
 
@@ -39,6 +41,15 @@ private:
     Icon* fixedTexture;
     bool xFlipTexture;
     bool noCulling;
+    // Caller binds the active MeshBuilder before invoking any tesselate*
+    // method; all internal vertex emission goes through it. Matches the
+    // legacy `Tesselator* t = Tesselator::getInstance()` pattern that
+    // every method opened with — just routes to plce::world now.
+    plce::world::MeshBuilder* current_builder_ = nullptr;
+
+public:
+    void set_builder(plce::world::MeshBuilder* mb) { current_builder_ = mb; }
+    plce::world::MeshBuilder* builder() const { return current_builder_; }
 
 public:
     static bool fancy;

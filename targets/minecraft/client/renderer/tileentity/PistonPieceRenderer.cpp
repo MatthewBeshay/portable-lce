@@ -3,8 +3,8 @@
 #include <memory>
 
 #include "minecraft/client/Lighting.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/TileRenderer.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
 #include "minecraft/client/resources/ResourceLocation.h"
@@ -37,32 +37,25 @@ void PistonPieceRenderer::render(std::shared_ptr<TileEntity> _entity, double x,
                 // async to main thread and so we can have to render these with
                 // progress of 1
     {
-        Tesselator* t = Tesselator::getInstance();
         bindTexture(&TextureAtlas::LOCATION_BLOCKS);
 
         Lighting::turnOff();
-        RenderPath.StateSetColour(1, 1, 1,
-                  1);  // 4J added - this wouldn't be needed in real opengl as
-                       // the block render has vertex colours and so this isn't
-                       // use, but our pretend gl always modulates with this
-
+        RenderPath.StateSetColour(1, 1, 1, 1);
         RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
         RenderPath.StateSetBlendEnable(true);
         RenderPath.StateSetFaceCull(false);
 
-        t->begin();
-
-        t->offset((float)x - entity->x + entity->getXOff(a),
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
+        mb.offset((float)x - entity->x + entity->getXOff(a),
                   (float)y - entity->y + entity->getYOff(a),
                   (float)z - entity->z + entity->getZOff(a));
-        t->color(1, 1, 1);
+        mb.color(uint8_t(255), uint8_t(255), uint8_t(255));
+        tileRenderer->set_builder(&mb);
         if (tile == Tile::pistonExtension && entity->getProgress(a) < 0.5f) {
-            // extending arms may appear through the base block
             tileRenderer->tesselatePistonArmNoCulling(tile, entity->x,
                                                       entity->y, entity->z,
                                                       false, entity->getData());
         } else if (entity->isSourcePiston() && !entity->isExtending()) {
-            // special case for withdrawing the arm back into the base
             Tile::pistonExtension->setOverrideTopTexture(
                 ((PistonBaseTile*)tile)->getPlatformTexture());
             tileRenderer->tesselatePistonArmNoCulling(
@@ -70,7 +63,7 @@ void PistonPieceRenderer::render(std::shared_ptr<TileEntity> _entity, double x,
                 entity->getProgress(a) < 0.5f, entity->getData());
             Tile::pistonExtension->clearOverrideTopTexture();
 
-            t->offset((float)x - entity->x, (float)y - entity->y,
+            mb.offset((float)x - entity->x, (float)y - entity->y,
                       (float)z - entity->z);
             tileRenderer->tesselatePistonBaseForceExtended(
                 tile, entity->x, entity->y, entity->z, entity->getData());
@@ -79,8 +72,9 @@ void PistonPieceRenderer::render(std::shared_ptr<TileEntity> _entity, double x,
                                                     entity->z,
                                                     entity->getData(), entity);
         }
-        t->offset(0, 0, 0);
-        t->end();
+        tileRenderer->set_builder(nullptr);
+        mb.offset(0, 0, 0);
+        mb.flush();
 
         Lighting::turnOn();
     }

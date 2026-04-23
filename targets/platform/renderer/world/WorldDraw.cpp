@@ -228,6 +228,10 @@ void MeshBuilder::offset(float xo, float yo, float zo) {
     impl_->ox = xo; impl_->oy = yo; impl_->oz = zo;
 }
 
+void MeshBuilder::addOffset(float dx, float dy, float dz) {
+    impl_->ox += dx; impl_->oy += dy; impl_->oz += dz;
+}
+
 void MeshBuilder::vertex(float x, float y, float z) {
     vertexUV(x, y, z, impl_->cur_u, impl_->cur_v);
 }

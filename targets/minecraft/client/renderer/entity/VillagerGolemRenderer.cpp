@@ -9,6 +9,7 @@
 #include "minecraft/client/model/geom/ModelPart.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/TileRenderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/entity/MobRenderer.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
 #include "minecraft/client/resources/ResourceLocation.h"
@@ -84,7 +85,14 @@ void VillagerGolemRenderer::additionalRendering(
 
     RenderPath.StateSetColour(1, 1, 1, 1);
     bindTexture(&TextureAtlas::LOCATION_BLOCKS);  // TODO: By Icon
-    tileRenderer->renderTile(Tile::rose, 0, 1);
+    {
+        plce::world::MeshBuilder mb_tile(
+            plce::world::MaterialKind::alpha_test, 0);
+        tileRenderer->set_builder(&mb_tile);
+        tileRenderer->renderTile(Tile::rose, 0, 1);
+        tileRenderer->set_builder(nullptr);
+        mb_tile.flush();
+    }
     RenderPath.MatrixPop();
     (void)0;
 }
