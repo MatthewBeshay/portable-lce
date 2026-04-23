@@ -1652,6 +1652,15 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     pc.nm1.w    = dc.uv_scale[1];
     pc.nm2.w    = dc.uv_offset[0];
     pc.tex_mv.x = dc.uv_offset[1];
+    // Same story for state_colour: fill_push_constants multiplies the
+    // live state_colour_ register into tint, which means queued
+    // ui_overlay / world_draws DrawCalls that drain later in the frame
+    // get retroactively tinted by whichever legacy StateSetColour call
+    // fired last (e.g. a Shiggy-UI button-hover yellow overlay). Make
+    // the DrawCall fully self-describing — pc.state_colour is just
+    // dc.tint_color.
+    pc.state_colour = glm::vec4(dc.tint_color[0], dc.tint_color[1],
+                                dc.tint_color[2], dc.tint_color[3]);
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).
     // For screen-space UI overlays the transform is almost always identity
