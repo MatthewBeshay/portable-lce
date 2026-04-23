@@ -45,7 +45,6 @@ void InventoryScreen::render(int xm, int ym, float a) {
 void InventoryScreen::renderBg(float a) {
 #ifdef ENABLE_JAVA_GUIS
     int tex = minecraft->textures->loadTexture(TN_GUI_INVENTORY);
-    RenderPath.StateSetColour(1, 1, 1, 1);
     minecraft->textures->bind(tex);
     int xo = (width - imageWidth) / 2;
     int yo = (height - imageHeight) / 2;

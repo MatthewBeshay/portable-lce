@@ -37,7 +37,6 @@ void CraftingScreen::renderLabels() {
 
 void CraftingScreen::renderBg(float a) {
 #ifdef ENABLE_JAVA_GUIS
-    RenderPath.StateSetColour(1, 1, 1, 1);
     minecraft->textures->bindTexture(&GUI_CRAFTING_LOCATION);
     int xo = (width - imageWidth) / 2;
     int yo = (height - imageHeight) / 2;

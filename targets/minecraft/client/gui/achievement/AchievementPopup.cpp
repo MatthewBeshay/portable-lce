@@ -115,7 +115,6 @@ void AchievementPopup::render() {
     int xx = width - 160;
     int yy = 0 - (int)(yo * 36);
     int tex = mc->textures->loadTexture(TN_ACHIEVEMENT_BG);
-    RenderPath.StateSetColour(1, 1, 1, 1);
     RenderPath.StateSetTextureEnable(true);
     RenderPath.TextureBind(tex);
     RenderPath.StateSetLightingEnable(false);

@@ -53,7 +53,6 @@ void HorseInventoryScreen::render(int xm, int ym, float a) {
 
 void HorseInventoryScreen::renderBg(float a) {
 #ifdef ENABLE_JAVA_GUIS
-    RenderPath.StateSetColour(1, 1, 1, 1);
     minecraft->textures->bindTexture(&GUI_HORSE_LOCATION);
 
     int xo = (width - imageWidth) / 2;

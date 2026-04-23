@@ -436,7 +436,6 @@ void CreativeInventoryScreen::renderBg(float a) {
     }
 
     // Load and render main creative inventory background
-    RenderPath.StateSetColour(1, 1, 1, 1);
     minecraft->textures->bind((selectedTabIndex == 5) ? searchTex : itemsTex);
     blit(x, y, 0, 0, imageWidth, imageHeight);
 
@@ -562,7 +561,6 @@ void CreativeInventoryScreen::renderTab(int tab) {
     // Render tab background
     RenderPath.StateSetLightingEnable(false);
     minecraft->textures->bind(tex);
-    RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1.0f);
     blit(x, y, tabColumn * 28, sy, 28, 32);
 
     // Render tab icon

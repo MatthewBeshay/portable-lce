@@ -56,7 +56,6 @@ void AbstractContainerScreen::render(int xm, int ym, float a) {
     RenderPath.MatrixPush();
     RenderPath.MatrixTranslate((float)xo, (float)yo, 0);
 
-    RenderPath.StateSetColour(1, 1, 1, 1);
     (void)0;
     Lighting::turnOn();
 

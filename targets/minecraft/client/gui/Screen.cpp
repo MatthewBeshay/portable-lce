@@ -192,7 +192,6 @@ void Screen::renderDirtBackground(int vo) {
     RenderPath.StateSetFogEnable(false);
     Tesselator* t = Tesselator::getInstance();
     RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_GUI_BACKGROUND));
-    RenderPath.StateSetColour(1, 1, 1, 1);
     float s = 32;
     t->begin();
     t->color(0x404040);

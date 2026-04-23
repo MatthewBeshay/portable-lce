@@ -164,7 +164,6 @@ void BeaconScreen::renderLabels() {
 
 void BeaconScreen::renderBg(float a) {
 #ifdef ENABLE_JAVA_GUIS
-    RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1.0f);
     minecraft->textures->bindTexture(&GUI_BEACON_LOCATION);
     int xo = (width - imageWidth) / 2;
     int yo = (height - imageHeight) / 2;

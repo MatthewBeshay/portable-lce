@@ -140,7 +140,6 @@ void EnchantmentScreen::render(int xm, int ym, float a) {
 
 void EnchantmentScreen::renderBg(float a) {
 #ifdef ENABLE_JAVA_GUIS
-    RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1.0f);
     Minecraft::GetInstance()->textures->bindTexture(&GUI_ENCHANT_LOCATION);
     int xo = (width - imageWidth) / 2;
     int yo = (height - imageHeight) / 2;
@@ -205,7 +204,6 @@ void EnchantmentScreen::renderBg(float a) {
     RenderPath.MatrixPop();
 
     Minecraft::GetInstance()->textures->bindTexture(&GUI_ENCHANT_LOCATION);
-    RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1.0f);
 
     for (int i = 0; i < 3; ++i) {
         int cost = enchantMenu->costs[i];
