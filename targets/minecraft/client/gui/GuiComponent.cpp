@@ -5,7 +5,6 @@
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/gui/Font.h"
 #include "minecraft/client/gui/Gui.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "platform/renderer/IRenderPath.h"
 #include "platform/renderer/renderer.h"
 #include "platform/renderer/ui/UiDraw.h"
