@@ -25,7 +25,6 @@
 #include "minecraft/client/multiplayer/MultiPlayerLevel.h"
 #include "minecraft/client/multiplayer/MultiPlayerLocalPlayer.h"
 #include "minecraft/client/renderer/GameRenderer.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/entity/EnderDragonRenderer.h"
 #include "minecraft/client/renderer/entity/EntityRenderDispatcher.h"
