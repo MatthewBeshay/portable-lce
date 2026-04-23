@@ -22,7 +22,7 @@
 #include "minecraft/client/gui/JoinMultiplayerScreen.h"
 #include "minecraft/client/gui/OptionsScreen.h"
 #include "minecraft/client/gui/SelectWorldScreen.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/locale/Language.h"
@@ -187,8 +187,8 @@ void TitleScreen::buttonClicked(Button* button) {
 void TitleScreen::renderPanorama(float a) {
 #ifdef ENABLE_JAVA_GUIS
 
-    Tesselator* t = Tesselator::getInstance();
 #ifdef CLASSIC_PANORAMA
+    Tesselator* t = Tesselator::getInstance();
     RenderPath.MatrixMode(rp::MatrixStack::projection);
     RenderPath.MatrixPush();
     RenderPath.MatrixSetIdentity();
@@ -304,13 +304,16 @@ void TitleScreen::renderPanorama(float a) {
 
     float uMax = off + (texWidth / 1748.0f);
 
-    t->begin(0x0007);
-    t->color(0xffffff, 255);
-    t->vertexUV(0, yOff + texHeight, 0, off, 1.0f);
-    t->vertexUV(texWidth, yOff + texHeight, 0, uMax, 1.0f);
-    t->vertexUV(texWidth, yOff, 0, uMax, 0.0f);
-    t->vertexUV(0, yOff, 0, off, 0.0f);
-    t->end();
+    {
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::transparent, 0);
+        mb.color(0xffffff, 255);
+        mb.vertexUV(0,        yOff + texHeight, 0, off,  1.0f);
+        mb.vertexUV(texWidth, yOff + texHeight, 0, uMax, 1.0f);
+        mb.vertexUV(texWidth, yOff,             0, uMax, 0.0f);
+        mb.vertexUV(0,        yOff,             0, off,  0.0f);
+        mb.flush();
+    }
 
     RenderPath.StateSetDepthMask(true);
     RenderPath.StateSetBlendEnable(false);
@@ -388,8 +391,6 @@ void TitleScreen::render(int xm, int ym, float a) {
     // 4jcraft: panorama
     renderSkybox(a);
 
-    Tesselator* t = Tesselator::getInstance();
-
     int logoWidth = 155 + 119;
     int logoX = width / 2 - logoWidth / 2;
     int logoY = 30;
@@ -403,7 +404,6 @@ void TitleScreen::render(int xm, int ym, float a) {
     RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_TITLE_MCLOGO));
     blit(logoX + 0, logoY + 0, 0, 0, 155, 44);
     blit(logoX + 155, logoY + 0, 0, 45, 155, 44);
-    t->color(0xffffff);
     RenderPath.MatrixPush();
     RenderPath.MatrixTranslate((float)width / 2 + 90, 70, 0);
 
