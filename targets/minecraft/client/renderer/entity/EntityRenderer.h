@@ -4,7 +4,6 @@
 
 #include "minecraft/client/model/geom/Model.h"
 #include "minecraft/client/renderer/ItemInHandRenderer.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/TileRenderer.h"
 #include "minecraft/client/resources/ResourceLocation.h"
@@ -19,6 +18,8 @@ class EntityRenderDispatcher;
 class Font;
 class Model;
 class TileRenderer;
+
+namespace plce::world { class MeshBuilder; }
 
 // 4J - this was originally a generic of type EntityRenderer<T extends Entity>
 class EntityRenderer {
@@ -66,7 +67,8 @@ private:
                               double z, float pow, float a);
 
     virtual Level* getLevel();
-    virtual void renderTileShadow(Tile* tt, double x, double y, double z,
+    virtual void renderTileShadow(plce::world::MeshBuilder& mb,
+                                  Tile* tt, double x, double y, double z,
                                   int xt, int yt, int zt, float pow, float r,
                                   double xo, double yo, double zo);
 

@@ -6,7 +6,6 @@
 #include "EntityRenderDispatcher.h"
 #include "java/Class.h"
 #include "minecraft/client/Options.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/TileRenderer.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
@@ -20,6 +19,7 @@
 #include "minecraft/world/level/tile/Tile.h"
 #include "minecraft/world/phys/AABB.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 ResourceLocation EntityRenderer::SHADOW_LOCATION =
@@ -92,7 +92,6 @@ void EntityRenderer::renderFlame(std::shared_ptr<Entity> e, double x, double y,
     float s = e->bbWidth * 1.4f;
     RenderPath.MatrixScale(s, s, s);
     bindTexture(&TextureAtlas::LOCATION_BLOCKS);
-    Tesselator* t = Tesselator::getInstance();
 
     float r = 0.5f;
     float xo = 0.0f;
@@ -106,7 +105,7 @@ void EntityRenderer::renderFlame(std::shared_ptr<Entity> e, double x, double y,
     RenderPath.StateSetColour(1, 1, 1, 1);
     float zo = 0;
     int ss = 0;
-    t->begin();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
     while (h > 0) {
         Icon* tex = nullptr;
         if (ss % 2 == 0) {
@@ -125,21 +124,17 @@ void EntityRenderer::renderFlame(std::shared_ptr<Entity> e, double x, double y,
             u1 = u0;
             u0 = tmp;
         }
-        t->vertexUV((float)(r - xo), (float)(0 - yo), (float)(zo), (float)(u1),
-                    (float)(v1));
-        t->vertexUV((float)(-r - xo), (float)(0 - yo), (float)(zo), (float)(u0),
-                    (float)(v1));
-        t->vertexUV((float)(-r - xo), (float)(1.4f - yo), (float)(zo),
-                    (float)(u0), (float)(v0));
-        t->vertexUV((float)(r - xo), (float)(1.4f - yo), (float)(zo),
-                    (float)(u1), (float)(v0));
+        mb.vertexUV(r - xo,  0 - yo,    zo, u1, v1);
+        mb.vertexUV(-r - xo, 0 - yo,    zo, u0, v1);
+        mb.vertexUV(-r - xo, 1.4f - yo, zo, u0, v0);
+        mb.vertexUV(r - xo,  1.4f - yo, zo, u1, v0);
         h -= 0.45f;
         yo -= 0.45f;
         r *= 0.9f;
         zo += 0.03f;
         ss++;
     }
-    t->end();
+    mb.flush();
     RenderPath.MatrixPop();
     RenderPath.StateSetLightingEnable(true);
 }
@@ -191,14 +186,13 @@ void EntityRenderer::renderShadow(std::shared_ptr<Entity> e, double x, double y,
     double yo = y - ey;
     double zo = z - ez;
 
-    Tesselator* tt = Tesselator::getInstance();
-    tt->begin();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
     for (int xt = x0; xt <= x1; xt++)
         for (int yt = y0; yt <= y1; yt++)
             for (int zt = z0; zt <= z1; zt++) {
                 int t = level->getTile(xt, yt - 1, zt);
                 if (t > 0 && level->getRawBrightness(xt, yt, zt) > 3) {
-                    renderTileShadow(Tile::tiles[t], x,
+                    renderTileShadow(mb, Tile::tiles[t], x,
                                      y + e->getShadowHeightOffs() +
                                          fYLocalPlayerShadowOffset,
                                      z, xt, yt, zt, pow, r, xo,
@@ -207,7 +201,7 @@ void EntityRenderer::renderShadow(std::shared_ptr<Entity> e, double x, double y,
                                      zo);
                 }
             }
-    tt->end();
+    mb.flush();
 
     RenderPath.StateSetColour(1, 1, 1, 1);
     RenderPath.StateSetBlendEnable(false);
@@ -217,11 +211,11 @@ void EntityRenderer::renderShadow(std::shared_ptr<Entity> e, double x, double y,
 
 Level* EntityRenderer::getLevel() { return entityRenderDispatcher->level; }
 
-void EntityRenderer::renderTileShadow(Tile* tt, double x, double y, double z,
+void EntityRenderer::renderTileShadow(plce::world::MeshBuilder& mb,
+                                      Tile* tt, double x, double y, double z,
                                       int xt, int yt, int zt, float pow,
                                       float r, double xo, double yo,
                                       double zo) {
-    Tesselator* t = Tesselator::getInstance();
     if (!tt->isCubeShaped()) return;
 
     double a = ((pow - (y - (yt + yo)) / 2) * 0.5f) *
@@ -229,8 +223,7 @@ void EntityRenderer::renderTileShadow(Tile* tt, double x, double y, double z,
     if (a < 0) return;
     if (a > 1) a = 1;
 
-    t->color(1.0f, 1.0f, 1.0f, (float)a);
-    // RenderPath.StateSetColour(1, 1, 1, (float) a);
+    mb.color(1.0f, 1.0f, 1.0f, (float)a);
 
     double x0 = xt + tt->getShapeX0() + xo;
     double x1 = xt + tt->getShapeX1() + xo;
@@ -243,127 +236,113 @@ void EntityRenderer::renderTileShadow(Tile* tt, double x, double y, double z,
     float v0 = (float)((z - (z0)) / 2 / r + 0.5f);
     float v1 = (float)((z - (z1)) / 2 / r + 0.5f);
 
-    // u0 = 0;
-    // v0 = 0;
-    // u1 = 1;
-    // v1 = 1;
-
-    t->vertexUV((float)(x0), (float)(y0), (float)(z0), (float)(u0),
-                (float)(v0));
-    t->vertexUV((float)(x0), (float)(y0), (float)(z1), (float)(u0),
-                (float)(v1));
-    t->vertexUV((float)(x1), (float)(y0), (float)(z1), (float)(u1),
-                (float)(v1));
-    t->vertexUV((float)(x1), (float)(y0), (float)(z0), (float)(u1),
-                (float)(v0));
+    mb.vertexUV((float)x0, (float)y0, (float)z0, u0, v0);
+    mb.vertexUV((float)x0, (float)y0, (float)z1, u0, v1);
+    mb.vertexUV((float)x1, (float)y0, (float)z1, u1, v1);
+    mb.vertexUV((float)x1, (float)y0, (float)z0, u1, v0);
 }
 
 void EntityRenderer::render(AABB* bb, double xo, double yo, double zo) {
     RenderPath.StateSetTextureEnable(false);
-    Tesselator* t = Tesselator::getInstance();
     RenderPath.StateSetColour(1, 1, 1, 1);
-    t->begin();
-    t->offset((float)xo, (float)yo, (float)zo);
-    t->normal(0, 0, -1);
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z0));
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
+    mb.offset((float)xo, (float)yo, (float)zo);
+    mb.normal(0, 0, -1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z0);
 
-    t->normal(0, 0, 1);
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z1));
+    mb.normal(0, 0, 1);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z1);
 
-    t->normal(0, -1, 0);
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z1));
+    mb.normal(0, -1, 0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z1);
 
-    t->normal(0, 1, 0);
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z0));
+    mb.normal(0, 1, 0);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z0);
 
-    t->normal(-1, 0, 0);
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z0));
+    mb.normal(-1, 0, 0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z0);
 
-    t->normal(1, 0, 0);
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z1));
-    t->offset(0, 0, 0);
-    t->end();
+    mb.normal(1, 0, 0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z1);
+    mb.flush();
     RenderPath.StateSetTextureEnable(true);
-    // model.render(0, 1)
 }
 
 void EntityRenderer::renderFlat(AABB* bb) {
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x0), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x0), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z0));
-    t->vertex((float)(bb->x1), (float)(bb->y1), (float)(bb->z1));
-    t->vertex((float)(bb->x1), (float)(bb->y0), (float)(bb->z1));
-    t->end();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x0, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x0, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z0);
+    mb.vertex((float)bb->x1, (float)bb->y1, (float)bb->z1);
+    mb.vertex((float)bb->x1, (float)bb->y0, (float)bb->z1);
+    mb.flush();
 }
 
 void EntityRenderer::renderFlat(float x0, float y0, float z0, float x1,
                                 float y1, float z1) {
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-    t->vertex(x0, y1, z0);
-    t->vertex(x1, y1, z0);
-    t->vertex(x1, y0, z0);
-    t->vertex(x0, y0, z0);
-    t->vertex(x0, y0, z1);
-    t->vertex(x1, y0, z1);
-    t->vertex(x1, y1, z1);
-    t->vertex(x0, y1, z1);
-    t->vertex(x0, y0, z0);
-    t->vertex(x1, y0, z0);
-    t->vertex(x1, y0, z1);
-    t->vertex(x0, y0, z1);
-    t->vertex(x0, y1, z1);
-    t->vertex(x1, y1, z1);
-    t->vertex(x1, y1, z0);
-    t->vertex(x0, y1, z0);
-    t->vertex(x0, y0, z1);
-    t->vertex(x0, y1, z1);
-    t->vertex(x0, y1, z0);
-    t->vertex(x0, y0, z0);
-    t->vertex(x1, y0, z0);
-    t->vertex(x1, y1, z0);
-    t->vertex(x1, y1, z1);
-    t->vertex(x1, y0, z1);
-    t->end();
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
+    mb.vertex(x0, y1, z0);
+    mb.vertex(x1, y1, z0);
+    mb.vertex(x1, y0, z0);
+    mb.vertex(x0, y0, z0);
+    mb.vertex(x0, y0, z1);
+    mb.vertex(x1, y0, z1);
+    mb.vertex(x1, y1, z1);
+    mb.vertex(x0, y1, z1);
+    mb.vertex(x0, y0, z0);
+    mb.vertex(x1, y0, z0);
+    mb.vertex(x1, y0, z1);
+    mb.vertex(x0, y0, z1);
+    mb.vertex(x0, y1, z1);
+    mb.vertex(x1, y1, z1);
+    mb.vertex(x1, y1, z0);
+    mb.vertex(x0, y1, z0);
+    mb.vertex(x0, y0, z1);
+    mb.vertex(x0, y1, z1);
+    mb.vertex(x0, y1, z0);
+    mb.vertex(x0, y0, z0);
+    mb.vertex(x1, y0, z0);
+    mb.vertex(x1, y1, z0);
+    mb.vertex(x1, y1, z1);
+    mb.vertex(x1, y0, z1);
+    mb.flush();
 }
 
 void EntityRenderer::init(EntityRenderDispatcher* entityRenderDispatcher) {
