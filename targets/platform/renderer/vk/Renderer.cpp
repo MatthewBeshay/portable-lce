@@ -1645,6 +1645,13 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     const uint32_t sampler_idx = tex_mgr_.sampler_idx_for(int(tex_id)) & 0x3u;
     mat_flags |= (sampler_idx << 30u);
     pc.flags = mat_flags;
+    // DrawCall carries its own texture transform — override the live
+    // tex_stack values fill_push_constants pulled in, so migrated draws
+    // don't inherit a stale legacy TextureMatrix.
+    pc.nm0.w    = dc.uv_scale[0];
+    pc.nm1.w    = dc.uv_scale[1];
+    pc.nm2.w    = dc.uv_offset[0];
+    pc.tex_mv.x = dc.uv_offset[1];
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).
     // For screen-space UI overlays the transform is almost always identity

@@ -248,6 +248,13 @@ struct DrawCall {
     // need finer-grained thresholds (0.01 / 0.1 / 1/255) on the same
     // base material. Negative means "inherit from material".
     float alpha_ref_override = -1.0f;
+    // Texture transform (scale + offset) applied to sampled UVs in the
+    // shader: v_uv = a_uv * uv_scale + uv_offset. Default identity.
+    // Captures what the legacy TextureMatrix stack would otherwise carry;
+    // modern DrawCall-path callers fill it explicitly so the draw stays
+    // self-describing (record_draw_call overrides the live tex_stack).
+    float uv_scale[2]  = {1.0f, 1.0f};
+    float uv_offset[2] = {0.0f, 0.0f};
 };
 
 struct ChunkDrawCall {

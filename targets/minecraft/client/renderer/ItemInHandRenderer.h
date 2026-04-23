@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include "platform/renderer/IRenderPath.h"
+
 class Minecraft;
 class ItemInstance;
 class Minimap;
@@ -24,7 +26,12 @@ private:
     float height;
     float oHeight;
     TileRenderer* tileRenderer;
-    static int listItem, listGlint, listTerrain;
+    // listItem / listTerrain are 3D cube meshes precompiled once for
+    // item / terrain icon rendering in first- and third-person view;
+    // listGlint is the enchant-foil overlay. All three were CBuff ids
+    // registered via RenderPath.CBuffStart in the legacy renderer and
+    // are now persistent MeshHandles registered via Renderer::create_mesh.
+    static rp::MeshHandle listItem, listGlint, listTerrain;
 
 public:
     // 4J Stu - Made public so we can use it from ItemFramRenderer

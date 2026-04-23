@@ -25,6 +25,8 @@ struct MaterialTable {
     rp::MaterialHandle font_glyph{};
     rp::MaterialHandle fullscreen_overlay{};
     rp::MaterialHandle vignette{};
+    rp::MaterialHandle item_in_hand{};         // listItem / listTerrain 3D mesh
+    rp::MaterialHandle item_in_hand_glint{};   // listGlint enchant overlay
 };
 
 MaterialTable s_materials;
@@ -43,6 +45,22 @@ void snapshot_transform(float out[16]) {
     std::memcpy(&m[0][0], mv,   sizeof(float) * 16);
     const glm::mat4 pm = p * m;
     std::memcpy(out, &pm[0][0], sizeof(float) * 16);
+}
+
+// Capture the live texture-matrix stack into the scale + translation
+// form the vertex shader reads (v_uv = a_uv * scale + offset). The
+// basic shader only uses the diagonal + xy translation of the texture
+// matrix — rotation/shear on the matrix were silently ignored on the
+// legacy path too, so mirroring just scale+translate here is not a
+// behaviour change.
+void snapshot_uv_transform(float scale[2], float offset[2]) {
+    const float* tm = RenderPath.MatrixGet(rp::MatrixStack::texture);
+    // Column-major 4x4. scale = (tm[0][0], tm[1][1]);
+    // offset = (tm[3][0], tm[3][1]).
+    scale[0]  = tm[0];
+    scale[1]  = tm[5];
+    offset[0] = tm[12];
+    offset[1] = tm[13];
 }
 
 // Unpack 0xAARRGGBB-in-uint32 (R in low byte, A in MSB) into
@@ -156,6 +174,42 @@ void init() {
     vig.depth_write      = false;
     vig.cull             = rp::CullMode::none;
     s_materials.vignette = RenderPath.create_material(vig);
+
+    // 3D held-item mesh material. Lit via the frame's directional
+    // lights, alpha tested to kill the item atlas's transparent pixels.
+    // Depth test + write on so it composites correctly with world
+    // geometry in first-person view.
+    rp::MaterialDesc item{};
+    item.shader      = rp::ShaderPath::standard;
+    item.blend       = rp::BlendMode::alpha;
+    item.textured    = true;
+    item.lit         = true;
+    item.fog_enabled = false;
+    item.alpha_test  = rp::AlphaTest::greater;
+    item.alpha_ref   = 0.1f;
+    item.depth_test  = rp::DepthTest::less_equal;
+    item.depth_write = true;
+    item.cull        = rp::CullMode::back_ccw;
+    s_materials.item_in_hand = RenderPath.create_material(item);
+
+    // Glint overlay material. depth=equal so it only paints on top of
+    // the item it was drawn after; src_color * one gives an additive
+    // tint that matches the legacy RenderPath.StateSetBlendFunc(
+    // src_color, one) path. Lighting off — the glint mesh bakes its
+    // own per-vertex tint.
+    rp::MaterialDesc glint{};
+    glint.shader           = rp::ShaderPath::standard;
+    glint.blend            = rp::BlendMode::custom;
+    glint.blend_src_custom = rp::BlendFactor::src_color;
+    glint.blend_dst_custom = rp::BlendFactor::one;
+    glint.textured         = true;
+    glint.lit              = false;
+    glint.fog_enabled      = false;
+    glint.alpha_test       = rp::AlphaTest::off;
+    glint.depth_test       = rp::DepthTest::equal;
+    glint.depth_write      = true;
+    glint.cull             = rp::CullMode::back_ccw;
+    s_materials.item_in_hand_glint = RenderPath.create_material(glint);
 
     s_initialised = true;
 }
@@ -360,6 +414,43 @@ void draw_fullscreen_fill(int w, int h, uint32_t rgba) {
     const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f,
                                       -100.0f, 100.0f);
     std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
+
+    rp::ui_overlay::push(dc);
+}
+
+void draw_item_in_hand_mesh(rp::MeshHandle mesh, int texture_id,
+                            const float tint_rgba[4], int forced_lod) {
+    if (!mesh) return;
+
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::mesh;
+    dc.mesh                   = mesh;
+    dc.material               = s_materials.item_in_hand;
+    dc.texture_override.index = uint32_t(texture_id);
+    dc.tint_color[0] = tint_rgba[0];
+    dc.tint_color[1] = tint_rgba[1];
+    dc.tint_color[2] = tint_rgba[2];
+    dc.tint_color[3] = tint_rgba[3];
+    if (forced_lod >= 0) dc.forced_lod = int8_t(forced_lod);
+    snapshot_transform(dc.transform);
+    snapshot_uv_transform(dc.uv_scale, dc.uv_offset);
+
+    rp::ui_overlay::push(dc);
+}
+
+void draw_item_in_hand_glint_mesh(rp::MeshHandle mesh, int texture_id) {
+    if (!mesh) return;
+
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::mesh;
+    dc.mesh                   = mesh;
+    dc.material               = s_materials.item_in_hand_glint;
+    dc.texture_override.index = uint32_t(texture_id);
+    // Tint is baked into the mesh vertex colours; leave dc.tint_color
+    // at 1,1,1,1 (the default) so fill_push_constants's
+    // state_colour * tint passthrough reproduces the legacy behaviour.
+    snapshot_transform(dc.transform);
+    snapshot_uv_transform(dc.uv_scale, dc.uv_offset);
 
     rp::ui_overlay::push(dc);
 }

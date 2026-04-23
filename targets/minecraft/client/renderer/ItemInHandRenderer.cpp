@@ -12,7 +12,6 @@
 #include "minecraft/IGameServices.h"
 #include "minecraft/SharedConstants.h"
 #include "minecraft/client/Lighting.h"
-#include "minecraft/client/MemoryTracker.h"
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/gui/Minimap.h"
 #include "minecraft/client/multiplayer/MultiPlayerLevel.h"
@@ -39,6 +38,10 @@
 #include "platform/renderer/renderer.h"
 #include "platform/stubs.h"
 #include "platform/renderer/IRenderPath.h"
+#include "platform/renderer/ui/UiDraw.h"
+
+#include <cstdint>
+#include <vector>
 
 
 class EntityRenderer;
@@ -51,9 +54,219 @@ ResourceLocation ItemInHandRenderer::MAP_BACKGROUND_LOCATION =
 ResourceLocation ItemInHandRenderer::UNDERWATER_LOCATION =
     ResourceLocation(TN_MISC_WATER);
 
-int ItemInHandRenderer::listItem = -1;
-int ItemInHandRenderer::listTerrain = -1;
-int ItemInHandRenderer::listGlint = -1;
+rp::MeshHandle ItemInHandRenderer::listItem{};
+rp::MeshHandle ItemInHandRenderer::listTerrain{};
+rp::MeshHandle ItemInHandRenderer::listGlint{};
+
+namespace {
+
+// Pack a float XYZ normal into the R8G8B8A8_SNORM encoding the basic
+// shader reads (`a_normal.xyz` is treated as SNORM in [-1, 1]). Mirrors
+// Tesselator::normal so the migrated mesh data matches the legacy
+// CBuff path byte-for-byte.
+uint32_t pack_normal_snorm(float x, float y, float z) {
+    auto clamp_snorm = [](float v) -> int8_t {
+        if (v >  1.0f) v =  1.0f;
+        if (v < -1.0f) v = -1.0f;
+        return static_cast<int8_t>(v * 127.0f);
+    };
+    const uint8_t xx = static_cast<uint8_t>(clamp_snorm(x));
+    const uint8_t yy = static_cast<uint8_t>(clamp_snorm(y));
+    const uint8_t zz = static_cast<uint8_t>(clamp_snorm(z));
+    return uint32_t(xx) | (uint32_t(yy) << 8) | (uint32_t(zz) << 16);
+}
+
+// Per-face triangulated quad emitter. The cube faces were originally
+// quads (GL_QUADS) resolved by DrawVertices via the shared quad_ib_;
+// persistent MeshHandles take a plain vkCmdDraw so we lay out six
+// vertices per face (0,1,2, 0,2,3) at build time.
+void push_tri_quad(std::vector<rp::WorldStandardVertex>& out,
+                   const rp::WorldStandardVertex v[4]) {
+    out.push_back(v[0]);
+    out.push_back(v[1]);
+    out.push_back(v[2]);
+    out.push_back(v[0]);
+    out.push_back(v[2]);
+    out.push_back(v[3]);
+}
+
+// Build a 16x16 grid of 1/16-thick cube cells. `uv_fn(xp, yp)` returns
+// the single (u, v) sampled by all 4 verts of each face — the legacy
+// listItem / listTerrain meshes use a point-sample per cell and
+// compose an offset onto it via the TextureMatrix each frame (to pick
+// the active icon in the atlas). `color` is the packed RGBA poked into
+// every vertex: 0x00000000 = sentinel for "use state_colour" in the
+// shader.
+std::vector<rp::WorldStandardVertex> build_cell_point_cube(
+    auto uv_fn, uint32_t color) {
+    constexpr float dd = 1.0f / 16.0f;
+    constexpr uint32_t kNoLightmap = 0xfe00fe00u;  // matches Tesselator sentinel
+
+    std::vector<rp::WorldStandardVertex> verts;
+    verts.reserve(size_t(16 * 16 * 6 * 6));
+
+    const uint32_t n_pz = pack_normal_snorm(0, 0,  1);
+    const uint32_t n_nz = pack_normal_snorm(0, 0, -1);
+    const uint32_t n_nx = pack_normal_snorm(-1, 0, 0);
+    const uint32_t n_px = pack_normal_snorm( 1, 0, 0);
+    const uint32_t n_py = pack_normal_snorm(0,  1, 0);
+    const uint32_t n_ny = pack_normal_snorm(0, -1, 0);
+
+    for (int yp = 0; yp < 16; ++yp) {
+        for (int xp = 0; xp < 16; ++xp) {
+            float u, v;
+            uv_fn(xp, yp, u, v);
+
+            const float x0 = xp / 16.0f, x1 = x0 + dd;
+            const float y0 = yp / 16.0f, y1 = y0 + dd;
+            const float z0 = 0.0f,        z1 = -dd;
+
+            const rp::WorldStandardVertex front[4] = {
+                {{x0, y0, z0}, {u, v}, color, n_pz, kNoLightmap},
+                {{x1, y0, z0}, {u, v}, color, n_pz, kNoLightmap},
+                {{x1, y1, z0}, {u, v}, color, n_pz, kNoLightmap},
+                {{x0, y1, z0}, {u, v}, color, n_pz, kNoLightmap},
+            };
+            push_tri_quad(verts, front);
+
+            const rp::WorldStandardVertex back[4] = {
+                {{x0, y1, z1}, {u, v}, color, n_nz, kNoLightmap},
+                {{x1, y1, z1}, {u, v}, color, n_nz, kNoLightmap},
+                {{x1, y0, z1}, {u, v}, color, n_nz, kNoLightmap},
+                {{x0, y0, z1}, {u, v}, color, n_nz, kNoLightmap},
+            };
+            push_tri_quad(verts, back);
+
+            const rp::WorldStandardVertex left[4] = {
+                {{x0, y0, z1}, {u, v}, color, n_nx, kNoLightmap},
+                {{x0, y0, z0}, {u, v}, color, n_nx, kNoLightmap},
+                {{x0, y1, z0}, {u, v}, color, n_nx, kNoLightmap},
+                {{x0, y1, z1}, {u, v}, color, n_nx, kNoLightmap},
+            };
+            push_tri_quad(verts, left);
+
+            const rp::WorldStandardVertex right[4] = {
+                {{x1, y1, z1}, {u, v}, color, n_px, kNoLightmap},
+                {{x1, y1, z0}, {u, v}, color, n_px, kNoLightmap},
+                {{x1, y0, z0}, {u, v}, color, n_px, kNoLightmap},
+                {{x1, y0, z1}, {u, v}, color, n_px, kNoLightmap},
+            };
+            push_tri_quad(verts, right);
+
+            const rp::WorldStandardVertex top[4] = {
+                {{x1, y0, z0}, {u, v}, color, n_py, kNoLightmap},
+                {{x0, y0, z0}, {u, v}, color, n_py, kNoLightmap},
+                {{x0, y0, z1}, {u, v}, color, n_py, kNoLightmap},
+                {{x1, y0, z1}, {u, v}, color, n_py, kNoLightmap},
+            };
+            push_tri_quad(verts, top);
+
+            const rp::WorldStandardVertex bottom[4] = {
+                {{x1, y1, z1}, {u, v}, color, n_ny, kNoLightmap},
+                {{x0, y1, z1}, {u, v}, color, n_ny, kNoLightmap},
+                {{x0, y1, z0}, {u, v}, color, n_ny, kNoLightmap},
+                {{x1, y1, z0}, {u, v}, color, n_ny, kNoLightmap},
+            };
+            push_tri_quad(verts, bottom);
+        }
+    }
+
+    return verts;
+}
+
+// Build the glint cube — same grid, but each face has 4 distinct UV
+// corners so the glint texture fills each cell, and a baked per-vertex
+// tint (0.5*br, 0.25*br, 0.8*br, 1) with br=0.76 matching the legacy
+// Tesselator::color call.
+std::vector<rp::WorldStandardVertex> build_glint_cube() {
+    constexpr float dd = 1.0f / 16.0f;
+    constexpr uint32_t kNoLightmap = 0xfe00fe00u;
+
+    const float br = 0.76f;
+    const int r = int(0.5f * br * 255.0f);
+    const int g = int(0.25f * br * 255.0f);
+    const int b = int(0.8f * br * 255.0f);
+    const int a = 255;
+    const uint32_t col = uint32_t(r & 0xff) |
+                         (uint32_t(g & 0xff) << 8) |
+                         (uint32_t(b & 0xff) << 16) |
+                         (uint32_t(a & 0xff) << 24);
+
+    std::vector<rp::WorldStandardVertex> verts;
+    verts.reserve(size_t(16 * 16 * 6 * 6));
+
+    const uint32_t n_pz = pack_normal_snorm(0, 0,  1);
+    const uint32_t n_nz = pack_normal_snorm(0, 0, -1);
+    const uint32_t n_nx = pack_normal_snorm(-1, 0, 0);
+    const uint32_t n_px = pack_normal_snorm( 1, 0, 0);
+    const uint32_t n_py = pack_normal_snorm(0,  1, 0);
+    const uint32_t n_ny = pack_normal_snorm(0, -1, 0);
+
+    for (int yp = 0; yp < 16; ++yp) {
+        for (int xp = 0; xp < 16; ++xp) {
+            const float u0 = (15 - xp) / 16.0f;
+            const float v0 = (15 - yp) / 16.0f;
+            const float u1 = u0 - (1.0f / 16.0f);
+            const float v1 = v0 - (1.0f / 16.0f);
+
+            const float x0 = xp / 16.0f, x1 = x0 + dd;
+            const float y0 = yp / 16.0f, y1 = y0 + dd;
+            const float z0 = 0.0f,        z1 = -dd;
+
+            const rp::WorldStandardVertex front[4] = {
+                {{x0, y0, z0}, {u0, v0}, col, n_pz, kNoLightmap},
+                {{x1, y0, z0}, {u1, v0}, col, n_pz, kNoLightmap},
+                {{x1, y1, z0}, {u1, v1}, col, n_pz, kNoLightmap},
+                {{x0, y1, z0}, {u0, v1}, col, n_pz, kNoLightmap},
+            };
+            push_tri_quad(verts, front);
+
+            const rp::WorldStandardVertex back[4] = {
+                {{x0, y1, z1}, {u0, v1}, col, n_nz, kNoLightmap},
+                {{x1, y1, z1}, {u1, v1}, col, n_nz, kNoLightmap},
+                {{x1, y0, z1}, {u1, v0}, col, n_nz, kNoLightmap},
+                {{x0, y0, z1}, {u0, v0}, col, n_nz, kNoLightmap},
+            };
+            push_tri_quad(verts, back);
+
+            const rp::WorldStandardVertex left[4] = {
+                {{x0, y0, z1}, {u0, v0}, col, n_nx, kNoLightmap},
+                {{x0, y0, z0}, {u0, v0}, col, n_nx, kNoLightmap},
+                {{x0, y1, z0}, {u0, v1}, col, n_nx, kNoLightmap},
+                {{x0, y1, z1}, {u0, v1}, col, n_nx, kNoLightmap},
+            };
+            push_tri_quad(verts, left);
+
+            const rp::WorldStandardVertex right[4] = {
+                {{x1, y1, z1}, {u1, v1}, col, n_px, kNoLightmap},
+                {{x1, y1, z0}, {u1, v1}, col, n_px, kNoLightmap},
+                {{x1, y0, z0}, {u1, v0}, col, n_px, kNoLightmap},
+                {{x1, y0, z1}, {u1, v0}, col, n_px, kNoLightmap},
+            };
+            push_tri_quad(verts, right);
+
+            const rp::WorldStandardVertex top[4] = {
+                {{x1, y0, z0}, {u1, v0}, col, n_py, kNoLightmap},
+                {{x0, y0, z0}, {u0, v0}, col, n_py, kNoLightmap},
+                {{x0, y0, z1}, {u0, v0}, col, n_py, kNoLightmap},
+                {{x1, y0, z1}, {u1, v0}, col, n_py, kNoLightmap},
+            };
+            push_tri_quad(verts, top);
+
+            const rp::WorldStandardVertex bottom[4] = {
+                {{x1, y1, z1}, {u1, v1}, col, n_ny, kNoLightmap},
+                {{x0, y1, z1}, {u0, v1}, col, n_ny, kNoLightmap},
+                {{x0, y1, z0}, {u0, v1}, col, n_ny, kNoLightmap},
+                {{x1, y1, z0}, {u1, v1}, col, n_ny, kNoLightmap},
+            };
+            push_tri_quad(verts, bottom);
+        }
+    }
+
+    return verts;
+}
+
+}  // namespace
 
 ItemInHandRenderer::ItemInHandRenderer(Minecraft* minecraft,
                                        bool optimisedMinimap) {
@@ -69,185 +282,57 @@ ItemInHandRenderer::ItemInHandRenderer(Minecraft* minecraft,
                           minecraft->textures, optimisedMinimap);
 
     // 4J - replaced mesh that is used to render held items with individual
-    // cubes, so we can make it all join up properly without seams. This has a
-    // lot more quads in it than the original, so is now precompiled with a UV
-    // matrix offset to put it in the final place for the current icon. Compile
-    // it on demand for the first ItemInHandRenderer (list is static)
-    if (listItem == -1) {
-        listItem = MemoryTracker::genLists(1);
-        float dd = 1 / 16.0f;
-
-        RenderPath.CBuffStart(listItem);
-        Tesselator* t = Tesselator::getInstance();
-        t->begin();
-        for (int yp = 0; yp < 16; yp++)
-            for (int xp = 0; xp < 16; xp++) {
-                float u = (15 - xp) / 256.0f;
-                float v = (15 - yp) / 256.0f;
-                u += 0.5f / 256.0f;
-                v += 0.5f / 256.0f;
-                float x0 = xp / 16.0f;
-                float x1 = x0 + 1.0f / 16.0f;
-                float y0 = yp / 16.0f;
-                float y1 = y0 + 1.0f / 16.0f;
-                float z0 = 0.0f;
-                float z1 = -dd;
-
-                t->normal(0, 0, 1);
-                t->vertexUV(x0, y0, z0, u, v);
-                t->vertexUV(x1, y0, z0, u, v);
-                t->vertexUV(x1, y1, z0, u, v);
-                t->vertexUV(x0, y1, z0, u, v);
-                t->normal(0, 0, -1);
-                t->vertexUV(x0, y1, z1, u, v);
-                t->vertexUV(x1, y1, z1, u, v);
-                t->vertexUV(x1, y0, z1, u, v);
-                t->vertexUV(x0, y0, z1, u, v);
-                t->normal(-1, 0, 0);
-                t->vertexUV(x0, y0, z1, u, v);
-                t->vertexUV(x0, y0, z0, u, v);
-                t->vertexUV(x0, y1, z0, u, v);
-                t->vertexUV(x0, y1, z1, u, v);
-                t->normal(1, 0, 0);
-                t->vertexUV(x1, y1, z1, u, v);
-                t->vertexUV(x1, y1, z0, u, v);
-                t->vertexUV(x1, y0, z0, u, v);
-                t->vertexUV(x1, y0, z1, u, v);
-                t->normal(0, 1, 0);
-                t->vertexUV(x1, y0, z0, u, v);
-                t->vertexUV(x0, y0, z0, u, v);
-                t->vertexUV(x0, y0, z1, u, v);
-                t->vertexUV(x1, y0, z1, u, v);
-                t->normal(0, -1, 0);
-                t->vertexUV(x1, y1, z1, u, v);
-                t->vertexUV(x0, y1, z1, u, v);
-                t->vertexUV(x0, y1, z0, u, v);
-                t->vertexUV(x1, y1, z0, u, v);
-            }
-        t->end();
-        RenderPath.CBuffEnd();
+    // cubes, so we can make it all join up properly without seams. This has
+    // a lot more quads in it than the original, so is precompiled with a UV
+    // matrix offset to put it in the final place for the current icon.
+    // The three meshes are static across all ItemInHandRenderer instances —
+    // build them once on the first construction.
+    if (!listItem) {
+        auto uv_item = [](int xp, int yp, float& u, float& v) {
+            u = (15 - xp) / 256.0f + 0.5f / 256.0f;
+            v = (15 - yp) / 256.0f + 0.5f / 256.0f;
+        };
+        auto verts = build_cell_point_cube(uv_item, /*color=*/0x00000000u);
+        rp::MeshDesc d{};
+        d.vertex_data  = verts.data();
+        d.vertex_count = uint32_t(verts.size());
+        d.layout       = rp::VertexLayout::world_standard;
+        d.primitive    = rp::PrimitiveType::triangle_list;
+        d.debug_name   = "ItemInHandRenderer.listItem";
+        listItem = RenderPath.create_mesh(d);
     }
 
-    // Terrain texture is a different layout from the item texture
-    if (listTerrain == -1) {
-        listTerrain = MemoryTracker::genLists(1);
-        float dd = 1 / 16.0f;
-
-        RenderPath.CBuffStart(listTerrain);
-        Tesselator* t = Tesselator::getInstance();
-        t->begin();
-        for (int yp = 0; yp < 16; yp++)
-            for (int xp = 0; xp < 16; xp++) {
-                float u = (15 - xp) / 256.0f;
-                float v = (15 - yp) / 512.0f;
-                u += 0.5f / 256.0f;
-                v += 0.5f / 512.0f;
-                float x0 = xp / 16.0f;
-                float x1 = x0 + 1.0f / 16.0f;
-                float y0 = yp / 16.0f;
-                float y1 = y0 + 1.0f / 16.0f;
-                float z0 = 0.0f;
-                float z1 = -dd;
-
-                t->normal(0, 0, 1);
-                t->vertexUV(x0, y0, z0, u, v);
-                t->vertexUV(x1, y0, z0, u, v);
-                t->vertexUV(x1, y1, z0, u, v);
-                t->vertexUV(x0, y1, z0, u, v);
-                t->normal(0, 0, -1);
-                t->vertexUV(x0, y1, z1, u, v);
-                t->vertexUV(x1, y1, z1, u, v);
-                t->vertexUV(x1, y0, z1, u, v);
-                t->vertexUV(x0, y0, z1, u, v);
-                t->normal(-1, 0, 0);
-                t->vertexUV(x0, y0, z1, u, v);
-                t->vertexUV(x0, y0, z0, u, v);
-                t->vertexUV(x0, y1, z0, u, v);
-                t->vertexUV(x0, y1, z1, u, v);
-                t->normal(1, 0, 0);
-                t->vertexUV(x1, y1, z1, u, v);
-                t->vertexUV(x1, y1, z0, u, v);
-                t->vertexUV(x1, y0, z0, u, v);
-                t->vertexUV(x1, y0, z1, u, v);
-                t->normal(0, 1, 0);
-                t->vertexUV(x1, y0, z0, u, v);
-                t->vertexUV(x0, y0, z0, u, v);
-                t->vertexUV(x0, y0, z1, u, v);
-                t->vertexUV(x1, y0, z1, u, v);
-                t->normal(0, -1, 0);
-                t->vertexUV(x1, y1, z1, u, v);
-                t->vertexUV(x0, y1, z1, u, v);
-                t->vertexUV(x0, y1, z0, u, v);
-                t->vertexUV(x1, y1, z0, u, v);
-            }
-        t->end();
-        RenderPath.CBuffEnd();
+    // Terrain texture has a different Y pitch (512-tall atlas) than the
+    // item texture, so the per-cell UV divisor changes but the cube
+    // geometry is identical.
+    if (!listTerrain) {
+        auto uv_terrain = [](int xp, int yp, float& u, float& v) {
+            u = (15 - xp) / 256.0f + 0.5f / 256.0f;
+            v = (15 - yp) / 512.0f + 0.5f / 512.0f;
+        };
+        auto verts = build_cell_point_cube(uv_terrain, /*color=*/0x00000000u);
+        rp::MeshDesc d{};
+        d.vertex_data  = verts.data();
+        d.vertex_count = uint32_t(verts.size());
+        d.layout       = rp::VertexLayout::world_standard;
+        d.primitive    = rp::PrimitiveType::triangle_list;
+        d.debug_name   = "ItemInHandRenderer.listTerrain";
+        listTerrain = RenderPath.create_mesh(d);
     }
 
-    // Also create special object for glint overlays - this is the same as the
-    // previous one, with a different UV scalings, and depth test set to equal
-    if (listGlint == -1) {
-        listGlint = MemoryTracker::genLists(1);
-        float dd = 1 / 16.0f;
-
-        RenderPath.CBuffStart(listGlint);
-        RenderPath.StateSetDepthFunc(rp::DepthTest::equal);
-        Tesselator* t = Tesselator::getInstance();
-        t->begin();
-        for (int yp = 0; yp < 16; yp++)
-            for (int xp = 0; xp < 16; xp++) {
-                float u0 = (15 - xp) / 16.0f;
-                float v0 = (15 - yp) / 16.0f;
-                float u1 = u0 - (1.0f / 16.0f);
-                float v1 = v0 - (1.0f / 16.0f);
-                ;
-
-                float x0 = xp / 16.0f;
-                float x1 = x0 + 1.0f / 16.0f;
-                float y0 = yp / 16.0f;
-                float y1 = y0 + 1.0f / 16.0f;
-                float z0 = 0.0f;
-                float z1 = -dd;
-
-                float br = 0.76f;
-                t->color(0.5f * br, 0.25f * br, 0.8f * br,
-                         1.0f);  // MGH - added the color here, as the glColour
-                                 // below wasn't making it through to render
-
-                t->normal(0, 0, 1);
-                t->vertexUV(x0, y0, z0, u0, v0);
-                t->vertexUV(x1, y0, z0, u1, v0);
-                t->vertexUV(x1, y1, z0, u1, v1);
-                t->vertexUV(x0, y1, z0, u0, v1);
-                t->normal(0, 0, -1);
-                t->vertexUV(x0, y1, z1, u0, v1);
-                t->vertexUV(x1, y1, z1, u1, v1);
-                t->vertexUV(x1, y0, z1, u1, v0);
-                t->vertexUV(x0, y0, z1, u0, v0);
-                t->normal(-1, 0, 0);
-                t->vertexUV(x0, y0, z1, u0, v0);
-                t->vertexUV(x0, y0, z0, u0, v0);
-                t->vertexUV(x0, y1, z0, u0, v1);
-                t->vertexUV(x0, y1, z1, u0, v1);
-                t->normal(1, 0, 0);
-                t->vertexUV(x1, y1, z1, u1, v1);
-                t->vertexUV(x1, y1, z0, u1, v1);
-                t->vertexUV(x1, y0, z0, u1, v0);
-                t->vertexUV(x1, y0, z1, u1, v0);
-                t->normal(0, 1, 0);
-                t->vertexUV(x1, y0, z0, u1, v0);
-                t->vertexUV(x0, y0, z0, u0, v0);
-                t->vertexUV(x0, y0, z1, u0, v0);
-                t->vertexUV(x1, y0, z1, u1, v0);
-                t->normal(0, -1, 0);
-                t->vertexUV(x1, y1, z1, u1, v1);
-                t->vertexUV(x0, y1, z1, u0, v1);
-                t->vertexUV(x0, y1, z0, u0, v1);
-                t->vertexUV(x1, y1, z0, u1, v1);
-            }
-        t->end();
-        RenderPath.StateSetDepthFunc(rp::DepthTest::less_equal);
-        RenderPath.CBuffEnd();
+    // Glint overlay mesh — same 16x16 cube grid but each face spans a
+    // full UV cell (not a point-sample). depth_test=equal and the
+    // src_color*one additive blend are baked into the
+    // item_in_hand_glint material, not into the mesh.
+    if (!listGlint) {
+        auto verts = build_glint_cube();
+        rp::MeshDesc d{};
+        d.vertex_data  = verts.data();
+        d.vertex_count = uint32_t(verts.size());
+        d.layout       = rp::VertexLayout::world_standard;
+        d.primitive    = rp::PrimitiveType::triangle_list;
+        d.debug_name   = "ItemInHandRenderer.listGlint";
+        listGlint = RenderPath.create_mesh(d);
     }
 }
 
@@ -376,25 +461,25 @@ void ItemInHandRenderer::renderItem3D(Tesselator* t, float u0, float v0,
                                       float u1, float v1, int width, int height,
                                       float depth, bool isGlint,
                                       bool isTerrain) {
-    float r = 1.0f;
+    (void)t; (void)u1; (void)v1; (void)width; (void)height; (void)depth;
 
-    // 4J - replaced mesh that is used to render held items with individual
-    // cubes, so we can make it all join up properly without seams. This has a
-    // lot more quads in it than the original, so is now precompiled with a UV
-    // matrix offset to put it in the final place for the current icon
+    // The three meshes (listItem / listTerrain / listGlint) are 16x16 cube
+    // grids pre-baked into WorldStandardVertex buffers at construction.
+    // Per-frame we push one DrawCall per mesh referencing the handle, with
+    // the caller's live proj*mv + TextureMatrix snapshotted so the picked
+    // icon (u0, v0) translate and any MatrixPush / Rotate / Scale the
+    // held-item pose built up on the modelview stack both propagate.
+    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
     if (isGlint) {
-        ((void)RenderPath.CBuffCall(listGlint));
+        plce::ui::draw_item_in_hand_glint_mesh(listGlint, /*texture_id=*/0);
     } else {
-        // 4J - replaced mesh that is used to render held items with individual
-        // cubes, so we can make it all join up properly without seams. This has
-        // a lot more quads in it than the original, so is now precompiled with
-        // a UV matrix offset to put it in the final place for the current icon
-
         RenderPath.MatrixMode(rp::MatrixStack::texture);
         RenderPath.MatrixSetIdentity();
         RenderPath.MatrixTranslate(u0, v0, 0);
-        ((void)RenderPath.CBuffCall(isTerrain ? listTerrain : listItem));
+        plce::ui::draw_item_in_hand_mesh(isTerrain ? listTerrain : listItem,
+                                         /*texture_id=*/0, white,
+                                         /*forced_lod=*/-1);
         RenderPath.MatrixSetIdentity();
         RenderPath.MatrixMode(rp::MatrixStack::modelview);
     }

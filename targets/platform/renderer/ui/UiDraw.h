@@ -2,6 +2,10 @@
 
 #include <cstdint>
 
+namespace rp {
+struct MeshHandle;
+}
+
 // Modern 2D UI draw primitives. Callers (Font, Gui, GuiComponent, ...)
 // issue typed draws here — the module turns them into rp::DrawCall
 // records pushed onto rp::ui_overlay, which the active backend drains
@@ -99,5 +103,25 @@ void draw_untextured_lines(const LineVertex* vertices, size_t vertex_count);
 // blend the legacy renderVignette used.
 void draw_vignette(int w, int h, int texture_id,
                    const float rgba[4]);
+
+// Persistent 3D held-item mesh (listItem / listTerrain in
+// ItemInHandRenderer). Lit via the frame's directional lights, alpha
+// tested to kill the item atlas's transparent pixels. Snapshots live
+// proj*mv + texture transform, so the caller's perspective + model
+// stack and the (u0, v0) TextureMatrix translate that picks the
+// active icon both propagate into the DrawCall. `forced_lod < 0`
+// inherits the material's default LOD; 0..3 forces a mip level for
+// scaled-up icon source textures.
+void draw_item_in_hand_mesh(rp::MeshHandle mesh, int texture_id,
+                            const float tint_rgba[4],
+                            int forced_lod = -1);
+
+// Enchant-glint overlay mesh for listGlint. Depth=equal with a
+// src_color * one additive blend so it lays on the exact item
+// surface. Tint is baked into the mesh's per-vertex colours, so this
+// helper only needs the glint atlas texture id — the UV scroll
+// transform the caller set up on the TextureMatrix stack is
+// snapshotted at call time.
+void draw_item_in_hand_glint_mesh(rp::MeshHandle mesh, int texture_id);
 
 }  // namespace plce::ui
