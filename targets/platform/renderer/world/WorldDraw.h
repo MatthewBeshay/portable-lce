@@ -95,6 +95,9 @@ public:
     void color(float r, float g, float b, float a);
     void color(uint8_t r, uint8_t g, uint8_t b);
     void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+    // Matches legacy Tesselator::color(int c, int alpha): `c` is
+    // 0x00RRGGBB; `alpha` is a 0..255 byte.
+    void color(int packed_rgb, int alpha);
     void color_packed(uint32_t rgba);
     void offset(float xo, float yo, float zo);
 

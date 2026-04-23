@@ -16,7 +16,7 @@
 #include "minecraft/client/model/geom/Model.h"
 #include "minecraft/client/model/geom/ModelPart.h"
 #include "minecraft/client/multiplayer/MultiPlayerLocalPlayer.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/util/Mth.h"
@@ -414,17 +414,19 @@ void LivingEntityRenderer::renderName(std::shared_ptr<LivingEntity> mob,
                     RenderPath.StateSetDepthMask(false);
                     RenderPath.StateSetBlendEnable(true);
                     RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-                    Tesselator* t = Tesselator::getInstance();
 
                     RenderPath.StateSetTextureEnable(false);
-                    t->begin();
                     int w = font->width(msg) / 2;
-                    t->color(0.f, 0.f, 0.f, 0.25f);
-                    t->vertex(-w - 1, -1, 0);
-                    t->vertex(-w - 1, +8, 0);
-                    t->vertex(+w + 1, +8, 0);
-                    t->vertex(+w + 1, -1, 0);
-                    t->end();
+                    {
+                        plce::world::MeshBuilder mb(
+                            plce::world::MaterialKind::transparent, 0);
+                        mb.color(0.f, 0.f, 0.f, 0.25f);
+                        mb.vertex(-w - 1, -1, 0);
+                        mb.vertex(-w - 1, +8, 0);
+                        mb.vertex(+w + 1, +8, 0);
+                        mb.vertex(+w + 1, -1, 0);
+                        mb.flush();
+                    }
                     RenderPath.StateSetTextureEnable(true);
                     RenderPath.StateSetDepthMask(true);
                     font->draw(msg, -font->width(msg) / 2, 0, 0x20ffffff);
@@ -517,7 +519,6 @@ void LivingEntityRenderer::renderNameTag(std::shared_ptr<LivingEntity> mob,
 
     RenderPath.StateSetBlendEnable(true);
     RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
-    Tesselator* t = Tesselator::getInstance();
 
     int offs = 0;
 
@@ -542,32 +543,38 @@ void LivingEntityRenderer::renderNameTag(std::shared_ptr<LivingEntity> mob,
 
         RenderPath.StateSetTextureEnable(false);
 
-        t->begin();
         int w = font->width(playerName) / 2;
-
-        if (textOpacity < 1.0f) {
-            t->color(color, 255 * textOpacity);
-        } else {
-            t->color(0.0f, 0.0f, 0.0f, 0.25f);
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            if (textOpacity < 1.0f) {
+                mb.color(color, int(255 * textOpacity));
+            } else {
+                mb.color(0.0f, 0.0f, 0.0f, 0.25f);
+            }
+            mb.vertex((float)(-w - 1), (float)(-1 + offs),       (float)(0));
+            mb.vertex((float)(-w - 1), (float)(+8 + offs + 1),   (float)(0));
+            mb.vertex((float)(+w + 1), (float)(+8 + offs + 1),   (float)(0));
+            mb.vertex((float)(+w + 1), (float)(-1 + offs),       (float)(0));
+            mb.flush();
         }
-        t->vertex((float)(-w - 1), (float)(-1 + offs), (float)(0));
-        t->vertex((float)(-w - 1), (float)(+8 + offs + 1), (float)(0));
-        t->vertex((float)(+w + 1), (float)(+8 + offs + 1), (float)(0));
-        t->vertex((float)(+w + 1), (float)(-1 + offs), (float)(0));
-        t->end();
 
         RenderPath.StateSetDepthTestEnable(true);
         RenderPath.StateSetDepthMask(true);
         RenderPath.StateSetDepthFunc(rp::DepthTest::always);
         RenderPath.StateSetLineWidth(2.0f);
-        t->begin(0x0003);
-        t->color(color, 255 * textOpacity);
-        t->vertex((float)(-w - 1), (float)(-1 + offs), (float)(0));
-        t->vertex((float)(-w - 1), (float)(+8 + offs + 1), (float)(0));
-        t->vertex((float)(+w + 1), (float)(+8 + offs + 1), (float)(0));
-        t->vertex((float)(+w + 1), (float)(-1 + offs), (float)(0));
-        t->vertex((float)(-w - 1), (float)(-1 + offs), (float)(0));
-        t->end();
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.set_topology(plce::world::Topology::line_strip);
+            mb.color(color, int(255 * textOpacity));
+            mb.vertex((float)(-w - 1), (float)(-1 + offs),     (float)(0));
+            mb.vertex((float)(-w - 1), (float)(+8 + offs + 1), (float)(0));
+            mb.vertex((float)(+w + 1), (float)(+8 + offs + 1), (float)(0));
+            mb.vertex((float)(+w + 1), (float)(-1 + offs),     (float)(0));
+            mb.vertex((float)(-w - 1), (float)(-1 + offs),     (float)(0));
+            mb.flush();
+        }
         RenderPath.StateSetDepthFunc(rp::DepthTest::less_equal);
         RenderPath.StateSetDepthMask(false);
         RenderPath.StateSetDepthTestEnable(false);
@@ -583,14 +590,17 @@ void LivingEntityRenderer::renderNameTag(std::shared_ptr<LivingEntity> mob,
         RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1.0f);
         RenderPath.StateSetTextureEnable(false);
         RenderPath.StateSetDepthFunc(rp::DepthTest::always);
-        t->begin();
         int w = font->width(playerName) / 2;
-        t->color(color, 255);
-        t->vertex((float)(-w - 1), (float)(-1 + offs), (float)(0));
-        t->vertex((float)(-w - 1), (float)(+8 + offs), (float)(0));
-        t->vertex((float)(+w + 1), (float)(+8 + offs), (float)(0));
-        t->vertex((float)(+w + 1), (float)(-1 + offs), (float)(0));
-        t->end();
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.color(color, 255);
+            mb.vertex((float)(-w - 1), (float)(-1 + offs), (float)(0));
+            mb.vertex((float)(-w - 1), (float)(+8 + offs), (float)(0));
+            mb.vertex((float)(+w + 1), (float)(+8 + offs), (float)(0));
+            mb.vertex((float)(+w + 1), (float)(-1 + offs), (float)(0));
+            mb.flush();
+        }
         RenderPath.StateSetDepthFunc(rp::DepthTest::less_equal);
         RenderPath.StateSetTextureEnable(true);
 

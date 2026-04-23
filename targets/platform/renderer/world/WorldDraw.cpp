@@ -202,6 +202,13 @@ void MeshBuilder::color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
                        (uint32_t(b) << 16) |
                        (uint32_t(a) << 24);
 }
+void MeshBuilder::color(int packed_rgb, int alpha) {
+    auto clamp = [](int v) -> int { return v < 0 ? 0 : v > 255 ? 255 : v; };
+    color(uint8_t(clamp((packed_rgb >> 16) & 0xff)),
+          uint8_t(clamp((packed_rgb >>  8) & 0xff)),
+          uint8_t(clamp((packed_rgb >>  0) & 0xff)),
+          uint8_t(clamp(alpha)));
+}
 void MeshBuilder::color_packed(uint32_t rgba) { impl_->cur_color = rgba; }
 
 void MeshBuilder::offset(float xo, float yo, float zo) {
