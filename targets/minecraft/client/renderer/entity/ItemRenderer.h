@@ -24,6 +24,14 @@ public:
     bool setColor;
     float blitOffset;
 
+    // Tint applied to the next blit(...) call. Replaces the legacy
+    // StateSetColour-before-blit pattern: renderGuiItem computes an
+    // rgba from the item's color + alpha and stashes it here, blit
+    // reads it into the DrawCall's tint_color so the draw is self-
+    // describing and doesn't depend on whatever live state is set
+    // when render_frame runs.
+    uint32_t currentBlitTint_ = 0xFFFFFFFFu;
+
     ItemRenderer();
     virtual ~ItemRenderer();
     virtual void render(std::shared_ptr<Entity> _itemEntity, double x, double y,

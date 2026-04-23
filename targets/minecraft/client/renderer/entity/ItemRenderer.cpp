@@ -16,6 +16,21 @@
 #include "minecraft/client/renderer/ItemInHandRenderer.h"
 #include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
+#include "platform/renderer/ui/UiDraw.h"
+
+namespace {
+// Convert a legacy 0xRRGGBB colour + float alpha into UiDraw's
+// 0xAABBGGRR tint layout.
+uint32_t pack_tint(int col, float alpha) {
+    const uint32_t a = uint32_t(alpha < 0.0f ? 0
+                              : alpha > 1.0f ? 255
+                                             : alpha * 255.0f);
+    return  ((uint32_t(col) >> 16) & 0xFFu)        |
+           (((uint32_t(col) >>  8) & 0xFFu) <<  8) |
+           (((uint32_t(col)      ) & 0xFFu) << 16) |
+           ( a                                << 24);
+}
+}  // namespace
 #include "minecraft/client/renderer/TileRenderer.h"
 #include "minecraft/client/renderer/entity/EntityRenderer.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
@@ -395,12 +410,12 @@ void ItemRenderer::renderGuiItem(Font* font, Textures* textures,
             Icon* fillingIcon =
                 Item::items[itemId]->getLayerIcon(itemAuxValue, layer);
 
-            int col = Item::items[itemId]->getColor(item, layer);
-            float r = ((col >> 16) & 0xff) / 255.0f;
-            float g = ((col >> 8) & 0xff) / 255.0f;
-            float b = ((col) & 0xff) / 255.0f;
+            const int col = Item::items[itemId]->getColor(item, layer);
+            // Pack into 0xAABBGGRR (UiDraw tint convention). setColor
+            // false means "render with no tint" — use white.
+            currentBlitTint_ = setColor ? pack_tint(col, fAlpha)
+                                        : 0xFFFFFFFFu;
 
-            if (setColor) RenderPath.StateSetColour(r, g, b, fAlpha);
             // scale the x and y by the scale factor
             if ((fScaleX != 1.0f) || (fScaleY != 1.0f)) {
                 blit(x, y, fillingIcon, 16 * fScaleX, 16 * fScaleY);
@@ -424,12 +439,9 @@ void ItemRenderer::renderGuiItem(Font* font, Textures* textures,
             itemIcon = textures->getMissingIcon(item->getIconType());
         }
 
-        int col = Item::items[itemId]->getColor(item, 0);
-        float r = ((col >> 16) & 0xff) / 255.0f;
-        float g = ((col >> 8) & 0xff) / 255.0f;
-        float b = ((col) & 0xff) / 255.0f;
-
-        if (setColor) RenderPath.StateSetColour(r, g, b, fAlpha);
+        const int col = Item::items[itemId]->getColor(item, 0);
+        currentBlitTint_ = setColor ? pack_tint(col, fAlpha)
+                                    : 0xFFFFFFFFu;
 
         // scale the x and y by the scale factor
         if ((fScaleX != 1.0f) || (fScaleY != 1.0f)) {
@@ -439,6 +451,7 @@ void ItemRenderer::renderGuiItem(Font* font, Textures* textures,
         }
         RenderPath.StateSetLightingEnable(true);
     }
+    currentBlitTint_ = 0xFFFFFFFFu;
     RenderPath.StateSetFaceCull(true);
 }
 
@@ -660,110 +673,63 @@ void ItemRenderer::renderGuiItemDecorations(Font* font, Textures* textures,
 
 const int ItemRenderer::m_iPotionStrengthBarWidth[] = {3, 6, 9, 11};
 
-void ItemRenderer::fillRect(Tesselator* t, int x, int y, int w, int h, int c) {
-    t->begin();
-    t->color(c);
-    t->vertex((float)(x + 0), (float)(y + 0), (float)(0));
-    t->vertex((float)(x + 0), (float)(y + h), (float)(0));
-    t->vertex((float)(x + w), (float)(y + h), (float)(0));
-    t->vertex((float)(x + w), (float)(y + 0), (float)(0));
-    t->end();
+void ItemRenderer::fillRect(Tesselator* /*unused*/, int x, int y, int w, int h, int c) {
+    // Legacy Tesselator argument kept for API compatibility; the
+    // actual draw now goes through plce::ui. `c` is 0x00RRGGBB with
+    // no alpha — force opaque.
+    const uint32_t rgba =
+        ((uint32_t(c) >> 16) & 0xFFu)        |  // R → byte 0
+       (((uint32_t(c) >>  8) & 0xFFu) <<  8) |  // G → byte 1
+       (((uint32_t(c)      ) & 0xFFu) << 16) |  // B → byte 2
+        (0xFFu << 24);                          // A = 1
+    plce::ui::draw_fill(x, y, x + w, y + h, rgba);
 }
+
+namespace {
+
+// Pixel-snap the four corners to the final backbuffer grid, then
+// convert back to game coordinate space. Shared between both blit
+// overloads — the rounding is the bit that matters for crisp 1:1
+// sprite sampling at non-integer GUI scales.
+struct PixelSnappedRect { float x0, y0, x1, y1; };
+PixelSnappedRect pixel_snap(float x, float y, float w, float h) {
+    const float sfx = (float)Minecraft::GetInstance()->width /
+                      (float)Minecraft::GetInstance()->width_phys;
+    const float sfy = (float)Minecraft::GetInstance()->height /
+                      (float)Minecraft::GetInstance()->height_phys;
+    float xx0 = ceilf(x * sfx);
+    float xx1 = floorf((x + w) * sfx);
+    float yy0 = ceilf(y * sfy);
+    float yy1 = floorf((y + h) * sfy);
+    xx0 += 0.5f; xx1 -= 0.5f;
+    yy0 += 0.5f; yy1 -= 0.5f;
+    return {xx0 / sfx, yy0 / sfy, xx1 / sfx, yy1 / sfy};
+}
+
+}  // namespace
 
 // 4J - a few changes here to get x, y, w, h in as floats (for xui rendering
 // accuracy), and to align final pixels to the final screen resolution
 void ItemRenderer::blit(float x, float y, int sx, int sy, float w, float h) {
-    float us = 1 / 256.0f;
-    float vs = 1 / 256.0f;
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-
-    // 4J - calculate what the pixel coordinates will be in final screen
-    // coordinates
-    float sfx = (float)Minecraft::GetInstance()->width /
-                (float)Minecraft::GetInstance()->width_phys;
-    float sfy = (float)Minecraft::GetInstance()->height /
-                (float)Minecraft::GetInstance()->height_phys;
-    float xx0 = x * sfx;
-    float xx1 = (x + w) * sfx;
-    float yy0 = y * sfy;
-    float yy1 = (y + h) * sfy;
-    // Round to whole pixels - rounding inwards so that we don't overlap any
-    // surrounding graphics
-    xx0 = ceilf(xx0);
-    xx1 = floorf(xx1);
-    yy0 = ceilf(yy0);
-    yy1 = floorf(yy1);
-    // Offset by half to get actual centre of pixel - again moving inwards to
-    // avoid overlap with surrounding graphics
-    xx0 += 0.5f;
-    xx1 -= 0.5f;
-    yy0 += 0.5f;
-    yy1 -= 0.5f;
-    // Convert back to game coordinate space
-    float xx0f = xx0 / sfx;
-    float xx1f = xx1 / sfx;
-    float yy0f = yy0 / sfy;
-    float yy1f = yy1 / sfy;
-
-    // 4J - subtracting 0.5f (actual screen pixels, so need to compensate for
-    // physical & game width) from each x & y coordinate to compensate for
-    // centre of pixels in directx vs openGL
-    float f = (0.5f * (float)Minecraft::GetInstance()->width) /
-              (float)Minecraft::GetInstance()->width_phys;
-
-    t->vertexUV(xx0f, yy1f, (float)(blitOffset), (float)((sx + 0) * us),
-                (float)((sy + 16) * vs));
-    t->vertexUV(xx1f, yy1f, (float)(blitOffset), (float)((sx + 16) * us),
-                (float)((sy + 16) * vs));
-    t->vertexUV(xx1f, yy0f, (float)(blitOffset), (float)((sx + 16) * us),
-                (float)((sy + 0) * vs));
-    t->vertexUV(xx0f, yy0f, (float)(blitOffset), (float)((sx + 0) * us),
-                (float)((sy + 0) * vs));
-    t->end();
+    const PixelSnappedRect r = pixel_snap(x, y, w, h);
+    const float us = 1.0f / 256.0f;
+    const float vs = 1.0f / 256.0f;
+    const int tex_id = Minecraft::GetInstance()->textures->currentBoundId();
+    if (tex_id < 0) return;
+    plce::ui::draw_textured_quad(
+        r.x0, r.y0, r.x1, r.y1, (float)blitOffset,
+        (sx     ) * us, (sy     ) * vs,
+        (sx + 16) * us, (sy + 16) * vs,
+        tex_id, currentBlitTint_);
 }
 
 void ItemRenderer::blit(float x, float y, Icon* tex, float w, float h) {
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-
-    // 4J - calculate what the pixel coordinates will be in final screen
-    // coordinates
-    float sfx = (float)Minecraft::GetInstance()->width /
-                (float)Minecraft::GetInstance()->width_phys;
-    float sfy = (float)Minecraft::GetInstance()->height /
-                (float)Minecraft::GetInstance()->height_phys;
-    float xx0 = x * sfx;
-    float xx1 = (x + w) * sfx;
-    float yy0 = y * sfy;
-    float yy1 = (y + h) * sfy;
-    // Round to whole pixels - rounding inwards so that we don't overlap any
-    // surrounding graphics
-    xx0 = ceilf(xx0);
-    xx1 = floorf(xx1);
-    yy0 = ceilf(yy0);
-    yy1 = floorf(yy1);
-    // Offset by half to get actual centre of pixel - again moving inwards to
-    // avoid overlap with surrounding graphics
-    xx0 += 0.5f;
-    xx1 -= 0.5f;
-    yy0 += 0.5f;
-    yy1 -= 0.5f;
-    // Convert back to game coordinate space
-    float xx0f = xx0 / sfx;
-    float xx1f = xx1 / sfx;
-    float yy0f = yy0 / sfy;
-    float yy1f = yy1 / sfy;
-
-    // 4J - subtracting 0.5f (actual screen pixels, so need to compensate for
-    // physical & game width) from each x & y coordinate to compensate for
-    // centre of pixels in directx vs openGL
-    float f = (0.5f * (float)Minecraft::GetInstance()->width) /
-              (float)Minecraft::GetInstance()->width_phys;
-
-    t->vertexUV(xx0f, yy1f, blitOffset, tex->getU0(true), tex->getV1(true));
-    t->vertexUV(xx1f, yy1f, blitOffset, tex->getU1(true), tex->getV1(true));
-    t->vertexUV(xx1f, yy0f, blitOffset, tex->getU1(true), tex->getV0(true));
-    t->vertexUV(xx0f, yy0f, blitOffset, tex->getU0(true), tex->getV0(true));
-    t->end();
+    const PixelSnappedRect r = pixel_snap(x, y, w, h);
+    const int tex_id = Minecraft::GetInstance()->textures->currentBoundId();
+    if (tex_id < 0) return;
+    plce::ui::draw_textured_quad(
+        r.x0, r.y0, r.x1, r.y1, (float)blitOffset,
+        tex->getU0(true), tex->getV0(true),
+        tex->getU1(true), tex->getV1(true),
+        tex_id, currentBlitTint_);
 }
