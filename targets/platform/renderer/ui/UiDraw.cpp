@@ -19,6 +19,7 @@ namespace {
 // assert when we add one).
 struct MaterialTable {
     rp::MaterialHandle untextured_alpha{};
+    rp::MaterialHandle untextured_alpha_no_depth{};  // for fullscreen overlays
     rp::MaterialHandle textured_alpha{};
     rp::MaterialHandle font_glyph{};
     rp::MaterialHandle fullscreen_overlay{};
@@ -73,6 +74,21 @@ void init() {
     untex.depth_write = true;
     untex.cull        = rp::CullMode::none;
     s_materials.untextured_alpha = RenderPath.create_material(untex);
+
+    // Same as untextured_alpha but with depth test + write off. Used
+    // for fullscreen colour overlays (sleep, death, damage flash) that
+    // need to land on top of the existing HUD regardless of each HUD
+    // sprite's blitOffset z value.
+    rp::MaterialDesc untex_nd{};
+    untex_nd.shader      = rp::ShaderPath::standard;
+    untex_nd.blend       = rp::BlendMode::alpha;
+    untex_nd.textured    = false;
+    untex_nd.lit         = false;
+    untex_nd.fog_enabled = false;
+    untex_nd.depth_test  = rp::DepthTest::off;
+    untex_nd.depth_write = false;
+    untex_nd.cull        = rp::CullMode::none;
+    s_materials.untextured_alpha_no_depth = RenderPath.create_material(untex_nd);
 
     rp::MaterialDesc textured{};
     textured.shader      = rp::ShaderPath::standard;
@@ -269,6 +285,32 @@ void draw_vignette(int w, int h, int texture_id, const float rgba[4]) {
     push_fullscreen_quad(w, h, texture_id,
                          s_materials.vignette, rgba,
                          0.0f, 0.0f, 1.0f, 1.0f);
+}
+
+void draw_fullscreen_fill(int w, int h, uint32_t rgba) {
+    auto [tvb, span] = RenderPath.alloc_transient_vertices(
+        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
+    if (span.empty()) return;
+
+    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
+    v[0] = {{0.0f,     float(h), 0.0f}, {0, 0}, 0, 0, kVertexColorSentinel};
+    v[1] = {{float(w), float(h), 0.0f}, {0, 0}, 0, 0, kVertexColorSentinel};
+    v[2] = {{float(w), 0.0f,     0.0f}, {0, 0}, 0, 0, kVertexColorSentinel};
+    v[3] = {{0.0f,     0.0f,     0.0f}, {0, 0}, 0, 0, kVertexColorSentinel};
+
+    rp::DrawCall dc{};
+    dc.source    = rp::VertexSource::transient;
+    dc.transient = tvb;
+    dc.material  = s_materials.untextured_alpha_no_depth;
+    unpack_rgba(rgba, dc.tint_color);
+
+    // Synthesize the (w, h) ortho — callers pass logical UI size, same
+    // convention as draw_fullscreen_overlay.
+    const glm::mat4 proj = glm::ortho(0.0f, float(w), float(h), 0.0f,
+                                      -100.0f, 100.0f);
+    std::memcpy(dc.transform, &proj[0][0], sizeof(float) * 16);
+
+    rp::ui_overlay::push(dc);
 }
 
 void draw_glyph_quad(float x, float y, float w, float h,

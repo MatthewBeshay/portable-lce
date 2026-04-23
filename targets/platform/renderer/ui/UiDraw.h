@@ -73,6 +73,12 @@ void draw_fullscreen_overlay(int w, int h, int texture_id,
                              float u0 = 0.0f, float v0 = 0.0f,
                              float u1 = 1.0f, float v1 = 1.0f);
 
+// Fullscreen solid colour fill with depth test disabled. Used for
+// sleep / death / damage-flash overlays that need to sit on top of
+// the existing HUD regardless of per-element blitOffset. Alpha-blended
+// so partially-transparent fills darken rather than replace the frame.
+void draw_fullscreen_fill(int w, int h, uint32_t rgba);
+
 // Fullscreen vignette with the custom zero / one_minus_src_color
 // blend the legacy renderVignette used.
 void draw_vignette(int w, int h, int texture_id,

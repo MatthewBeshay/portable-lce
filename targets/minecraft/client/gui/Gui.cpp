@@ -888,15 +888,20 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
     }
 #endif
 
-    // 4J - added to disable blends, which we have enabled previously to allow
-    // gui fading
-    RenderPath.StateSetBlendEnable(false);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
+    // Sleep + death fullscreen fades. draw_fullscreen_fill runs on a
+    // depth-off material so the fill always lands on top of the HUD
+    // regardless of each HUD element's blitOffset z — no legacy
+    // StateSetDepthTestEnable / AlphaTestEnable scaffolding needed.
 
-    // if the player is falling asleep we render a dark overlay
+    auto rgba_from_legacy_argb = [](int col) -> uint32_t {
+        // 0xAARRGGBB int -> 0xAABBGGRR (UiDraw rgba layout).
+        return  ((uint32_t(col) >> 16) & 0xFFu)        |
+               (((uint32_t(col) >>  8) & 0xFFu) <<  8) |
+               (((uint32_t(col)      ) & 0xFFu) << 16) |
+               (((uint32_t(col) >> 24) & 0xFFu) << 24);
+    };
+
     if (minecraft->player->getSleepTimer() > 0) {
-        RenderPath.StateSetDepthTestEnable(false);
-        RenderPath.StateSetAlphaTestEnable(false);
         int timer = minecraft->player->getSleepTimer();
         float amount = (float)timer / (float)Player::SLEEP_DURATION;
         if (amount > 1) {
@@ -904,26 +909,22 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
             amount = 1.0f - ((float)(timer - Player::SLEEP_DURATION) /
                              (float)Player::WAKE_UP_DURATION);
         }
-
         int color = (int)(220.0f * amount) << 24 | (0x101020);
-        fill(0, 0, screenWidth / fScaleFactorWidth,
-             screenHeight / fScaleFactorHeight, color);
-        RenderPath.StateSetAlphaTestEnable(true);
-        RenderPath.StateSetDepthTestEnable(true);
+        plce::ui::draw_fullscreen_fill(
+            int(screenWidth / fScaleFactorWidth),
+            int(screenHeight / fScaleFactorHeight),
+            rgba_from_legacy_argb(color));
     }
 
     // 4J-PB - Request from Mojang to have a red death screen
     if (!minecraft->player->isAlive()) {
-        RenderPath.StateSetDepthTestEnable(false);
-        RenderPath.StateSetAlphaTestEnable(false);
         int timer = minecraft->player->getDeathFadeTimer();
         float amount = (float)timer / (float)Player::DEATHFADE_DURATION;
-
         int color = (int)(220.0f * amount) << 24 | (0x200000);
-        fill(0, 0, screenWidth / fScaleFactorWidth,
-             screenHeight / fScaleFactorHeight, color);
-        RenderPath.StateSetAlphaTestEnable(true);
-        RenderPath.StateSetDepthTestEnable(true);
+        plce::ui::draw_fullscreen_fill(
+            int(screenWidth / fScaleFactorWidth),
+            int(screenHeight / fScaleFactorHeight),
+            rgba_from_legacy_argb(color));
     }
 
     //        {
