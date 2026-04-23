@@ -1649,17 +1649,28 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
     // DrawCall carries its own texture transform — override the live
     // tex_stack values fill_push_constants pulled in, so migrated draws
     // don't inherit a stale legacy TextureMatrix.
-    pc.nm0.w    = dc.uv_scale[0];
-    pc.nm1.w    = dc.uv_scale[1];
-    pc.nm2.w    = dc.uv_offset[0];
-    pc.tex_mv.x = dc.uv_offset[1];
-    // Normal matrix: mat3 of the snapshotted modelview. fill_push_constants
-    // pulled it from mv_stack_ which is forced to identity in the view /
-    // ui_overlay loops, so the DrawCall has to carry its own to get
-    // per-vertex lighting right (normal rotated into the same space as
-    // the light direction in the FrameUBO). Column-major mat4, mat3 is
-    // the upper-left 3x3.
-    {
+    // Overrides below replace the live legacy state (state_colour_,
+    // lighting_enabled_, chunk_offset_, tex_stack_, mv_stack_) with the
+    // DrawCall's own snapshot fields. Only valid for deferred-drain
+    // DrawCalls (rp::ui_overlay / rp::world_draws): by the time
+    // render_frame drains those, the live legacy state no longer
+    // matches what was live when the draw was pushed, so the
+    // fill_push_constants read would leak (e.g. Shiggy-UI hover
+    // StateSetColour(yellow) tinting every pending ui_overlay draw
+    // for the hover frame; HUD StateSetLightingEnable(false) killing
+    // entity lighting; chunk_offset_ shifting entities by a chunk;
+    // font-atlas TextureBind sampling the arm; view loop identity-mvp
+    // / identity-normal defeating lighting entirely). Sync DrawCalls
+    // submitted via submit_draw_call land with live state valid and
+    // want fill_push_constants's values intact.
+    if (dc.self_describing) {
+        pc.nm0.w    = dc.uv_scale[0];
+        pc.nm1.w    = dc.uv_scale[1];
+        pc.nm2.w    = dc.uv_offset[0];
+        pc.tex_mv.x = dc.uv_offset[1];
+        pc.state_colour = glm::vec4(dc.tint_color[0], dc.tint_color[1],
+                                    dc.tint_color[2], dc.tint_color[3]);
+        pc.chunk_lit = glm::vec4(0.0f, 0.0f, 0.0f, m.lit ? 1.0f : 0.0f);
         glm::mat4 mv_snap(1.0f);
         std::memcpy(&mv_snap[0][0], dc.mv_transform, sizeof(float) * 16);
         glm::mat3 nm(mv_snap);
@@ -1667,28 +1678,6 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
         pc.nm1.x = nm[1].x; pc.nm1.y = nm[1].y; pc.nm1.z = nm[1].z;
         pc.nm2.x = nm[2].x; pc.nm2.y = nm[2].y; pc.nm2.z = nm[2].z;
     }
-    // Same story for state_colour: fill_push_constants multiplies the
-    // live state_colour_ register into tint, which means queued
-    // ui_overlay / world_draws DrawCalls that drain later in the frame
-    // get retroactively tinted by whichever legacy StateSetColour call
-    // fired last (e.g. a Shiggy-UI button-hover yellow overlay). Make
-    // the DrawCall fully self-describing — pc.state_colour is just
-    // dc.tint_color.
-    pc.state_colour = glm::vec4(dc.tint_color[0], dc.tint_color[1],
-                                dc.tint_color[2], dc.tint_color[3]);
-    // And lighting_enabled_ leaks the same way: a late-frame
-    // StateSetLightingEnable(false) (HUD / text passes do this) would
-    // turn off per-vertex directional lighting for every queued
-    // entity / model DrawCall at drain time. Use the material's lit
-    // flag instead — the Tier-C material table picks it per bucket.
-    // Also zero chunk_lit.xyz: fill_push_constants reads the live
-    // chunk_offset_ register (set per-chunk during legacy terrain
-    // rendering and never reset at the end), so entity / UI DrawCalls
-    // that drain later in the frame add a stale (cx*16, cy*16, cz*16)
-    // offset to every vertex position — the whole draw shifts
-    // arbitrarily many tiles offscreen. Regular DrawCalls carry no
-    // chunk offset; only ChunkDrawCall does and it has its own path.
-    pc.chunk_lit = glm::vec4(0.0f, 0.0f, 0.0f, m.lit ? 1.0f : 0.0f);
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).
     // For screen-space UI overlays the transform is almost always identity

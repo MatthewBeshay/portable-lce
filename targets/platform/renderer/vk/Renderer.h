@@ -81,6 +81,7 @@ public:
     void pop_timestamp() override                  { frame().pop_timestamp(); }
     void tick() override {}
     void submit_immediate(const rp::DrawCall&) override;
+    void submit_draw_call(const rp::DrawCall& dc) override { record_draw_call(dc); }
 
     // -- CBuff (display list) --
     [[nodiscard]] int CBuffCreate(int n) override;

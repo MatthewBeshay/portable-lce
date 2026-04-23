@@ -328,27 +328,22 @@ void MeshBuilder::flush() {
     dc.source                 = rp::VertexSource::transient;
     dc.transient              = tvb;
     dc.material               = material_for_kind(impl_->kind);
-    // Snapshot the currently-bound texture at flush time when the caller
-    // hasn't provided an explicit override. The legacy entity pipeline
-    // binds via RenderPath.TextureBind(id) before calling
-    // ModelPart::render, and the bound slot would otherwise leak: queued
-    // DrawCalls that drain in render_frame later get whichever texture
-    // the latest legacy bind landed on (font atlas, glint, etc.), which
-    // manifested as invisible / wrong-texture entity parts (e.g. the
-    // first-person arm losing its skin).
-    int captured_tex = impl_->texture_id;
-    if (captured_tex <= 0) captured_tex = RenderPath.TextureGetBoundId();
-    dc.texture_override.index = uint32_t(captured_tex);
-    dc.tint_color[0] = impl_->tint[0];
-    dc.tint_color[1] = impl_->tint[1];
-    dc.tint_color[2] = impl_->tint[2];
-    dc.tint_color[3] = impl_->tint[3];
+    // Sync flush: caller is in the middle of the legacy world pass
+    // (ModelPart::render / entity renderer / tile-entity). Live legacy
+    // state is authoritative — leave dc.transform / mv_transform /
+    // uv_scale / uv_offset / tint_color / self_describing at defaults
+    // so record_draw_call doesn't override what fill_push_constants
+    // pulled from the live matrix stacks + state_colour_ +
+    // lighting_enabled_ + chunk_offset_ + tex_stack_. The legacy caller
+    // already bound the right texture via RenderPath.TextureBind, set
+    // state_colour_ via StateSetColour, etc.
+    if (impl_->texture_id > 0) {
+        dc.texture_override.index = uint32_t(impl_->texture_id);
+    }
     if (impl_->forced_lod >= 0) dc.forced_lod = int8_t(impl_->forced_lod);
-    snapshot_transform(dc.transform);
-    snapshot_mv_transform(dc.mv_transform);
-    snapshot_uv_transform(dc.uv_scale, dc.uv_offset);
+    dc.self_describing = false;
 
-    push_to_bucket(impl_->kind, dc);
+    RenderPath.submit_draw_call(dc);
 
     v.clear();
 }

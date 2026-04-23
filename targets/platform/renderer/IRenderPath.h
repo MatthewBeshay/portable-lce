@@ -264,6 +264,21 @@ struct DrawCall {
     // (fonts, fills, lines) ignore it. Column-major, same convention as
     // `transform`.
     float mv_transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+
+    // When true, `transform` / `mv_transform` / `uv_scale` / `uv_offset`
+    // / `tint_color` are authoritative snapshots captured at push time
+    // and the renderer must use them instead of the live legacy state
+    // (proj_stack_, mv_stack_, tex_stack_, state_colour_, etc.). Used
+    // by the deferred drain paths (rp::ui_overlay / rp::world_draws)
+    // that run at end-of-frame when live state is no longer valid.
+    //
+    // When false, the DrawCall is a passthrough recorded synchronously
+    // under live legacy state (MeshBuilder mid-frame, matching the
+    // submit_immediate ordering the legacy Tesselator had). The
+    // snapshot fields stay at their identity defaults and the renderer
+    // skips the overrides so lighting / projection / textures inherit
+    // whatever the caller set up.
+    bool self_describing = false;
 };
 
 struct ChunkDrawCall {
@@ -572,6 +587,14 @@ public:
 
     // Immediate single-draw submission
     virtual void submit_immediate(const DrawCall& dc) = 0;
+    /// Draw a DrawCall synchronously using the material-driven record
+    /// path (pc.mvp = live proj*mv * dc.transform; material controls
+    /// pipeline state). Lets mid-frame producers like
+    /// plce::world::MeshBuilder keep correct ordering with legacy
+    /// draws (terrain writes depth, entities depth-test against it,
+    /// then legacy HUD clears depth for GUI) without queueing to
+    /// world_draws and draining after the HUD depth-clear.
+    virtual void submit_draw_call(const DrawCall& /*dc*/) {}
 
     // GPU-driven terrain hooks (Phase 4). Default no-op so existing
     // backends (bgfx) ignore them; the Vulkan backend wires them through

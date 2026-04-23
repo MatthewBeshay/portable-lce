@@ -36,7 +36,14 @@ void push(const DrawCall& dc) {
     if (s_main_thread == std::thread::id{}) s_main_thread = tid;
     assert(tid == s_main_thread &&
            "rp::ui_overlay::push called from a non-main thread");
-    s_overlay_draws.push_back(dc);
+    DrawCall stored = dc;
+    // Deferred-drain marker — every DrawCall pushed here is consumed
+    // at end-of-frame under identity matrices / stale legacy state,
+    // so record_draw_call must read snapshot fields instead of live
+    // push-constant values. Callers shouldn't have to remember to
+    // set this.
+    stored.self_describing = true;
+    s_overlay_draws.push_back(stored);
 }
 void clear()                  { s_overlay_draws.clear(); }
 std::span<const DrawCall> get() {
@@ -69,9 +76,17 @@ inline void check_thread() {
 }
 }  // namespace
 
-void push_opaque     (const DrawCall& dc) { check_thread(); s_world_opaque.push_back(dc); }
-void push_alpha_test (const DrawCall& dc) { check_thread(); s_world_alpha_test.push_back(dc); }
-void push_transparent(const DrawCall& dc) { check_thread(); s_world_transparent.push_back(dc); }
+namespace {
+inline DrawCall mark_deferred(const DrawCall& dc) {
+    DrawCall d = dc;
+    d.self_describing = true;
+    return d;
+}
+}  // namespace
+
+void push_opaque     (const DrawCall& dc) { check_thread(); s_world_opaque.push_back(mark_deferred(dc)); }
+void push_alpha_test (const DrawCall& dc) { check_thread(); s_world_alpha_test.push_back(mark_deferred(dc)); }
+void push_transparent(const DrawCall& dc) { check_thread(); s_world_transparent.push_back(mark_deferred(dc)); }
 void push_chunk_opaque     (const ChunkDrawCall& c) { check_thread(); s_chunk_opaque.push_back(c); }
 void push_chunk_alpha_test (const ChunkDrawCall& c) { check_thread(); s_chunk_alpha_test.push_back(c); }
 void push_chunk_transparent(const ChunkDrawCall& c) { check_thread(); s_chunk_transparent.push_back(c); }
