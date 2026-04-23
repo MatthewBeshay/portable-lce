@@ -422,20 +422,27 @@ void draw_item_in_hand_mesh(rp::MeshHandle mesh, int texture_id,
                             const float tint_rgba[4], int forced_lod) {
     if (!mesh) return;
 
+    // Sync-submit mid-frame so the listItem / listTerrain cube mesh
+    // depth-tests against the terrain that was rendered immediately
+    // before, and doesn't leak past GameRenderer::setupGuiScreen's
+    // Clear(CLEAR_DEPTH). Both first-person held-item rendering and
+    // the 3D dropped-item billboard path land here inside the legacy
+    // world pass, so live state is valid — leave dc.self_describing
+    // false and let record_draw_call inherit the live matrix /
+    // lighting / tex_stack values.
     rp::DrawCall dc{};
     dc.source                 = rp::VertexSource::mesh;
     dc.mesh                   = mesh;
     dc.material               = s_materials.item_in_hand;
-    dc.texture_override.index = uint32_t(texture_id);
+    if (texture_id > 0) dc.texture_override.index = uint32_t(texture_id);
     dc.tint_color[0] = tint_rgba[0];
     dc.tint_color[1] = tint_rgba[1];
     dc.tint_color[2] = tint_rgba[2];
     dc.tint_color[3] = tint_rgba[3];
     if (forced_lod >= 0) dc.forced_lod = int8_t(forced_lod);
-    snapshot_transform(dc.transform);
-    snapshot_uv_transform(dc.uv_scale, dc.uv_offset);
+    dc.self_describing = false;
 
-    rp::ui_overlay::push(dc);
+    RenderPath.submit_draw_call(dc);
 }
 
 void draw_item_in_hand_glint_mesh(rp::MeshHandle mesh, int texture_id) {
@@ -445,14 +452,10 @@ void draw_item_in_hand_glint_mesh(rp::MeshHandle mesh, int texture_id) {
     dc.source                 = rp::VertexSource::mesh;
     dc.mesh                   = mesh;
     dc.material               = s_materials.item_in_hand_glint;
-    dc.texture_override.index = uint32_t(texture_id);
-    // Tint is baked into the mesh vertex colours; leave dc.tint_color
-    // at 1,1,1,1 (the default) so fill_push_constants's
-    // state_colour * tint passthrough reproduces the legacy behaviour.
-    snapshot_transform(dc.transform);
-    snapshot_uv_transform(dc.uv_scale, dc.uv_offset);
+    if (texture_id > 0) dc.texture_override.index = uint32_t(texture_id);
+    dc.self_describing = false;
 
-    rp::ui_overlay::push(dc);
+    RenderPath.submit_draw_call(dc);
 }
 
 void draw_glyph_quad(float x, float y, float w, float h,

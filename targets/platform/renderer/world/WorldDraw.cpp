@@ -107,7 +107,7 @@ void init() {
     op.alpha_test  = rp::AlphaTest::off;
     op.depth_test  = rp::DepthTest::less_equal;
     op.depth_write = true;
-    op.cull        = rp::CullMode::back_ccw;
+    op.cull        = rp::CullMode::none;
     s_materials.opaque = RenderPath.create_material(op);
 
     // Cutout: foliage, hair tufts, entity texture holes. Alpha-tested
@@ -123,7 +123,7 @@ void init() {
     ct.alpha_ref   = 0.1f;
     ct.depth_test  = rp::DepthTest::less_equal;
     ct.depth_write = true;
-    ct.cull        = rp::CullMode::back_ccw;
+    ct.cull        = rp::CullMode::none;
     s_materials.alpha_test = RenderPath.create_material(ct);
 
     // Transparent: glass panes, water, particle billboards, portal.
@@ -138,7 +138,7 @@ void init() {
     tr.alpha_test  = rp::AlphaTest::off;
     tr.depth_test  = rp::DepthTest::less_equal;
     tr.depth_write = false;
-    tr.cull        = rp::CullMode::back_ccw;
+    tr.cull        = rp::CullMode::none;
     s_materials.transparent = RenderPath.create_material(tr);
 
     s_initialised = true;
