@@ -283,12 +283,6 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
 
     minecraft->gameRenderer->setupGuiScreen(guiScale);
 
-    RenderPath.StateSetBlendEnable(true);
-    RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha,
-                rp::BlendFactor::one_minus_src_alpha);  // 4J - added - this did actually get
-                                          // set in renderVignette but that code
-                                                // is currently commented out
-
     if (Minecraft::useFancyGraphics()) {
         renderVignette(minecraft->player->getBrightness(a), screenWidth,
                        screenHeight);
@@ -329,8 +323,6 @@ void Gui::render(float a, bool mouseFree, int xMouse, int yMouse) {
         // Display the quick select background, the quick select selection, and
         // the crosshair
         /////////////////////////////////////////////////////////////////////////////////////
-
-        RenderPath.StateSetColour(1, 1, 1, 1);
 
         // 4J - this is where to set the blend factor for gui things
         // use the primary player's settings
