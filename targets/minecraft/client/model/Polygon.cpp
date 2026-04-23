@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "Vertex.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/world/phys/Vec3.h"
+#include "platform/renderer/world/WorldDraw.h"
 
 _Polygon::_Polygon(const std::span<const Vertex> vertices)
     : vertexCount(vertices.size()),
@@ -39,25 +39,22 @@ _Polygon::_Polygon(const std::span<const Vertex, 4> vertices, float u0,
 
 void _Polygon::mirror() { std::reverse(vertices.begin(), vertices.end()); }
 
-void _Polygon::render(Tesselator* t, float scale) {
+void _Polygon::render(plce::world::MeshBuilder& mb, float scale) {
     Vec3 v0 = vertices[1].pos.vectorTo(vertices[0].pos);
     Vec3 v1 = vertices[1].pos.vectorTo(vertices[2].pos);
     Vec3 n = v1.cross(v0).normalize();
 
-    t->begin();
     if (_flipNormal) {
-        t->normal(-(float)n.x, -(float)n.y, -(float)n.z);
+        mb.normal(-(float)n.x, -(float)n.y, -(float)n.z);
     } else {
-        t->normal((float)n.x, (float)n.y, (float)n.z);
+        mb.normal((float)n.x, (float)n.y, (float)n.z);
     }
 
     for (int i = 0; i < 4; i++) {
-        Vertex v = vertices[i];
-        t->vertexUV((float)(v.pos.x * scale), (float)(v.pos.y * scale),
-                    (float)(v.pos.z * scale), (float)(v.u), (float)(v.v));
+        const Vertex& v = vertices[i];
+        mb.vertexUV(v.pos.x * scale, v.pos.y * scale, v.pos.z * scale,
+                    v.u, v.v);
     }
-
-    t->end();
 }
 
 _Polygon* _Polygon::flipNormal() {

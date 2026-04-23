@@ -6,8 +6,7 @@
 #include "ModelPart.h"
 #include "minecraft/client/model/Polygon.h"
 #include "minecraft/client/model/Vertex.h"
-
-class Tesselator;
+#include "platform/renderer/world/WorldDraw.h"
 
 // void Cube::addBox(float x0, float y0, float z0, int w, int h, int d, float g)
 Cube::Cube(ModelPart* modelPart, int xTexOffs, int yTexOffs, float x0, float y0,
@@ -109,9 +108,9 @@ Cube::Cube(ModelPart* modelPart, int xTexOffs, int yTexOffs, float x0, float y0,
     }
 }
 
-void Cube::render(Tesselator* t, float scale) {
+void Cube::render(plce::world::MeshBuilder& mb, float scale) {
     for (int i = 0; i < faceCount; i++) {
-        polygons[i].render(t, scale);
+        polygons[i].render(mb, scale);
     }
 }
 

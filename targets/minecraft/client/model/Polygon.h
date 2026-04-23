@@ -4,9 +4,8 @@
 #include <vector>
 
 #include "Vertex.h"
-#include "minecraft/client/renderer/Tesselator.h"
 
-class Tesselator;
+namespace plce::world { class MeshBuilder; }
 
 class _Polygon {
 public:
@@ -24,6 +23,9 @@ public:
     _Polygon(std::span<const Vertex, 4> vertices, float u0, float v0, float u1,
              float v1);
     void mirror();
-    void render(Tesselator* t, float scale);
+    // Push this polygon's four corners as one quad into the given
+    // MeshBuilder. Face normal is derived from the vertices (or its
+    // negation when flipNormal() was set).
+    void render(plce::world::MeshBuilder& mb, float scale);
     _Polygon* flipNormal();
 };

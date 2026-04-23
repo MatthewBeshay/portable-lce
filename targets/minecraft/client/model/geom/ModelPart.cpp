@@ -4,10 +4,9 @@
 
 #include "Cube.h"
 #include "TexOffs.h"
-#include "minecraft/client/MemoryTracker.h"
 #include "minecraft/client/model/geom/Model.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 const float ModelPart::RAD = (180.0f / std::numbers::pi);
@@ -140,11 +139,24 @@ void ModelPart::setPos(float x, float y, float z) {
     this->z = z;
 }
 
-void ModelPart::render(float scale, bool usecompiled,
+namespace {
+// Helper: push every cube in `cubes` into one MeshBuilder and flush,
+// so the whole part emits a single DrawCall per matrix-stack snapshot.
+// The material defaults to alpha_test (entity atlases have transparent
+// pixels around the body parts); entity renderers that want an opaque
+// or blended material set it explicitly before calling Model::render.
+void flush_cubes(const std::vector<Cube*>& cubes, float scale) {
+    if (cubes.empty()) return;
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
+    for (Cube* c : cubes) c->render(mb, scale);
+    mb.flush();
+}
+}  // namespace
+
+void ModelPart::render(float scale, bool /*usecompiled*/,
                        bool bHideParentBodyPart) {
     if (neverRender) return;
     if (!visible) return;
-    if (!compiled) compile(scale);
 
     RenderPath.MatrixTranslate(translateX, translateY, translateZ);
 
@@ -155,76 +167,39 @@ void ModelPart::render(float scale, bool usecompiled,
         if (yRot != 0) RenderPath.MatrixRotate((yRot * RAD)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
         if (xRot != 0) RenderPath.MatrixRotate((xRot * RAD)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
 
-        if (!bHideParentBodyPart) {
-            if (usecompiled) {
-                ((void)RenderPath.CBuffCall(list));
-            } else {
-                Tesselator* t = Tesselator::getInstance();
-                for (unsigned int i = 0; i < cubes.size(); i++) {
-                    cubes[i]->render(t, scale);
-                }
-            }
-        }
-        // if (children != nullptr)
-        {
-            for (unsigned int i = 0; i < children.size(); i++) {
-                children.at(i)->render(scale, usecompiled);
-            }
+        if (!bHideParentBodyPart) flush_cubes(cubes, scale);
+        for (unsigned int i = 0; i < children.size(); i++) {
+            children.at(i)->render(scale, false);
         }
 
         RenderPath.MatrixPop();
     } else if (x != 0 || y != 0 || z != 0) {
         RenderPath.MatrixTranslate(x * scale, y * scale, z * scale);
-        if (!bHideParentBodyPart) {
-            if (usecompiled) {
-                ((void)RenderPath.CBuffCall(list));
-            } else {
-                Tesselator* t = Tesselator::getInstance();
-                for (unsigned int i = 0; i < cubes.size(); i++) {
-                    cubes[i]->render(t, scale);
-                }
-            }
-        }
-        // if (children != nullptr)
-        {
-            for (unsigned int i = 0; i < children.size(); i++) {
-                children.at(i)->render(scale, usecompiled);
-            }
+        if (!bHideParentBodyPart) flush_cubes(cubes, scale);
+        for (unsigned int i = 0; i < children.size(); i++) {
+            children.at(i)->render(scale, false);
         }
         RenderPath.MatrixTranslate(-x * scale, -y * scale, -z * scale);
     } else {
-        if (!bHideParentBodyPart) {
-            if (usecompiled) {
-                ((void)RenderPath.CBuffCall(list));
-            } else {
-                Tesselator* t = Tesselator::getInstance();
-                for (unsigned int i = 0; i < cubes.size(); i++) {
-                    cubes[i]->render(t, scale);
-                }
-            }
-        }
-        // if (children != nullptr)
-        {
-            for (unsigned int i = 0; i < children.size(); i++) {
-                children.at(i)->render(scale, usecompiled);
-            }
+        if (!bHideParentBodyPart) flush_cubes(cubes, scale);
+        for (unsigned int i = 0; i < children.size(); i++) {
+            children.at(i)->render(scale, false);
         }
     }
 
     RenderPath.MatrixTranslate(-translateX, -translateY, -translateZ);
 }
 
-void ModelPart::renderRollable(float scale, bool usecompiled) {
+void ModelPart::renderRollable(float scale, bool /*usecompiled*/) {
     if (neverRender) return;
     if (!visible) return;
-    if (!compiled) compile(scale);
 
     RenderPath.MatrixPush();
     RenderPath.MatrixTranslate(x * scale, y * scale, z * scale);
     if (yRot != 0) RenderPath.MatrixRotate((yRot * RAD)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
     if (xRot != 0) RenderPath.MatrixRotate((xRot * RAD)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
     if (zRot != 0) RenderPath.MatrixRotate((zRot * RAD)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
-    ((void)RenderPath.CBuffCall(list));
+    flush_cubes(cubes, scale);
     RenderPath.MatrixPop();
 }
 
@@ -244,22 +219,12 @@ void ModelPart::translateTo(float scale) {
     }
 }
 
-void ModelPart::compile(float scale) {
-    list = MemoryTracker::genLists(1);
-
-    RenderPath.CBuffStart(list);
-    // Set a few render states that aren't configured by default
-    RenderPath.StateSetDepthTestEnable(true);
-    RenderPath.StateSetDepthFunc(rp::DepthTest::less_equal);
-    RenderPath.StateSetDepthMask(true);
-    Tesselator* t = Tesselator::getInstance();
-
-    for (unsigned int i = 0; i < cubes.size(); i++) {
-        cubes.at(i)->render(t, scale);
-    }
-
-    RenderPath.CBuffEnd();
-
+void ModelPart::compile(float /*scale*/) {
+    // No-op under the MeshBuilder path — render() now emits one DrawCall
+    // per frame straight from Cube::render / Polygon::render, so there's
+    // no precompiled CBuff to prepare. Signature stays so Model
+    // subclasses can keep calling part->compile(...) without touching
+    // each one.
     compiled = true;
 }
 

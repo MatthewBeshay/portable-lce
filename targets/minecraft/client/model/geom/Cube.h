@@ -8,9 +8,10 @@
 
 class Model;
 class ModelPart;
-class Tesselator;
 class Vertex;
 class _Polygon;
+
+namespace plce::world { class MeshBuilder; }
 
 class Cube {
 private:
@@ -27,6 +28,6 @@ public:
          float z0, int w, int h, int d, float g, int faceMask = 63,
          bool bFlipPoly3UVs = false);  // 4J - added faceMask
 
-    void render(Tesselator* t, float scale);
+    void render(plce::world::MeshBuilder& mb, float scale);
     Cube* setId(const std::string& id);
 };
