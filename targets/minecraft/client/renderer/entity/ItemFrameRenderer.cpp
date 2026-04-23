@@ -14,8 +14,8 @@
 #include "minecraft/client/Minecraft.h"
 #include "minecraft/client/gui/Minimap.h"
 #include "minecraft/client/renderer/ItemInHandRenderer.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/texture/TextureAtlas.h"
 #include "minecraft/client/renderer/texture/custom/CompassTexture.h"
 #include "minecraft/client/resources/ResourceLocation.h"
@@ -162,20 +162,19 @@ void ItemFrameRenderer::drawItem(std::shared_ptr<ItemFrame> entity) {
 
     if (itemEntity->getItem()->getItem() == Item::map) {
         entityRenderDispatcher->textures->bindTexture(&MAP_BACKGROUND_LOCATION);
-        Tesselator* t = Tesselator::getInstance();
 
         RenderPath.MatrixRotate((180)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
         RenderPath.MatrixRotate((180)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
         RenderPath.MatrixScale(1.0f / 256.0f, 1.0f / 256.0f, 1.0f / 256.0f);
         RenderPath.MatrixTranslate(-65, -107, -3);
-        (void)0;
-        t->begin();
+
+        plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
         int vo = 7;
-        t->vertexUV(0 - vo, 128 + vo, 0, 0, 1);
-        t->vertexUV(128 + vo, 128 + vo, 0, 1, 1);
-        t->vertexUV(128 + vo, 0 - vo, 0, 1, 0);
-        t->vertexUV(0 - vo, 0 - vo, 0, 0, 0);
-        t->end();
+        mb.vertexUV(0 - vo,   128 + vo, 0, 0, 1);
+        mb.vertexUV(128 + vo, 128 + vo, 0, 1, 1);
+        mb.vertexUV(128 + vo, 0 - vo,   0, 1, 0);
+        mb.vertexUV(0 - vo,   0 - vo,   0, 0, 0);
+        mb.flush();
 
         std::shared_ptr<MapItemSavedData> data =
             Item::map->getSavedData(itemEntity->getItem(), entity->level);

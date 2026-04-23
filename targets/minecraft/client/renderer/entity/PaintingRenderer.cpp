@@ -5,13 +5,13 @@
 
 #include "EntityRenderDispatcher.h"
 #include "java/Random.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/entity/Entity.h"
 #include "minecraft/world/entity/Painting.h"
 #include "minecraft/world/level/Level.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 ResourceLocation PaintingRenderer::PAINTING_LOCATION(TN_ART_KZ);
@@ -82,44 +82,43 @@ void PaintingRenderer::renderPainting(std::shared_ptr<Painting> painting, int w,
             float fv0 = (vo + h - (ys) * 16) / 256.0f;
             float fv1 = (vo + h - (ys + 1) * 16) / 256.0f;
 
-            Tesselator* t = Tesselator::getInstance();
-            t->begin();
-            t->normal(0, 0, -1);
-            t->vertexUV(x0, y1, -edgeWidth, fu1, fv0);
-            t->vertexUV(x1, y1, -edgeWidth, fu0, fv0);
-            t->vertexUV(x1, y0, -edgeWidth, fu0, fv1);
-            t->vertexUV(x0, y0, -edgeWidth, fu1, fv1);
+            plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
+            mb.normal(0, 0, -1);
+            mb.vertexUV(x0, y1, -edgeWidth, fu1, fv0);
+            mb.vertexUV(x1, y1, -edgeWidth, fu0, fv0);
+            mb.vertexUV(x1, y0, -edgeWidth, fu0, fv1);
+            mb.vertexUV(x0, y0, -edgeWidth, fu1, fv1);
 
-            t->normal(0, 0, 1);
-            t->vertexUV(x0, y0, edgeWidth, bu0, bv0);
-            t->vertexUV(x1, y0, edgeWidth, bu1, bv0);
-            t->vertexUV(x1, y1, edgeWidth, bu1, bv1);
-            t->vertexUV(x0, y1, edgeWidth, bu0, bv1);
+            mb.normal(0, 0, 1);
+            mb.vertexUV(x0, y0, edgeWidth, bu0, bv0);
+            mb.vertexUV(x1, y0, edgeWidth, bu1, bv0);
+            mb.vertexUV(x1, y1, edgeWidth, bu1, bv1);
+            mb.vertexUV(x0, y1, edgeWidth, bu0, bv1);
 
-            t->normal(0, 1, 0);
-            t->vertexUV(x0, y0, -edgeWidth, uu0, uv0);
-            t->vertexUV(x1, y0, -edgeWidth, uu1, uv0);
-            t->vertexUV(x1, y0, edgeWidth, uu1, uv1);
-            t->vertexUV(x0, y0, edgeWidth, uu0, uv1);
+            mb.normal(0, 1, 0);
+            mb.vertexUV(x0, y0, -edgeWidth, uu0, uv0);
+            mb.vertexUV(x1, y0, -edgeWidth, uu1, uv0);
+            mb.vertexUV(x1, y0, edgeWidth, uu1, uv1);
+            mb.vertexUV(x0, y0, edgeWidth, uu0, uv1);
 
-            t->normal(0, -1, 0);
-            t->vertexUV(x0, y1, edgeWidth, uu0, uv0);
-            t->vertexUV(x1, y1, edgeWidth, uu1, uv0);
-            t->vertexUV(x1, y1, -edgeWidth, uu1, uv1);
-            t->vertexUV(x0, y1, -edgeWidth, uu0, uv1);
+            mb.normal(0, -1, 0);
+            mb.vertexUV(x0, y1, edgeWidth, uu0, uv0);
+            mb.vertexUV(x1, y1, edgeWidth, uu1, uv0);
+            mb.vertexUV(x1, y1, -edgeWidth, uu1, uv1);
+            mb.vertexUV(x0, y1, -edgeWidth, uu0, uv1);
 
-            t->normal(-1, 0, 0);
-            t->vertexUV(x0, y0, edgeWidth, su1, sv0);
-            t->vertexUV(x0, y1, edgeWidth, su1, sv1);
-            t->vertexUV(x0, y1, -edgeWidth, su0, sv1);
-            t->vertexUV(x0, y0, -edgeWidth, su0, sv0);
+            mb.normal(-1, 0, 0);
+            mb.vertexUV(x0, y0, edgeWidth, su1, sv0);
+            mb.vertexUV(x0, y1, edgeWidth, su1, sv1);
+            mb.vertexUV(x0, y1, -edgeWidth, su0, sv1);
+            mb.vertexUV(x0, y0, -edgeWidth, su0, sv0);
 
-            t->normal(1, 0, 0);
-            t->vertexUV(x1, y0, -edgeWidth, su1, sv0);
-            t->vertexUV(x1, y1, -edgeWidth, su1, sv1);
-            t->vertexUV(x1, y1, edgeWidth, su0, sv1);
-            t->vertexUV(x1, y0, edgeWidth, su0, sv0);
-            t->end();
+            mb.normal(1, 0, 0);
+            mb.vertexUV(x1, y0, -edgeWidth, su1, sv0);
+            mb.vertexUV(x1, y1, -edgeWidth, su1, sv1);
+            mb.vertexUV(x1, y1, edgeWidth, su0, sv1);
+            mb.vertexUV(x1, y0, edgeWidth, su0, sv0);
+            mb.flush();
         }
     }
 }
