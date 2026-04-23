@@ -400,7 +400,14 @@ void TitleScreen::render(int xm, int ym, float a) {
     fillGradient(0, 0, width, height, 0, INT_MIN);
 #endif
 
-    RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_TITLE_MCLOGO));
+    // Route through Textures::bind so currentBoundId() picks up the
+    // logo id — GuiComponent::blit reads that to build its DrawCall's
+    // texture_override. RenderPath.TextureBind alone would leave the
+    // tracker pointing at the last font-atlas bind from an earlier
+    // draw, and the blit would sample the font glyph sheet as the
+    // "logo" source.
+    minecraft->textures->bind(
+        minecraft->textures->loadTexture(TN_TITLE_MCLOGO));
     blit(logoX + 0, logoY + 0, 0, 0, 155, 44);
     blit(logoX + 155, logoY + 0, 0, 45, 155, 44);
     RenderPath.MatrixPush();
