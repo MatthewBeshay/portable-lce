@@ -7,12 +7,12 @@
 
 #include "EntityRenderDispatcher.h"
 #include "minecraft/SharedConstants.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/entity/Entity.h"
 #include "minecraft/world/entity/ExperienceOrb.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 
 ResourceLocation ExperienceOrbRenderer::XP_ORB_LOCATION =
@@ -62,35 +62,27 @@ void ExperienceOrbRenderer::render(std::shared_ptr<Entity> _orb, double x,
     RenderPath.MatrixRotate((-entityRenderDispatcher->playerRotX)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
     float s = 0.3f;
     RenderPath.MatrixScale(s, s, s);
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-    t->color(col, 128);
-    t->normal(0, 1, 0);
-    t->vertexUV(0 - xo, 0 - yo, 0, u0, v1);
-    t->vertexUV(r - xo, 0 - yo, 0, u1, v1);
-    t->vertexUV(r - xo, 1 - yo, 0, u1, v0);
-    t->vertexUV(0 - xo, 1 - yo, 0, u0, v0);
-    t->end();
+
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::alpha_test, 0);
+    // Legacy tesselator->color(int c, int alpha) packed 0x00RRGGBB +
+    // separate alpha; MeshBuilder takes uint8_t channels, so unpack
+    // inline to keep the per-orb colour pulse working.
+    mb.color(uint8_t((col >> 16) & 0xff),
+             uint8_t((col >>  8) & 0xff),
+             uint8_t((col >>  0) & 0xff),
+             uint8_t(128));
+    mb.normal(0, 1, 0);
+    mb.vertexUV(0 - xo, 0 - yo, 0, u0, v1);
+    mb.vertexUV(r - xo, 0 - yo, 0, u1, v1);
+    mb.vertexUV(r - xo, 1 - yo, 0, u1, v0);
+    mb.vertexUV(0 - xo, 1 - yo, 0, u0, v0);
+    mb.flush();
 
     RenderPath.StateSetBlendEnable(false);
-    (void)0;
     RenderPath.MatrixPop();
 }
 
 ResourceLocation* ExperienceOrbRenderer::getTextureLocation(
     std::shared_ptr<Entity> mob) {
     return &XP_ORB_LOCATION;
-}
-
-void ExperienceOrbRenderer::blit(int x, int y, int sx, int sy, int w, int h) {
-    float blitOffset = 0;
-    float us = 1 / 256.0f;
-    float vs = 1 / 256.0f;
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-    t->vertexUV(x + 0, y + h, blitOffset, (sx + 0) * us, (sy + h) * vs);
-    t->vertexUV(x + w, y + h, blitOffset, (sx + w) * us, (sy + h) * vs);
-    t->vertexUV(x + w, y + 0, blitOffset, (sx + w) * us, (sy + 0) * vs);
-    t->vertexUV(x + 0, y + 0, blitOffset, (sx + 0) * us, (sy + 0) * vs);
-    t->end();
 }
