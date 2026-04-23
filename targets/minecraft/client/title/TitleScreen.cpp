@@ -22,7 +22,7 @@
 #include "minecraft/client/gui/JoinMultiplayerScreen.h"
 #include "minecraft/client/gui/OptionsScreen.h"
 #include "minecraft/client/gui/SelectWorldScreen.h"
-#include "platform/renderer/world/WorldDraw.h"
+#include "platform/renderer/ui/UiDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/locale/Language.h"
@@ -282,7 +282,8 @@ void TitleScreen::renderPanorama(float a) {
     RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one_minus_src_alpha);
     RenderPath.StateSetDepthMask(false);
 
-    RenderPath.TextureBind(                  minecraft->textures->loadTexture(TN_TITLE_BG_PANORAMA));
+    const int panorama_tex = minecraft->textures->loadTexture(TN_TITLE_BG_PANORAMA);
+    RenderPath.TextureBind(panorama_tex);
 
     RenderPath.StateSetTextureWrap(rp::TextureWrap::repeat, rp::TextureWrap::clamp_to_edge);
     RenderPath.StateSetTextureFilter(rp::TextureFilter::linear, rp::TextureFilter::linear);
@@ -304,16 +305,14 @@ void TitleScreen::renderPanorama(float a) {
 
     float uMax = off + (texWidth / 1748.0f);
 
-    {
-        plce::world::MeshBuilder mb(
-            plce::world::MaterialKind::transparent, 0);
-        mb.color(0xffffff, 255);
-        mb.vertexUV(0,        yOff + texHeight, 0, off,  1.0f);
-        mb.vertexUV(texWidth, yOff + texHeight, 0, uMax, 1.0f);
-        mb.vertexUV(texWidth, yOff,             0, uMax, 0.0f);
-        mb.vertexUV(0,        yOff,             0, off,  0.0f);
-        mb.flush();
-    }
+    // Push through plce::ui (ui_overlay) — title screen has no GameRenderer,
+    // so the world_* buckets aren't drained on the title frame. ui_overlay
+    // is always drained in main.cpp.
+    plce::ui::draw_textured_quad(
+        /*x0=*/0.0f, /*y0=*/yOff, /*x1=*/texWidth, /*y1=*/yOff + texHeight,
+        /*z=*/0.0f,
+        /*u0=*/off, /*v0=*/0.0f, /*u1=*/uMax, /*v1=*/1.0f,
+        panorama_tex, /*tint_rgba=*/0xFFFFFFFFu);
 
     RenderPath.StateSetDepthMask(true);
     RenderPath.StateSetBlendEnable(false);

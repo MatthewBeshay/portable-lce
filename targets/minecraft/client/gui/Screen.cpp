@@ -9,7 +9,7 @@
 #include "minecraft/client/gui/Screen.h"
 #include "minecraft/client/gui/ScreenSizeCalculator.h"
 #include "minecraft/client/gui/particle/GuiParticles.h"
-#include "platform/renderer/world/WorldDraw.h"
+#include "platform/renderer/ui/UiDraw.h"
 #include "minecraft/network/INetworkService.h"
 #include "minecraft/server/MinecraftServer.h"
 #include "minecraft/server/ServerAction.h"
@@ -190,15 +190,18 @@ void Screen::renderDirtBackground(int vo) {
 #ifdef ENABLE_JAVA_GUIS
     RenderPath.StateSetLightingEnable(false);
     RenderPath.StateSetFogEnable(false);
-    RenderPath.TextureBind(minecraft->textures->loadTexture(TN_GUI_BACKGROUND));
+    const int dirt_tex = minecraft->textures->loadTexture(TN_GUI_BACKGROUND);
+    RenderPath.TextureBind(dirt_tex);
     float s = 32;
-    plce::world::MeshBuilder mb(plce::world::MaterialKind::opaque, 0);
-    mb.color(0x404040);
-    mb.vertexUV(0.0f,          (float)height, 0.0f, 0.0f,           height / s + vo);
-    mb.vertexUV((float)width,  (float)height, 0.0f, width / s,      height / s + vo);
-    mb.vertexUV((float)width,  0.0f,          0.0f, width / s,      0 + vo);
-    mb.vertexUV(0.0f,          0.0f,          0.0f, 0.0f,           0 + vo);
-    mb.flush();
+    // ui_overlay bucket — pause / death / world-select screens share
+    // this code path and none of them populate a world view, so
+    // world_draws would never drain.
+    plce::ui::draw_textured_quad(
+        /*x0=*/0.0f, /*y0=*/0.0f, /*x1=*/(float)width, /*y1=*/(float)height,
+        /*z=*/0.0f,
+        /*u0=*/0.0f, /*v0=*/0 + vo,
+        /*u1=*/width / s, /*v1=*/height / s + vo,
+        dirt_tex, /*tint_rgba=*/0xFF404040u);
 #endif
 }
 
