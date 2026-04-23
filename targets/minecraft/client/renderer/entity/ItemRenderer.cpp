@@ -17,6 +17,7 @@
 #include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "platform/renderer/ui/UiDraw.h"
+#include "platform/renderer/world/WorldDraw.h"
 
 namespace {
 // Convert a legacy 0xRRGGBB colour + float alpha into UiDraw's
@@ -341,17 +342,14 @@ void ItemRenderer::renderItemBillboard(std::shared_ptr<ItemEntity> entity,
             if (!m_bItemFrame)
                 RenderPath.MatrixRotate((180 - entityRenderDispatcher->playerRotY)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
             RenderPath.StateSetColour(red, green, blue, 1);
-            t->begin();
-            t->normal(0, 1, 0);
-            t->vertexUV((float)(0 - xo), (float)(0 - yo), (float)(0),
-                        (float)(u0), (float)(v1));
-            t->vertexUV((float)(r - xo), (float)(0 - yo), (float)(0),
-                        (float)(u1), (float)(v1));
-            t->vertexUV((float)(r - xo), (float)(1 - yo), (float)(0),
-                        (float)(u1), (float)(v0));
-            t->vertexUV((float)(0 - xo), (float)(1 - yo), (float)(0),
-                        (float)(u0), (float)(v0));
-            t->end();
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::alpha_test, 0);
+            mb.normal(0, 1, 0);
+            mb.vertexUV(0 - xo, 0 - yo, 0, u0, v1);
+            mb.vertexUV(r - xo, 0 - yo, 0, u1, v1);
+            mb.vertexUV(r - xo, 1 - yo, 0, u1, v0);
+            mb.vertexUV(0 - xo, 1 - yo, 0, u0, v0);
+            mb.flush();
 
             RenderPath.MatrixPop();
         }
