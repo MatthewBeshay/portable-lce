@@ -1009,10 +1009,7 @@ void LevelRenderer::renderSky(float alpha) {
         Lighting::turnOff();
 
         RenderPath.StateSetDepthMask(false);
-        textures->bindTexture(
-            &END_SKY_LOCATION);  // 4J was "/1_2_2/misc/tunnel.png"
-        Tesselator* t = Tesselator::getInstance();
-        t->setMipmapEnable(false);
+        textures->bindTexture(&END_SKY_LOCATION);
         for (int i = 0; i < 6; i++) {
             RenderPath.MatrixPush();
             if (i == 1) RenderPath.MatrixRotate((90)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
@@ -1020,16 +1017,16 @@ void LevelRenderer::renderSky(float alpha) {
             if (i == 3) RenderPath.MatrixRotate((180)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
             if (i == 4) RenderPath.MatrixRotate((90)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
             if (i == 5) RenderPath.MatrixRotate((-90)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
-            t->begin();
-            t->color(0x282828);
-            t->vertexUV(-100, -100, -100, 0, 0);
-            t->vertexUV(-100, -100, +100, 0, 16);
-            t->vertexUV(+100, -100, +100, 16, 16);
-            t->vertexUV(+100, -100, -100, 16, 0);
-            t->end();
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.color(0x282828);
+            mb.vertexUV(-100, -100, -100, 0, 0);
+            mb.vertexUV(-100, -100, +100, 0, 16);
+            mb.vertexUV(+100, -100, +100, 16, 16);
+            mb.vertexUV(+100, -100, -100, 16, 0);
+            mb.flush();
             RenderPath.MatrixPop();
         }
-        t->setMipmapEnable(true);
         RenderPath.StateSetDepthMask(true);
         RenderPath.StateSetTextureEnable(true);
         RenderPath.StateSetAlphaTestEnable(true);
@@ -1058,8 +1055,6 @@ void LevelRenderer::renderSky(float alpha) {
     }
 
     RenderPath.StateSetColour(sr, sg, sb, 1.0f);
-
-    Tesselator* t = Tesselator::getInstance();
 
     RenderPath.StateSetDepthMask(false);
 
@@ -1108,20 +1103,20 @@ void LevelRenderer::renderSky(float alpha) {
                 b = sbb;
             }
 
-            t->begin(0x0006);
-            t->color(r, g, b, c[3]);
-
-            t->vertex((float)(0), (float)(100), (float)(0));
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::sky_gradient, 0);
+            mb.set_topology(plce::world::Topology::triangle_fan);
+            mb.color(r, g, b, c[3]);
+            mb.vertex(0.0f, 100.0f, 0.0f);
             int steps = 16;
-            t->color(c[0], c[1], c[2], 0.0f);
+            mb.color(c[0], c[1], c[2], 0.0f);
             for (int i = 0; i <= steps; i++) {
                 float a = i * std::numbers::pi * 2 / steps;
                 float _sin = sinf(a);
                 float _cos = cosf(a);
-                t->vertex((float)(_sin * 120), (float)(_cos * 120),
-                          (float)(-_cos * 40 * c[3]));
+                mb.vertex(_sin * 120, _cos * 120, -_cos * 40 * c[3]);
             }
-            t->end();
+            mb.flush();
         }
         RenderPath.MatrixPop();
         (void)0;
@@ -1142,20 +1137,18 @@ void LevelRenderer::renderSky(float alpha) {
         float ss = 30;
 
         textures->bindTexture(&SUN_LOCATION);
-        t->begin();
-        t->vertexUV((float)(-ss), (float)(100), (float)(-ss), (float)(0),
-                    (float)(0));
-        t->vertexUV((float)(+ss), (float)(100), (float)(-ss), (float)(1),
-                    (float)(0));
-        t->vertexUV((float)(+ss), (float)(100), (float)(+ss), (float)(1),
-                    (float)(1));
-        t->vertexUV((float)(-ss), (float)(100), (float)(+ss), (float)(0),
-                    (float)(1));
-        t->end();
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.vertexUV(-ss, 100, -ss, 0, 0);
+            mb.vertexUV(+ss, 100, -ss, 1, 0);
+            mb.vertexUV(+ss, 100, +ss, 1, 1);
+            mb.vertexUV(-ss, 100, +ss, 0, 1);
+            mb.flush();
+        }
 
         ss = 20;
-        textures->bindTexture(
-            &MOON_PHASES_LOCATION);  // 4J was "/1_2_2/terrain/moon_phases.png"
+        textures->bindTexture(&MOON_PHASES_LOCATION);
         int phase = level[playerIndex]->getMoonPhase();
         int u = phase % 4;
         int v = phase / 4 % 2;
@@ -1163,12 +1156,15 @@ void LevelRenderer::renderSky(float alpha) {
         float v0 = (v + 0) / 2.0f;
         float u1 = (u + 1) / 4.0f;
         float v1 = (v + 1) / 2.0f;
-        t->begin();
-        t->vertexUV(-ss, -100, +ss, u1, v1);
-        t->vertexUV(+ss, -100, +ss, u0, v1);
-        t->vertexUV(+ss, -100, -ss, u0, v0);
-        t->vertexUV(-ss, -100, -ss, u1, v0);
-        t->end();
+        {
+            plce::world::MeshBuilder mb(
+                plce::world::MaterialKind::transparent, 0);
+            mb.vertexUV(-ss, -100, +ss, u1, v1);
+            mb.vertexUV(+ss, -100, +ss, u0, v1);
+            mb.vertexUV(+ss, -100, -ss, u0, v0);
+            mb.vertexUV(-ss, -100, -ss, u1, v0);
+            mb.flush();
+        }
 
         RenderPath.StateSetTextureEnable(false);
         float br =
@@ -1257,10 +1253,7 @@ void LevelRenderer::renderHaloRing(float alpha) {
     Lighting::turnOn();
 
     RenderPath.StateSetDepthMask(false);
-    textures->bindTexture(
-        "misc/haloRing.png");  // 4J was "/1_2_2/misc/tunnel.png"
-    Tesselator* t = Tesselator::getInstance();
-    bool prev = t->setMipmapEnable(true);
+    textures->bindTexture("misc/haloRing.png");
 
     RenderPath.MatrixPush();
     RenderPath.MatrixRotate((-90)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
@@ -1275,7 +1268,6 @@ void LevelRenderer::renderHaloRing(float alpha) {
         RenderPath.submit_draw_call(dc);
     }
     RenderPath.MatrixPop();
-    t->setMipmapEnable(prev);
 
     RenderPath.StateSetDepthMask(true);
     RenderPath.StateSetTextureEnable(true);
