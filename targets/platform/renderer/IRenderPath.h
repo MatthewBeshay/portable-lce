@@ -437,24 +437,35 @@ public:
     //
     // These exist so call sites can move from `the old renderer` to
     // `render_path->foo()` one subsystem at a time. Each method forwards
-    // to the underlying backend in LegacyGLRenderPath. Every caller
-    // produces a compiler warning. When a method has zero callers, delete
-    // it from this section.
+    // to the underlying backend in LegacyGLRenderPath. When a method has
+    // zero callers, delete it from this section.
+    //
+    // A subset of these (Matrix*, StateSet*, CBuff*, TextureBind,
+    // DrawVertices, submit_immediate, SetChunkOffset, SetClearColour)
+    // now carry [[deprecated]] — it's a catch-net so every remaining
+    // raw-renderer call site shows up in the build log as a Tier D
+    // cleanup target. MatrixGet / framebuffer() / StartFrame / Present /
+    // render_frame / create_mesh / alloc_transient_vertices /
+    // submit_draw_call are NOT marked — they're the modern API.
     // =======================================================================
 
+#define PLCE_DEPRECATED_LEGACY \
+    [[deprecated("use plce::ui::draw_* for 2D, plce::world::MeshBuilder / " \
+                 "submit_draw_call for 3D, create_mesh for persistent meshes")]]
+
     // Matrix stack
-    virtual void MatrixMode(MatrixStack stack) = 0;
-    virtual void MatrixSetIdentity() = 0;
-    virtual void MatrixTranslate(float x, float y, float z) = 0;
-    virtual void MatrixRotate(float angle, float x, float y, float z) = 0;
-    virtual void MatrixScale(float x, float y, float z) = 0;
-    virtual void MatrixPerspective(float fovy, float aspect, float zNear,
+    PLCE_DEPRECATED_LEGACY virtual void MatrixMode(MatrixStack stack) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixSetIdentity() = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixTranslate(float x, float y, float z) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixRotate(float angle, float x, float y, float z) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixScale(float x, float y, float z) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixPerspective(float fovy, float aspect, float zNear,
                                    float zFar) = 0;
-    virtual void MatrixOrthogonal(float left, float right, float bottom,
+    PLCE_DEPRECATED_LEGACY virtual void MatrixOrthogonal(float left, float right, float bottom,
                                   float top, float zNear, float zFar) = 0;
-    virtual void MatrixPop() = 0;
-    virtual void MatrixPush() = 0;
-    virtual void MatrixMult(float* mat) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixPop() = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixPush() = 0;
+    PLCE_DEPRECATED_LEGACY virtual void MatrixMult(float* mat) = 0;
     [[nodiscard]] virtual const float* MatrixGet(MatrixStack stack) = 0;
 
     // Draw. `vertexType` is 0 = WorldStandardVertex (32 B), 1 = compact
@@ -462,25 +473,25 @@ public:
     // by every backend — when a projected-texture / alt shader path is
     // genuinely needed, add a typed `ShaderPath` argument rather than
     // reviving the silent int.
-    virtual void DrawVertices(int primitiveType, int count, void* data,
+    PLCE_DEPRECATED_LEGACY virtual void DrawVertices(int primitiveType, int count, void* data,
                               int vertexType) = 0;
 
     // Command buffers
-    [[nodiscard]] virtual int CBuffCreate(int count) = 0;
-    virtual void CBuffDelete(int first, int count) = 0;
-    virtual void CBuffDeleteAll() = 0;
-    virtual void CBuffStart(int index, bool full = false) = 0;
-    virtual void CBuffClear(int index) = 0;
-    [[nodiscard]] virtual int CBuffSize(int index) = 0;
-    virtual void CBuffEnd() = 0;
-    [[nodiscard]] virtual bool CBuffCall(int index, bool full = true) = 0;
-    virtual void CBuffDeferredModeStart() = 0;
-    virtual void CBuffDeferredModeEnd() = 0;
+    [[nodiscard]] PLCE_DEPRECATED_LEGACY virtual int CBuffCreate(int count) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffDelete(int first, int count) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffDeleteAll() = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffStart(int index, bool full = false) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffClear(int index) = 0;
+    [[nodiscard]] PLCE_DEPRECATED_LEGACY virtual int CBuffSize(int index) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffEnd() = 0;
+    [[nodiscard]] PLCE_DEPRECATED_LEGACY virtual bool CBuffCall(int index, bool full = true) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffDeferredModeStart() = 0;
+    PLCE_DEPRECATED_LEGACY virtual void CBuffDeferredModeEnd() = 0;
 
     // Textures
     [[nodiscard]] virtual int TextureCreate() = 0;
     virtual void TextureFree(int idx) = 0;
-    virtual void TextureBind(int idx) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void TextureBind(int idx) = 0;
     virtual void TextureBindVertex(int idx, bool scaleLight = false) = 0;
     /// Currently-bound diffuse texture id at the backend level — what
     /// the next draw would sample if it didn't carry a texture_override.
@@ -496,55 +507,55 @@ public:
                                    int level) = 0;
 
     // Render state
-    virtual void StateSetColour(float r, float g, float b, float a) = 0;
-    virtual void StateSetDepthMask(bool enable) = 0;
-    virtual void StateSetBlendEnable(bool enable) = 0;
-    virtual void StateSetBlendFunc(BlendFactor src, BlendFactor dst) = 0;
-    virtual void StateSetBlendFactor(unsigned int colour) = 0;
-    virtual void StateSetAlphaFunc(AlphaTest func, float param) = 0;
-    virtual void StateSetDepthFunc(DepthTest func) = 0;
-    virtual void StateSetFaceCull(bool enable) = 0;
-    virtual void StateSetLineWidth(float width) = 0;
-    virtual void StateSetWriteEnable(bool r, bool g, bool b, bool a) = 0;
-    virtual void StateSetDepthTestEnable(bool enable) = 0;
-    virtual void StateSetAlphaTestEnable(bool enable) = 0;
-    virtual void StateSetDepthSlopeAndBias(float slope, float bias) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetColour(float r, float g, float b, float a) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetDepthMask(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetBlendEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetBlendFunc(BlendFactor src, BlendFactor dst) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetBlendFactor(unsigned int colour) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetAlphaFunc(AlphaTest func, float param) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetDepthFunc(DepthTest func) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFaceCull(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLineWidth(float width) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetWriteEnable(bool r, bool g, bool b, bool a) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetDepthTestEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetAlphaTestEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetDepthSlopeAndBias(float slope, float bias) = 0;
 
     // Fog
-    virtual void StateSetFogEnable(bool enable) = 0;
-    virtual void StateSetFogMode(FogMode mode) = 0;
-    virtual void StateSetFogNearDistance(float dist) = 0;
-    virtual void StateSetFogFarDistance(float dist) = 0;
-    virtual void StateSetFogDensity(float density) = 0;
-    virtual void StateSetFogColour(float r, float g, float b) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFogEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFogMode(FogMode mode) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFogNearDistance(float dist) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFogFarDistance(float dist) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFogDensity(float density) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetFogColour(float r, float g, float b) = 0;
 
     // Lighting
-    virtual void StateSetLightingEnable(bool enable) = 0;
-    virtual void StateSetLightColour(int light, float r, float g, float b) = 0;
-    virtual void StateSetLightAmbientColour(float r, float g, float b) = 0;
-    virtual void StateSetLightDirection(int light, float x, float y,
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLightingEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLightColour(int light, float r, float g, float b) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLightAmbientColour(float r, float g, float b) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLightDirection(int light, float x, float y,
                                         float z) = 0;
-    virtual void StateSetLightEnable(int light, bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLightEnable(int light, bool enable) = 0;
 
     // Viewport
-    virtual void StateSetViewport(int viewportType) = 0;
-    virtual void StateSetEnableViewportClipPlanes(bool enable) = 0;
-    virtual void StateSetStencil(int func, uint8_t ref, uint8_t funcMask,
+    PLCE_DEPRECATED_LEGACY virtual void StateSetViewport(int viewportType) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetEnableViewportClipPlanes(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetStencil(int func, uint8_t ref, uint8_t funcMask,
                                  uint8_t writeMask) = 0;
-    virtual void StateSetForceLOD(int lod) = 0;
-    virtual void StateSetTextureEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetForceLOD(int lod) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetTextureEnable(bool enable) = 0;
     /// Enable/disable the lightmap sampler. Replaces the legacy GL pattern
     /// that toggled `GL_TEXTURE_2D` on texture unit 1.
-    virtual void StateSetLightmapEnable(bool enable) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetLightmapEnable(bool enable) = 0;
     /// Set the min/mag sampler filter for the currently-bound texture.
     /// Replaces the legacy TextureSetParam(GL_TEXTURE_MIN_FILTER, ...) pair.
-    virtual void StateSetTextureFilter(TextureFilter min, TextureFilter mag) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetTextureFilter(TextureFilter min, TextureFilter mag) = 0;
     /// Set the S/T wrap modes for the currently-bound texture. Replaces the
     /// legacy TextureSetParam(GL_TEXTURE_WRAP_S/T, ...) pair.
-    virtual void StateSetTextureWrap(TextureWrap s, TextureWrap t) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetTextureWrap(TextureWrap s, TextureWrap t) = 0;
 
     // Chunks
-    virtual void SetChunkOffset(float x, float y, float z) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void SetChunkOffset(float x, float y, float z) = 0;
 
     // Texture queries
     [[nodiscard]] virtual int TextureGetTextureLevels() = 0;
@@ -558,13 +569,13 @@ public:
     load_texture_data(std::span<const uint8_t> bytes) = 0;
 
     // Lighting state
-    virtual void StateSetVertexTextureUV(float u, float v) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void StateSetVertexTextureUV(float u, float v) = 0;
 
     // Frame lifecycle
     virtual void StartFrame() = 0;
     virtual void Present() = 0;
     virtual void Clear(int flags) = 0;
-    virtual void SetClearColour(const float rgba[4]) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void SetClearColour(const float rgba[4]) = 0;
     virtual void Set_matrixDirty() = 0;
     virtual void CBuffLockStaticCreations() = 0;
 
@@ -586,7 +597,7 @@ public:
     virtual void EndEvent() = 0;
 
     // Immediate single-draw submission
-    virtual void submit_immediate(const DrawCall& dc) = 0;
+    PLCE_DEPRECATED_LEGACY virtual void submit_immediate(const DrawCall& dc) = 0;
     /// Draw a DrawCall synchronously using the material-driven record
     /// path (pc.mvp = live proj*mv * dc.transform; material controls
     /// pipeline state). Lets mid-frame producers like
