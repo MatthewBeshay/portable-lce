@@ -1307,7 +1307,6 @@ void LevelRenderer::renderClouds(float alpha) {
                     alpha);
     int s = 32;
     int d = 256 / s;
-    Tesselator* t = Tesselator::getInstance();
 
     textures->bindTexture(&CLOUDS_LOCATION);
     RenderPath.StateSetBlendEnable(true);
@@ -1347,26 +1346,22 @@ void LevelRenderer::renderClouds(float alpha) {
                        0.33f);
     float uo = (float)(xo * scale);
     float vo = (float)(zo * scale);
-    t->begin();
 
-    t->color(cr, cg, cb, 0.8f);
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+    mb.color(cr, cg, cb, 0.8f);
     for (int xx = -s * d; xx < +s * d; xx += s) {
         for (int zz = -s * d; zz < +s * d; zz += s) {
-            t->vertexUV((float)(xx + 0), (float)(yy), (float)(zz + s),
-                        (float)((xx + 0) * scale + uo),
-                        (float)((zz + s) * scale + vo));
-            t->vertexUV((float)(xx + s), (float)(yy), (float)(zz + s),
-                        (float)((xx + s) * scale + uo),
-                        (float)((zz + s) * scale + vo));
-            t->vertexUV((float)(xx + s), (float)(yy), (float)(zz + 0),
-                        (float)((xx + s) * scale + uo),
-                        (float)((zz + 0) * scale + vo));
-            t->vertexUV((float)(xx + 0), (float)(yy), (float)(zz + 0),
-                        (float)((xx + 0) * scale + uo),
-                        (float)((zz + 0) * scale + vo));
+            mb.vertexUV(xx + 0, yy, zz + s,
+                        (xx + 0) * scale + uo, (zz + s) * scale + vo);
+            mb.vertexUV(xx + s, yy, zz + s,
+                        (xx + s) * scale + uo, (zz + s) * scale + vo);
+            mb.vertexUV(xx + s, yy, zz + 0,
+                        (xx + s) * scale + uo, (zz + 0) * scale + vo);
+            mb.vertexUV(xx + 0, yy, zz + 0,
+                        (xx + 0) * scale + uo, (zz + 0) * scale + vo);
         }
     }
-    t->end();
+    mb.flush();
 
     RenderPath.StateSetColour(1, 1, 1, 1.0f);
     RenderPath.StateSetBlendEnable(false);
@@ -1384,18 +1379,19 @@ bool LevelRenderer::isInCloud(double x, double y, double z, float alpha) {
     return false;
 }
 
-// 4J - new geometry for clouds. This is a full array of cubes, one per texel -
-// the original is an array of intersecting fins which aren't ever going to
-// render perfectly. The geometry is split into 6 command buffers, one per
-// facing direction. This is to keep rendering similar to the original, where
-// the geometry isn't backface culled, but a decision on which sides to render
-// is made per 8x8 chunk of sky - this keeps the cloud more solid looking when
-// you are actually inside it. Also make a 7th list that includes all 6
-// directions, to make rendering of all 6 at once more optimal (we do this when
-// the player isn't potentially inside the clouds)
+// 4J originally built 7 persistent CBuffs here — one per cloud face plus
+// an all-in-one — but renderAdvancedClouds never called any of them,
+// always meshing clouds per-frame from scratch. Kept as a no-op stub
+// so the legacy CBuff id allocation doesn't shift (bgfx backend still
+// references cloudList indirectly). Geometry for raw-vk comes from
+// renderClouds / renderAdvancedClouds building transient MeshBuilders
+// per frame.
 void LevelRenderer::createCloudMesh() {
     cloudList = MemoryTracker::genLists(7);
-
+    // Dead CBuff builds below — retained under #if 0 for reference to
+    // the original face-per-layer split. Remove once bgfx backend is
+    // retired.
+#if 0
     Tesselator* t = Tesselator::getInstance();
     const float h = 4.0f;
     const int D = 8;
@@ -1537,6 +1533,7 @@ void LevelRenderer::createCloudMesh() {
         }
         RenderPath.CBuffEnd();
     }
+#endif
 }
 
 void LevelRenderer::renderAdvancedClouds(float alpha) {
@@ -1553,7 +1550,7 @@ void LevelRenderer::renderAdvancedClouds(float alpha) {
         (float)(mc->cameraTargetPlayer->yOld +
                 (mc->cameraTargetPlayer->y - mc->cameraTargetPlayer->yOld) *
                     alpha);
-    Tesselator* t = Tesselator::getInstance();
+    
     int playerIndex = mc->player->GetXboxPad();
 
     int iTicks = ticks;
@@ -1663,63 +1660,63 @@ void LevelRenderer::renderAdvancedClouds(float alpha) {
                 // quads to render, so now using command buffers to render each
                 // section to cut CPU hit.
                 RenderPath.StateSetFaceCull(false);
-                t->begin();
+                plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
                 float xx = (float)(xPos * D);
                 float zz = (float)(zPos * D);
                 float xp = xx - xoffs;
                 float zp = zz - zoffs;
 
                 if (yy > -h - 1) {
-                    t->color(cr * 0.7f, cg * 0.7f, cb * 0.7f, 0.8f);
-                    t->normal(0, -1, 0);
-                    t->vertexUV((float)(xp + 0), (float)(yy + 0),
+                    mb.color(cr * 0.7f, cg * 0.7f, cb * 0.7f, 0.8f);
+                    mb.normal(0, -1, 0);
+                    mb.vertexUV((float)(xp + 0), (float)(yy + 0),
                                 (float)(zp + D), (float)((xx + 0) * scale + uo),
                                 (float)((zz + D) * scale + vo));
-                    t->vertexUV((float)(xp + D), (float)(yy + 0),
+                    mb.vertexUV((float)(xp + D), (float)(yy + 0),
                                 (float)(zp + D), (float)((xx + D) * scale + uo),
                                 (float)((zz + D) * scale + vo));
-                    t->vertexUV((float)(xp + D), (float)(yy + 0),
+                    mb.vertexUV((float)(xp + D), (float)(yy + 0),
                                 (float)(zp + 0), (float)((xx + D) * scale + uo),
                                 (float)((zz + 0) * scale + vo));
-                    t->vertexUV((float)(xp + 0), (float)(yy + 0),
+                    mb.vertexUV((float)(xp + 0), (float)(yy + 0),
                                 (float)(zp + 0), (float)((xx + 0) * scale + uo),
                                 (float)((zz + 0) * scale + vo));
                 }
 
                 if (yy <= h + 1) {
-                    t->color(cr, cg, cb, 0.8f);
-                    t->normal(0, 1, 0);
-                    t->vertexUV((float)(xp + 0), (float)(yy + h - e),
+                    mb.color(cr, cg, cb, 0.8f);
+                    mb.normal(0, 1, 0);
+                    mb.vertexUV((float)(xp + 0), (float)(yy + h - e),
                                 (float)(zp + D), (float)((xx + 0) * scale + uo),
                                 (float)((zz + D) * scale + vo));
-                    t->vertexUV((float)(xp + D), (float)(yy + h - e),
+                    mb.vertexUV((float)(xp + D), (float)(yy + h - e),
                                 (float)(zp + D), (float)((xx + D) * scale + uo),
                                 (float)((zz + D) * scale + vo));
-                    t->vertexUV((float)(xp + D), (float)(yy + h - e),
+                    mb.vertexUV((float)(xp + D), (float)(yy + h - e),
                                 (float)(zp + 0), (float)((xx + D) * scale + uo),
                                 (float)((zz + 0) * scale + vo));
-                    t->vertexUV((float)(xp + 0), (float)(yy + h - e),
+                    mb.vertexUV((float)(xp + 0), (float)(yy + h - e),
                                 (float)(zp + 0), (float)((xx + 0) * scale + uo),
                                 (float)((zz + 0) * scale + vo));
                 }
 
-                t->color(cr * 0.9f, cg * 0.9f, cb * 0.9f, 0.8f);
+                mb.color(cr * 0.9f, cg * 0.9f, cb * 0.9f, 0.8f);
                 if (xPos > -1) {
-                    t->normal(-1, 0, 0);
+                    mb.normal(-1, 0, 0);
                     for (int i = 0; i < D; i++) {
-                        t->vertexUV((float)(xp + i + 0), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + i + 0), (float)(yy + 0),
                                     (float)(zp + D),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + D) * scale + vo));
-                        t->vertexUV((float)(xp + i + 0), (float)(yy + h),
+                        mb.vertexUV((float)(xp + i + 0), (float)(yy + h),
                                     (float)(zp + D),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + D) * scale + vo));
-                        t->vertexUV((float)(xp + i + 0), (float)(yy + h),
+                        mb.vertexUV((float)(xp + i + 0), (float)(yy + h),
                                     (float)(zp + 0),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + 0) * scale + vo));
-                        t->vertexUV((float)(xp + i + 0), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + i + 0), (float)(yy + 0),
                                     (float)(zp + 0),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + 0) * scale + vo));
@@ -1727,44 +1724,44 @@ void LevelRenderer::renderAdvancedClouds(float alpha) {
                 }
 
                 if (xPos <= 1) {
-                    t->normal(+1, 0, 0);
+                    mb.normal(+1, 0, 0);
                     for (int i = 0; i < D; i++) {
-                        t->vertexUV((float)(xp + i + 1 - e), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + i + 1 - e), (float)(yy + 0),
                                     (float)(zp + D),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + D) * scale + vo));
-                        t->vertexUV((float)(xp + i + 1 - e), (float)(yy + h),
+                        mb.vertexUV((float)(xp + i + 1 - e), (float)(yy + h),
                                     (float)(zp + D),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + D) * scale + vo));
-                        t->vertexUV((float)(xp + i + 1 - e), (float)(yy + h),
+                        mb.vertexUV((float)(xp + i + 1 - e), (float)(yy + h),
                                     (float)(zp + 0),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + 0) * scale + vo));
-                        t->vertexUV((float)(xp + i + 1 - e), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + i + 1 - e), (float)(yy + 0),
                                     (float)(zp + 0),
                                     (float)((xx + i + 0.5f) * scale + uo),
                                     (float)((zz + 0) * scale + vo));
                     }
                 }
 
-                t->color(cr * 0.8f, cg * 0.8f, cb * 0.8f, 0.8f);
+                mb.color(cr * 0.8f, cg * 0.8f, cb * 0.8f, 0.8f);
                 if (zPos > -1) {
-                    t->normal(0, 0, -1);
+                    mb.normal(0, 0, -1);
                     for (int i = 0; i < D; i++) {
-                        t->vertexUV((float)(xp + 0), (float)(yy + h),
+                        mb.vertexUV((float)(xp + 0), (float)(yy + h),
                                     (float)(zp + i + 0),
                                     (float)((xx + 0) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
-                        t->vertexUV((float)(xp + D), (float)(yy + h),
+                        mb.vertexUV((float)(xp + D), (float)(yy + h),
                                     (float)(zp + i + 0),
                                     (float)((xx + D) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
-                        t->vertexUV((float)(xp + D), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + D), (float)(yy + 0),
                                     (float)(zp + i + 0),
                                     (float)((xx + D) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
-                        t->vertexUV((float)(xp + 0), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + 0), (float)(yy + 0),
                                     (float)(zp + i + 0),
                                     (float)((xx + 0) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
@@ -1772,27 +1769,27 @@ void LevelRenderer::renderAdvancedClouds(float alpha) {
                 }
 
                 if (zPos <= 1) {
-                    t->normal(0, 0, 1);
+                    mb.normal(0, 0, 1);
                     for (int i = 0; i < D; i++) {
-                        t->vertexUV((float)(xp + 0), (float)(yy + h),
+                        mb.vertexUV((float)(xp + 0), (float)(yy + h),
                                     (float)(zp + i + 1 - e),
                                     (float)((xx + 0) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
-                        t->vertexUV((float)(xp + D), (float)(yy + h),
+                        mb.vertexUV((float)(xp + D), (float)(yy + h),
                                     (float)(zp + i + 1 - e),
                                     (float)((xx + D) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
-                        t->vertexUV((float)(xp + D), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + D), (float)(yy + 0),
                                     (float)(zp + i + 1 - e),
                                     (float)((xx + D) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
-                        t->vertexUV((float)(xp + 0), (float)(yy + 0),
+                        mb.vertexUV((float)(xp + 0), (float)(yy + 0),
                                     (float)(zp + i + 1 - e),
                                     (float)((xx + 0) * scale + uo),
                                     (float)((zz + i + 0.5f) * scale + vo));
                     }
                 }
-                t->end();
+                mb.flush();
             }
         }
     }
