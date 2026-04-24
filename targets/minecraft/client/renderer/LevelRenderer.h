@@ -7,7 +7,10 @@
 #include "minecraft/world/level/LevelListener.h"
 #include "minecraft/world/phys/AABB.h"
 #include "platform/network/NetTypes.h"
+#include "platform/renderer/IRenderPath.h"
 #include "platform/thread/C4JThread.h"
+
+namespace plce::world { class MeshBuilder; }
 
 class ClipChunk;
 class HitResult;
@@ -74,7 +77,7 @@ public:
     LevelRenderer(Minecraft* mc, Textures* textures);
 
 private:
-    void renderStars();
+    void renderStars(plce::world::MeshBuilder& mb);
     void createCloudMesh();  // 4J added
 public:
     void setLevel(int playerIndex, MultiPlayerLevel* level);
@@ -192,6 +195,17 @@ private:
     int ticks;
     int starList, skyList, darkList, haloRingList;
     int cloudList;  // 4J added
+    // P.S2 migration: persistent sky / stars / dark dome meshes on the
+    // modern path. Built once in _init alongside the CBuff versions
+    // (during the migration window); CBuff* goes away once every
+    // renderSky path has been ported to submit_draw_call.
+    rp::MeshHandle star_mesh_;
+    rp::MeshHandle sky_mesh_;
+    rp::MeshHandle dark_mesh_;
+    rp::MeshHandle halo_mesh_;
+    // P.S4: cloud layers (fancy path — 7 persistent meshes, one per
+    // layer). Populated by createCloudMesh once at cloud-init.
+    rp::MeshHandle cloud_meshes_[7]{};
     int xMinChunk, yMinChunk, zMinChunk;
     int xMaxChunk, yMaxChunk, zMaxChunk;
     int lastViewDistance;

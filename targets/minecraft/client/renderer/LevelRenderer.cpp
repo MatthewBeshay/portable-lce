@@ -234,74 +234,91 @@ LevelRenderer::LevelRenderer(Minecraft* mc, Textures* textures) {
            getGlobalChunkCount() * sizeof(uint64_t));  // 0xFF >> Fully open
 #endif
 
-    starList = MemoryTracker::genLists(4);
-
-    RenderPath.MatrixPush();
-    RenderPath.CBuffStart(starList);
-    renderStars();
-    RenderPath.CBuffEnd();
-
-    // 4J added - create geometry for rendering clouds
-    createCloudMesh();
-
-    RenderPath.MatrixPop();
-
-    Tesselator* t = Tesselator::getInstance();
+    // Persistent sky geometry (stars / sky dome / dark dome / halo ring)
+    // — build each once at level init via MeshBuilder::take_vertices +
+    // Renderer::create_mesh. Previous CBuff path is retired; renderSky
+    // / renderHaloRing now submit DrawCalls referencing these
+    // MeshHandles.
+    starList = MemoryTracker::genLists(4);  // legacy id space retained
+                                             // for bgfx backend
     skyList = starList + 1;
-    RenderPath.CBuffStart(skyList);
-    RenderPath.StateSetDepthMask(false);  // 4J - added to get depth mask disabled within the
-                         // command buffer
-    float yy;
-    int s = 64;
-    int d = (256 / s) + 2;
-    yy = (float)(16);
-    for (int xx = -s * d; xx <= s * d; xx += s) {
-        for (int zz = -s * d; zz <= s * d; zz += s) {
-            t->begin();
-            t->vertex((float)(xx + 0), (float)(yy), (float)(zz + 0));
-            t->vertex((float)(xx + s), (float)(yy), (float)(zz + 0));
-            t->vertex((float)(xx + s), (float)(yy), (float)(zz + s));
-            t->vertex((float)(xx + 0), (float)(yy), (float)(zz + s));
-            t->end();
-        }
-    }
-    RenderPath.CBuffEnd();
-
     darkList = starList + 2;
-    RenderPath.CBuffStart(darkList);
-    yy = -(float)(16);
-    t->begin();
-    for (int xx = -s * d; xx <= s * d; xx += s) {
-        for (int zz = -s * d; zz <= s * d; zz += s) {
-            t->vertex((float)(xx + s), (float)(yy), (float)(zz + 0));
-            t->vertex((float)(xx + 0), (float)(yy), (float)(zz + 0));
-            t->vertex((float)(xx + 0), (float)(yy), (float)(zz + s));
-            t->vertex((float)(xx + s), (float)(yy), (float)(zz + s));
-        }
-    }
-    t->end();
-    RenderPath.CBuffEnd();
+    haloRingList = starList + 3;
 
-    // HALO ring for the texture pack
+    auto build_persistent_mesh = [](plce::world::MeshBuilder& mb) -> rp::MeshHandle {
+        auto verts = mb.take_vertices();
+        if (verts.empty()) return {};
+        rp::MeshDesc d{};
+        d.vertex_data  = verts.data();
+        d.vertex_count = uint32_t(verts.size());
+        d.layout       = rp::VertexLayout::world_standard;
+        d.primitive    = rp::PrimitiveType::triangle_list;
+        return RenderPath.create_mesh(d);
+    };
+
+    // Stars — 1500 randomly-placed billboard quads. Populated by the
+    // existing renderStars() helper which has been rewritten to take a
+    // MeshBuilder reference.
     {
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::sky_additive, 0);
+        renderStars(mb);
+        star_mesh_ = build_persistent_mesh(mb);
+    }
+
+    {
+        // Sky dome — 256x256 chequerboard of quads at y=+16, vertex
+        // colour drives the sky gradient each frame via state_colour.
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::sky_gradient, 0);
+        float yy;
+        int s = 64;
+        int d = (256 / s) + 2;
+        yy = 16.0f;
+        for (int xx = -s * d; xx <= s * d; xx += s) {
+            for (int zz = -s * d; zz <= s * d; zz += s) {
+                mb.vertex((float)(xx + 0), yy, (float)(zz + 0));
+                mb.vertex((float)(xx + s), yy, (float)(zz + 0));
+                mb.vertex((float)(xx + s), yy, (float)(zz + s));
+                mb.vertex((float)(xx + 0), yy, (float)(zz + s));
+            }
+        }
+        sky_mesh_ = build_persistent_mesh(mb);
+
+        // Dark dome — mirror of the sky dome at y=-16. Winding reversed
+        // so the dome faces away from the sky dome.
+        plce::world::MeshBuilder mb2(
+            plce::world::MaterialKind::sky_gradient, 0);
+        yy = -16.0f;
+        for (int xx = -s * d; xx <= s * d; xx += s) {
+            for (int zz = -s * d; zz <= s * d; zz += s) {
+                mb2.vertex((float)(xx + s), yy, (float)(zz + 0));
+                mb2.vertex((float)(xx + 0), yy, (float)(zz + 0));
+                mb2.vertex((float)(xx + 0), yy, (float)(zz + s));
+                mb2.vertex((float)(xx + s), yy, (float)(zz + s));
+            }
+        }
+        dark_mesh_ = build_persistent_mesh(mb2);
+    }
+
+    // Halo ring (texture-pack cosmetic). Triangle strip of 2 *
+    // (ARC_SEGMENTS + 1) vertices around the sky; radius-shape widens
+    // at the back of the arc.
+    {
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::sky_additive, 0);
+        mb.set_topology(plce::world::Topology::triangle_strip);
         const unsigned int ARC_SEGMENTS = 50;
-        const float VERTICAL_OFFSET =
-            HALO_RING_RADIUS * 999 /
-            1000;  // How much we raise the circle origin to make the circle
-                   // curve back towards us
+        const float VERTICAL_OFFSET = HALO_RING_RADIUS * 999 / 1000;
         const int WIDTH = 10;
         const float ARC_RADIANS = 2.0f * std::numbers::pi / ARC_SEGMENTS;
         const float HALF_ARC_SEG = ARC_SEGMENTS / 2;
         const float WIDE_ARC_SEGS = ARC_SEGMENTS / 8;
         const float WIDE_ARC_SEGS_SQR = WIDE_ARC_SEGS * WIDE_ARC_SEGS;
 
+        mb.color(0xffffff);
         float u = 0.0f;
         float width = WIDTH;
-
-        haloRingList = starList + 3;
-        RenderPath.CBuffStart(haloRingList);
-        t->begin(0x0005);
-        t->color(0xffffff);
 
         for (unsigned int i = 0; i <= ARC_SEGMENTS; ++i) {
             float DIFF = std::abs(i - HALF_ARC_SEG);
@@ -310,18 +327,20 @@ LevelRenderer::LevelRenderer(Minecraft* mc, Textures* textures) {
             else
                 DIFF -= (HALF_ARC_SEG - WIDE_ARC_SEGS);
             width = 1 + ((DIFF * DIFF) / (WIDE_ARC_SEGS_SQR)) * WIDTH;
-            t->vertexUV(
+            mb.vertexUV(
                 (HALO_RING_RADIUS * cos(i * ARC_RADIANS)) - VERTICAL_OFFSET,
                 (HALO_RING_RADIUS * sin(i * ARC_RADIANS)), 0 - width, u, 0);
-            t->vertexUV(
+            mb.vertexUV(
                 (HALO_RING_RADIUS * cos(i * ARC_RADIANS)) - VERTICAL_OFFSET,
                 (HALO_RING_RADIUS * sin(i * ARC_RADIANS)), 0 + width, u, 1);
-            //--u;
-            u -= 0.25;
+            u -= 0.25f;
         }
-        t->end();
-        RenderPath.CBuffEnd();
+        halo_mesh_ = build_persistent_mesh(mb);
     }
+
+    // Cloud mesh build moves to createCloudMesh which runs after this
+    // block — see P.S4.
+    createCloudMesh();
 
     Chunk::levelRenderer = this;
 
@@ -330,10 +349,8 @@ LevelRenderer::LevelRenderer(Minecraft* mc, Textures* textures) {
     dirtyChunksLockFreeStack.Initialize();
 }
 
-void LevelRenderer::renderStars() {
+void LevelRenderer::renderStars(plce::world::MeshBuilder& t) {
     Random random = Random(10842);
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
     for (int i = 0; i < 1500; i++) {
         double x = random.nextFloat() * 2 - 1;
         double y = random.nextFloat() * 2 - 1;
@@ -379,11 +396,10 @@ void LevelRenderer::renderStars() {
                 double yo = _yo;
                 double zo = _zo * ySin + _xo * yCos;
 
-                t->vertex((float)(xp + xo), (float)(yp + yo), (float)(zp + zo));
+                t.vertex((float)(xp + xo), (float)(yp + yo), (float)(zp + zo));
             }
         }
     }
-    t->end();
 }
 
 void LevelRenderer::setLevel(int playerIndex, MultiPlayerLevel* level) {
@@ -1049,7 +1065,15 @@ void LevelRenderer::renderSky(float alpha) {
 
     RenderPath.StateSetFogEnable(true);
     RenderPath.StateSetColour(sr, sg, sb, 1.0f);
-    ((void)RenderPath.CBuffCall(skyList));
+    {
+        rp::DrawCall dc{};
+        dc.source   = rp::VertexSource::mesh;
+        dc.mesh     = sky_mesh_;
+        dc.material = plce::world::world_material(
+            plce::world::MaterialKind::sky_gradient);
+        dc.self_describing = false;
+        RenderPath.submit_draw_call(dc);
+    }
 
     RenderPath.StateSetFogEnable(false);
     RenderPath.StateSetAlphaTestEnable(false);
@@ -1151,7 +1175,13 @@ void LevelRenderer::renderSky(float alpha) {
             level[playerIndex]->getStarBrightness(alpha) * rainBrightness;
         if (br > 0) {
             RenderPath.StateSetColour(br, br, br, br);
-            ((void)RenderPath.CBuffCall(starList));
+            rp::DrawCall dc{};
+            dc.source   = rp::VertexSource::mesh;
+            dc.mesh     = star_mesh_;
+            dc.material = plce::world::world_material(
+                plce::world::MaterialKind::sky_additive);
+            dc.self_describing = false;
+            RenderPath.submit_draw_call(dc);
         }
         RenderPath.StateSetColour(1, 1, 1, 1);
     }
@@ -1167,15 +1197,21 @@ void LevelRenderer::renderSky(float alpha) {
         mc->player->getPos(alpha).y -
         level[playerIndex]->getHorizonHeight();  // 4J - getHorizonHeight moved
                                                  // forward from 1.2.3
+    auto submit_dark = [this]() {
+        rp::DrawCall dc{};
+        dc.source   = rp::VertexSource::mesh;
+        dc.mesh     = dark_mesh_;
+        dc.material = plce::world::world_material(
+            plce::world::MaterialKind::sky_gradient);
+        dc.self_describing = false;
+        RenderPath.submit_draw_call(dc);
+    };
+
     if (yy < 0) {
         RenderPath.MatrixPush();
         RenderPath.MatrixTranslate(0, -(float)(-12), 0);
-        ((void)RenderPath.CBuffCall(darkList));
+        submit_dark();
         RenderPath.MatrixPop();
-
-        // 4J - can't work out what this big black box is for. Taking it out
-        // until someone misses it... it causes a big black box to visible
-        // appear in 3rd person mode whilst under the ground.
     }
 
     if (level[playerIndex]->dimension->hasGround()) {
@@ -1185,7 +1221,7 @@ void LevelRenderer::renderSky(float alpha) {
     }
     RenderPath.MatrixPush();
     RenderPath.MatrixTranslate(0, -(float)(yy - 16), 0);
-    ((void)RenderPath.CBuffCall(darkList));
+    submit_dark();
     RenderPath.MatrixPop();
     RenderPath.StateSetTextureEnable(true);
 
@@ -1229,7 +1265,15 @@ void LevelRenderer::renderHaloRing(float alpha) {
     RenderPath.MatrixPush();
     RenderPath.MatrixRotate((-90)*(std::numbers::pi_v<float>/180.f), 1, 0, 0);
     RenderPath.MatrixRotate((90)*(std::numbers::pi_v<float>/180.f), 0, 1, 0);
-    ((void)RenderPath.CBuffCall(haloRingList));
+    {
+        rp::DrawCall dc{};
+        dc.source   = rp::VertexSource::mesh;
+        dc.mesh     = halo_mesh_;
+        dc.material = plce::world::world_material(
+            plce::world::MaterialKind::sky_additive);
+        dc.self_describing = false;
+        RenderPath.submit_draw_call(dc);
+    }
     RenderPath.MatrixPop();
     t->setMipmapEnable(prev);
 
