@@ -68,6 +68,14 @@ public:
     // Lock for pending_vertices_ / pending_dirty_ — rebuild and upload
     // can race on chunk re-rebuild while main thread uploads.
     std::mutex pending_mutex_;
+    // When this Chunk is a scratch permaChunk (see
+    // LevelRenderer::updateDirtyChunks), rebuild() deposits the
+    // accumulated vertex bytes on the ORIGINAL Chunk via this back-
+    // pointer. Main-thread render iterates ClipChunk->chunk (the
+    // original); per-frame flips of source plus subsequent rebuild
+    // need the pending state landing on whichever Chunk the render
+    // loop will actually look at.
+    Chunk* rebuild_source_ = nullptr;
     static int updates;
 
     int x, y, z;

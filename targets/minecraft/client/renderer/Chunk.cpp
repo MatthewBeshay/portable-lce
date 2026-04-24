@@ -228,6 +228,11 @@ void Chunk::makeCopyForRebuild(Chunk* source) {
     this->globalRenderableTileEntities = source->globalRenderableTileEntities;
     this->globalRenderableTileEntities_cs =
         source->globalRenderableTileEntities_cs;
+    // Remember the original so rebuild() can drop the accumulated
+    // vertex bytes back onto its pending_vertices_ — the renderer
+    // iterates ClipChunk->chunk (the original), not this scratch
+    // permaChunk.
+    this->rebuild_source_ = source;
 }
 
 void Chunk::rebuild() {
@@ -567,18 +572,19 @@ void Chunk::rebuild() {
 #endif
             t->useCompactVertices(false);  // 4J added
             t->offset(0, 0, 0);
-            // P5 hand-off: move the worker-accumulated vertex bytes
-            // into pending_vertices_[layer] under the chunk mutex.
-            // Main thread picks this up in LevelRenderer::renderChunks
-            // and feeds it to Renderer::create_mesh to produce a
-            // persistent MeshHandle for this chunk layer.
+            // P5 hand-off: move worker-accumulated bytes onto the
+            // pending slot of whichever Chunk the main-thread renderer
+            // will iterate — that's the original, not this scratch
+            // permaChunk. If rebuild_source_ is null we're not a copy
+            // and self-deposit is correct.
             tileRenderer->set_builder(nullptr);
             auto verts = chunk_builder_->take_vertices();
             chunk_builder_.reset();
+            Chunk* dst = rebuild_source_ ? rebuild_source_ : this;
             {
-                std::lock_guard<std::mutex> lk(pending_mutex_);
-                pending_vertices_[currentLayer] = std::move(verts);
-                pending_dirty_[currentLayer] = true;
+                std::lock_guard<std::mutex> lk(dst->pending_mutex_);
+                dst->pending_vertices_[currentLayer] = std::move(verts);
+                dst->pending_dirty_[currentLayer] = true;
             }
         } else {
             rendered = false;
