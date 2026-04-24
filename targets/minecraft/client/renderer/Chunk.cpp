@@ -238,13 +238,6 @@ void Chunk::makeCopyForRebuild(Chunk* source) {
 void Chunk::rebuild() {
     //	if (!dirty) return;
 
-#if defined(_LARGE_WORLDS)
-    Tesselator* t = Tesselator::getInstance();
-#else
-    Chunk::t = Tesselator::getInstance();  // 4J - added - static initialiser
-                                           // being set at the wrong time
-#endif
-
     updates++;
 
     int x0 = x;
@@ -421,12 +414,10 @@ void Chunk::rebuild() {
 
     // Nothing at all to do for this chunk?
     if (empty) {
-        // 4J - added - clear any renderer data associated with this
         for (int currentLayer = 0; currentLayer < 2; currentLayer++) {
             levelRenderer->setGlobalChunkFlag(this->x, this->y, this->z, level,
                                               LevelRenderer::CHUNK_FLAG_EMPTY0,
                                               currentLayer);
-            RenderPath.CBuffClear(lists + currentLayer);
         }
 
 #ifdef OCCLUSION_MODE_BFS
@@ -489,27 +480,15 @@ void Chunk::rebuild() {
                         if (!started) {
                             started = true;
 
-                            RenderPath.CBuffStart(lists + currentLayer);
-                            RenderPath.StateSetDepthMask(true);            // 4J added
-                            // Vulkan R8G8B8A8_UNORM needs 32-byte standard
-                            // format. Compact 16-byte format packs color
-                            // with ARGB bit extraction that doesn't match
-                            // RGBA vertex packing.
-                            t->useCompactVertices(false);
-                            t->begin();
-                            t->offset((float)(-this->x), (float)(-this->y),
-                                      (float)(-this->z));
-                            // P4.4 transitional stub: TileRenderer now emits
-                            // into a MeshBuilder via current_builder_. Chunk
-                            // meshing runs off the main thread, so a real
-                            // flush() would touch RenderPath and crash — for
-                            // now we bind a scratch builder that the worker
-                            // fills and the rebuild then drops on scope exit.
-                            // Legacy CBuff output is therefore empty and the
-                            // chunk won't render; P5 wires an OfflineMesh-
-                            // Builder + main-thread upload queue to restore
-                            // terrain. Invisible chunks are an expected
-                            // mid-migration regression.
+                            // TileRenderer emits into a per-chunk
+                            // MeshBuilder. The builder is filled off the
+                            // main thread and its vertex bytes are moved
+                            // to pending_vertices_ at end-of-rebuild; the
+                            // main thread converts that into a real
+                            // MeshHandle via create_mesh. Legacy Tesselator
+                            // + CBuff scaffolding is gone — chunks now
+                            // render exclusively through MeshHandle draw
+                            // calls submitted from LevelRenderer.
                             chunk_builder_.reset(new plce::world::MeshBuilder(
                                 plce::world::MaterialKind::alpha_test, 0));
                             // Legacy Tesselator shifted coords by -chunk_origin
@@ -548,35 +527,9 @@ void Chunk::rebuild() {
         }
 
         if (started) {
-            t->end();
-            bounds.addBounds(t->bounds);  // 4J MGH - added
-            RenderPath.CBuffEnd();
-#if defined(PLCE_VK_GPU_CHUNKS)
-            // Drain the just-recorded CBuff into the TerrainRenderer's
-            // GPU-driven path. The CBuff stays around so the legacy
-            // CBuffCall in LevelRenderer remains valid as a fallback.
-            rp::IRenderPath::ChunkUpload up{};
-            up.cx = this->x; up.cy = this->y; up.cz = this->z;
-            up.layer = uint8_t(currentLayer);
-            up.world_origin[0] = (float)this->x;
-            up.world_origin[1] = (float)this->y;
-            up.world_origin[2] = (float)this->z;
-            // Use the chunk's box (16x128x16-ish for Minecraft chunks).
-            up.aabb_min[0] = (float)this->x;
-            up.aabb_min[1] = (float)this->y;
-            up.aabb_min[2] = (float)this->z;
-            up.aabb_max[0] = (float)this->x + 16.0f;
-            up.aabb_max[1] = (float)this->y + 128.0f;
-            up.aabb_max[2] = (float)this->z + 16.0f;
-            RenderPath.chunk_upload_from_cbuff(lists + currentLayer, up);
-#endif
-            t->useCompactVertices(false);  // 4J added
-            t->offset(0, 0, 0);
-            // P5 hand-off: move worker-accumulated bytes onto the
-            // pending slot of whichever Chunk the main-thread renderer
-            // will iterate — that's the original, not this scratch
-            // permaChunk. If rebuild_source_ is null we're not a copy
-            // and self-deposit is correct.
+            // Hand worker-accumulated vertex bytes to the main-thread
+            // rebuild source. If rebuild_source_ is null we're not a
+            // copy and self-deposit is correct.
             tileRenderer->set_builder(nullptr);
             auto verts = chunk_builder_->take_vertices();
             chunk_builder_.reset();
@@ -595,12 +548,9 @@ void Chunk::rebuild() {
                 this->x, this->y, this->z, level,
                 LevelRenderer::CHUNK_FLAG_EMPTY0, currentLayer);
         } else {
-            // 4J - added - clear any renderer data associated with this unused
-            // list
             levelRenderer->setGlobalChunkFlag(this->x, this->y, this->z, level,
                                               LevelRenderer::CHUNK_FLAG_EMPTY0,
                                               currentLayer);
-            RenderPath.CBuffClear(lists + currentLayer);
 #if defined(PLCE_VK_GPU_CHUNKS)
             // Clear the arena slot so the old mesh stops rendering.
             RenderPath.chunk_destroy(this->x, this->y, this->z,
@@ -610,7 +560,6 @@ void Chunk::rebuild() {
         if ((currentLayer == 0) && (!renderNextLayer)) {
             levelRenderer->setGlobalChunkFlag(this->x, this->y, this->z, level,
                                               LevelRenderer::CHUNK_FLAG_EMPTY1);
-            RenderPath.CBuffClear(lists + 1);
 #if defined(PLCE_VK_GPU_CHUNKS)
             RenderPath.chunk_destroy(this->x, this->y, this->z, 1);
 #endif
@@ -828,14 +777,8 @@ void Chunk::reset() {
             //%d\n",refCount,x,y,z);
             if (refCount == 0 && oldKey != -1) {
                 retireRenderableTileEntities = true;
-                int lists = oldKey * 2;
-                if (lists >= 0) {
-                    lists += levelRenderer->chunkLists;
-                    for (int i = 0; i < 2; i++) {
-                        // 4J - added - clear any renderer data associated with
-                        // this unused list
-                        RenderPath.CBuffClear(lists + i);
-                    }
+                int oldLists = oldKey * 2;
+                if (oldLists >= 0) {
 #if defined(PLCE_VK_GPU_CHUNKS)
                     // Free the matching slots in the Vulkan TerrainRenderer
                     // arena. Without this the arena fills monotonically and
