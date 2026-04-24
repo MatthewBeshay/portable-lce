@@ -70,7 +70,26 @@ bool TileRenderer::fancy = true;
 
 const float smallUV = (1.0f / 16.0f);
 
+namespace {
+// Shared sink MeshBuilder — any tesselate* / render* call that
+// arrives before set_builder() has bound a real target discards its
+// vertices here instead of null-dereferencing current_builder_.
+// Grown lazily on first access; cleared on each set_builder() so the
+// sink can't grow unboundedly. Main thread only — worker-thread
+// callers always bind their own builder inside the rebuild scope.
+plce::world::MeshBuilder& null_sink_builder() {
+    static plce::world::MeshBuilder s{plce::world::MaterialKind::opaque, 0};
+    return s;
+}
+}  // namespace
+
+void TileRenderer::set_builder(plce::world::MeshBuilder* mb) {
+    current_builder_ = mb ? mb : &null_sink_builder();
+    if (!mb) null_sink_builder().reset();
+}
+
 void TileRenderer::_init() {
+    current_builder_ = &null_sink_builder();
     fixedTexture = nullptr;
     xFlipTexture = false;
     noCulling = false;

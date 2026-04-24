@@ -2245,9 +2245,14 @@ void LevelRenderer::renderDestroyAnimation(Tesselator* t,
         (void)0;
 
         RenderPath.StateSetAlphaTestEnable(true);
-        t->begin();
-        t->offset((float)-xo, (float)-yo, (float)-zo);
-        t->noColor();
+
+        // P4.4 sync path: bind a MeshBuilder so the destroy-overlay
+        // tesselate* calls emit somewhere visible (TileRenderer now
+        // routes through current_builder_). One builder covers every
+        // breaking block in range — flush once at the end.
+        plce::world::MeshBuilder destroy_mb(
+            plce::world::MaterialKind::transparent, 0);
+        destroy_mb.offset((float)-xo, (float)-yo, (float)-zo);
 
         auto it = destroyingBlocks.begin();
         while (it != destroyingBlocks.end()) {
@@ -2265,17 +2270,17 @@ void LevelRenderer::renderDestroyAnimation(Tesselator* t,
                                                   block->getZ());
                 Tile* tile = tileId > 0 ? Tile::tiles[tileId] : nullptr;
                 if (tile == nullptr) tile = Tile::stone;
+                tileRenderer[iPad]->set_builder(&destroy_mb);
                 tileRenderer[iPad]->tesselateInWorldFixedTexture(
                     tile, block->getX(), block->getY(), block->getZ(),
                     breakingTextures
                         [block->getProgress()]);  // 4J renamed to differentiate
                                                   // from tesselateInWorld
+                tileRenderer[iPad]->set_builder(nullptr);
             }
             ++it;
         }
-
-        t->end();
-        t->offset(0, 0, 0);
+        destroy_mb.flush();
         RenderPath.StateSetAlphaTestEnable(false);
         /*
          * for (int i = 0; i < 6; i++) { tile.renderFace(t, h.x, h.y,

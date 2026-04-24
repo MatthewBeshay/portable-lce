@@ -44,11 +44,14 @@ private:
     // Caller binds the active MeshBuilder before invoking any tesselate*
     // method; all internal vertex emission goes through it. Matches the
     // legacy `Tesselator* t = Tesselator::getInstance()` pattern that
-    // every method opened with — just routes to plce::world now.
+    // every method opened with — just routes to plce::world now. When
+    // no caller has bound a real builder this falls back to a shared
+    // sink builder (discards vertices) so unwrapped legacy call sites
+    // don't null-deref inside tesselate* / render*.
     plce::world::MeshBuilder* current_builder_ = nullptr;
 
 public:
-    void set_builder(plce::world::MeshBuilder* mb) { current_builder_ = mb; }
+    void set_builder(plce::world::MeshBuilder* mb);
     plce::world::MeshBuilder* builder() const { return current_builder_; }
 
 public:
