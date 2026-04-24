@@ -230,12 +230,6 @@ public:
     void connectTo(const std::string& server, int port);
 
 private:
-    void renderLoadingScreen();
-
-public:
-    void blit(int x, int y, int sx, int sy, int w, int h);
-
-private:
     static File workDir;
 
 public:

@@ -41,7 +41,7 @@
 #include "minecraft/client/renderer/GameRenderer.h"
 #include "minecraft/client/renderer/ItemInHandRenderer.h"
 #include "minecraft/client/renderer/LevelRenderer.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/ui/UiDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/TileRenderer.h"
 #include "minecraft/client/renderer/entity/EntityRenderDispatcher.h"
@@ -301,7 +301,6 @@ void Minecraft::init() {
     skins = new TexturePackRepository(workingDirectory, this);
     skins->addDebugPacks();
     textures = new Textures(skins, options);
-    // renderLoadingScreen();
 
     font =
         new Font(options, "font/Default.png", textures, false,
@@ -338,7 +337,6 @@ void Minecraft::init() {
     */
 
     // 4J-PB - We'll do this in a xui intro
-    // renderLoadingScreen();
 
     // Keyboard::create();
     Mouse::create();
@@ -393,73 +391,6 @@ void Minecraft::init() {
     progressRenderer = new ProgressRenderer(this);
 
     RenderPath.CBuffLockStaticCreations();
-}
-
-void Minecraft::renderLoadingScreen() {
-    // 4J Unused
-    // testing stuff on vita just now
-#if defined(ENABLE_JAVA_GUIS)
-    ScreenSizeCalculator ssc(options, width, height);
-
-    // xxx
-    RenderPath.StartFrame();
-    RenderPath.Clear(rp::CLEAR_COLOR | rp::CLEAR_DEPTH);
-    RenderPath.MatrixMode(rp::MatrixStack::projection);
-    RenderPath.MatrixSetIdentity();
-    RenderPath.MatrixOrthogonal(0, (float)ssc.rawWidth, (float)ssc.rawHeight, 0, 1000, 3000);
-    RenderPath.MatrixMode(rp::MatrixStack::modelview);
-    RenderPath.MatrixSetIdentity();
-    RenderPath.MatrixTranslate(0, 0, -2000);
-    (void)0;
-    {float cc__[]={0,0,0,0};RenderPath.SetClearColour(cc__);};
-
-    Tesselator* t = Tesselator::getInstance();
-
-    RenderPath.StateSetLightingEnable(false);
-    RenderPath.StateSetTextureEnable(true);
-    RenderPath.StateSetFogEnable(false);
-    // xxx
-    RenderPath.TextureBind(textures->loadTexture(TN_MOB_PIG));
-    t->begin();
-    t->color(0xffffff);
-    t->vertexUV((float)(0), (float)(height), (float)(0), (float)(0),
-                (float)(0));
-    t->vertexUV((float)(width), (float)(height), (float)(0), (float)(0),
-                (float)(0));
-    t->vertexUV((float)(width), (float)(0), (float)(0), (float)(0), (float)(0));
-    t->vertexUV((float)(0), (float)(0), (float)(0), (float)(0), (float)(0));
-    t->end();
-
-    int lw = 256;
-    int lh = 256;
-    t->color(0xffffff);
-    blit((ssc.getWidth() - lw) / 2, (ssc.getHeight() - lh) / 2, 0, 0, lw, lh);
-    RenderPath.StateSetLightingEnable(false);
-    RenderPath.StateSetFogEnable(false);
-
-    RenderPath.StateSetAlphaTestEnable(true);
-    RenderPath.StateSetAlphaFunc(rp::AlphaTest::greater, 0.1f);
-
-    // Display::swapBuffers();
-    // xxx
-    RenderPath.Present();
-#endif
-}
-
-void Minecraft::blit(int x, int y, int sx, int sy, int w, int h) {
-    float us = 1 / 256.0f;
-    float vs = 1 / 256.0f;
-    Tesselator* t = Tesselator::getInstance();
-    t->begin();
-    t->vertexUV((float)(x + 0), (float)(y + h), (float)(0),
-                (float)((sx + 0) * us), (float)((sy + h) * vs));
-    t->vertexUV((float)(x + w), (float)(y + h), (float)(0),
-                (float)((sx + w) * us), (float)((sy + h) * vs));
-    t->vertexUV((float)(x + w), (float)(y + 0), (float)(0),
-                (float)((sx + w) * us), (float)((sy + 0) * vs));
-    t->vertexUV((float)(x + 0), (float)(y + 0), (float)(0),
-                (float)((sx + 0) * us), (float)((sy + 0) * vs));
-    t->end();
 }
 
 File Minecraft::getWorkingDirectory() {
@@ -1823,42 +1754,37 @@ void Minecraft::renderFpsMeter(int64_t tickTime) {
     RenderPath.MatrixTranslate(0, 0, -2000);
 
     RenderPath.StateSetLineWidth(1);
-    RenderPath.StateSetTextureEnable(false);
-    Tesselator* t = Tesselator::getInstance();
-    t->begin(0x0007);
+
+    // Convert legacy 0xAARRGGBB → UiDraw's 0xAABBGGRR (R in low byte).
+    const auto to_rgba = [](uint32_t argb) -> uint32_t {
+        const uint32_t a = (argb >> 24) & 0xFFu;
+        const uint32_t r = (argb >> 16) & 0xFFu;
+        const uint32_t g = (argb >>  8) & 0xFFu;
+        const uint32_t b =  argb        & 0xFFu;
+        return r | (g << 8) | (b << 16) | (a << 24);
+    };
+
     int hh1 = (int)(nsPer60Fps / 200000);
-    t->color(0x20000000);
-    t->vertex((float)(0), (float)(height - hh1), (float)(0));
-    t->vertex((float)(0), (float)(height), (float)(0));
-    t->vertex((float)(Minecraft::frameTimes_length), (float)(height),
-              (float)(0));
-    t->vertex((float)(Minecraft::frameTimes_length), (float)(height - hh1),
-              (float)(0));
+    plce::ui::draw_fill(0, height - hh1,
+                        Minecraft::frameTimes_length, height,
+                        to_rgba(0x20000000));
+    plce::ui::draw_fill(0, height - hh1 * 2,
+                        Minecraft::frameTimes_length, height - hh1,
+                        to_rgba(0x20200000));
 
-    t->color(0x20200000);
-    t->vertex((float)(0), (float)(height - hh1 * 2), (float)(0));
-    t->vertex((float)(0), (float)(height - hh1), (float)(0));
-    t->vertex((float)(Minecraft::frameTimes_length), (float)(height - hh1),
-              (float)(0));
-    t->vertex((float)(Minecraft::frameTimes_length), (float)(height - hh1 * 2),
-              (float)(0));
-
-    t->end();
     int64_t totalTime = 0;
     for (int i = 0; i < Minecraft::frameTimes_length; i++) {
         totalTime += Minecraft::frameTimes[i];
     }
     int hh = (int)(totalTime / 200000 / Minecraft::frameTimes_length);
-    t->begin(0x0007);
-    t->color(0x20400000);
-    t->vertex((float)(0), (float)(height - hh), (float)(0));
-    t->vertex((float)(0), (float)(height), (float)(0));
-    t->vertex((float)(Minecraft::frameTimes_length), (float)(height),
-              (float)(0));
-    t->vertex((float)(Minecraft::frameTimes_length), (float)(height - hh),
-              (float)(0));
-    t->end();
-    t->begin(0x0001);
+    plce::ui::draw_fill(0, height - hh,
+                        Minecraft::frameTimes_length, height,
+                        to_rgba(0x20400000));
+
+    // Per-frame spike + tick-time lines. 2 segments per column; each
+    // segment is 2 vertices.
+    std::vector<plce::ui::LineVertex> lines;
+    lines.reserve(size_t(Minecraft::frameTimes_length) * 4);
     for (int i = 0; i < Minecraft::frameTimes_length; i++) {
         int col = ((i - Minecraft::frameTimePos) &
                    (Minecraft::frameTimes_length - 1)) *
@@ -1867,30 +1793,30 @@ void Minecraft::renderFpsMeter(int64_t tickTime) {
         cc = cc * cc / 255;
         int cc2 = cc * cc / 255;
         cc2 = cc2 * cc2 / 255;
-        if (Minecraft::frameTimes[i] > nsPer60Fps) {
-            t->color(0xff000000 + cc * 65536);
-        } else {
-            t->color(0xff000000 + cc * 256);
-        }
 
-        int64_t time = Minecraft::frameTimes[i] / 200000;
-        int64_t time2 = Minecraft::tickTimes[i] / 200000;
+        const uint32_t spike_argb = (Minecraft::frameTimes[i] > nsPer60Fps)
+                                        ? (0xff000000u + uint32_t(cc) * 65536u)
+                                        : (0xff000000u + uint32_t(cc) * 256u);
+        const uint32_t spike_rgba = to_rgba(spike_argb);
+        const uint32_t tick_rgba  = to_rgba(0xff000000u +
+                                            uint32_t(cc) * 65536u +
+                                            uint32_t(cc) * 256u +
+                                            uint32_t(cc));
 
-        t->vertex((float)(i + 0.5f), (float)(height - time + 0.5f), (float)(0));
-        t->vertex((float)(i + 0.5f), (float)(height + 0.5f), (float)(0));
+        int64_t time  = Minecraft::frameTimes[i] / 200000;
+        int64_t time2 = Minecraft::tickTimes[i]  / 200000;
 
-        // if (Minecraft.frameTimes[i]>nsPer60Fps) {
-        t->color(0xff000000 + cc * 65536 + cc * 256 + cc * 1);
-        // } else {
-        // t.color(0xff808080 + cc/2 * 256);
-        // }
-        t->vertex((float)(i + 0.5f), (float)(height - time + 0.5f), (float)(0));
-        t->vertex((float)(i + 0.5f), (float)(height - (time - time2) + 0.5f),
-                  (float)(0));
+        lines.push_back({float(i + 0.5f), float(height - time + 0.5f),
+                         spike_rgba});
+        lines.push_back({float(i + 0.5f), float(height + 0.5f),
+                         spike_rgba});
+        lines.push_back({float(i + 0.5f), float(height - time + 0.5f),
+                         tick_rgba});
+        lines.push_back({float(i + 0.5f),
+                         float(height - (time - time2) + 0.5f),
+                         tick_rgba});
     }
-    t->end();
-
-    RenderPath.StateSetTextureEnable(true);
+    plce::ui::draw_untextured_lines(lines.data(), lines.size());
 }
 
 void Minecraft::stop() {

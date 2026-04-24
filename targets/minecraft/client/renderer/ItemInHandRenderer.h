@@ -9,7 +9,6 @@ class ItemInstance;
 class Minimap;
 class LivingEntity;
 class TileRenderer;
-class Tesselator;
 class Icon;
 class ResourceLocation;
 
@@ -44,10 +43,9 @@ public:
     void renderItem(std::shared_ptr<LivingEntity> mob,
                     std::shared_ptr<ItemInstance> item, int layer,
                     bool setColor = true);  // 4J added setColor parameter
-    static void renderItem3D(
-        Tesselator* t, float u0, float v0, float u1, float v1, int width,
-        int height, float depth, bool isGlint,
-        bool isTerrain);  // 4J added isGlint and isTerrain parameter
+    static void renderItem3D(float u0, float v0, float u1, float v1,
+                             int width, int height, float depth,
+                             bool isGlint, bool isTerrain);
 public:
     void render(float a);
     void renderScreenEffect(float a);

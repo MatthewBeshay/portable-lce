@@ -14,7 +14,6 @@
 #include "minecraft/client/gui/Font.h"
 #include "minecraft/client/gui/Gui.h"
 #include "minecraft/client/renderer/ItemInHandRenderer.h"
-#include "minecraft/client/renderer/Tesselator.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "platform/renderer/ui/UiDraw.h"
 #include "platform/renderer/world/WorldDraw.h"
@@ -221,9 +220,7 @@ void ItemRenderer::render(std::shared_ptr<Entity> _itemEntity, double x,
 void ItemRenderer::renderItemBillboard(std::shared_ptr<ItemEntity> entity,
                                        Icon* icon, int count, float a,
                                        float red, float green, float blue) {
-    Tesselator* t = Tesselator::getInstance();
-
-    if (icon == nullptr)
+        if (icon == nullptr)
         icon = entityRenderDispatcher->textures->getMissingIcon(
             entity->getItem()->getIconType());
     float u0 = icon->getU0();
@@ -290,11 +287,8 @@ void ItemRenderer::renderItemBillboard(std::shared_ptr<ItemEntity> entity,
             }
 
             RenderPath.StateSetColour(red, green, blue, 1);
-            // 4J Stu - u coords were swapped in Java
-            // ItemInHandRenderer::renderItem3D(t, u1, v0, u0, v1,
-            // icon->getSourceWidth(), icon->getSourceHeight(), width, false);
             ItemInHandRenderer::renderItem3D(
-                t, u0, v0, u1, v1, icon->getSourceWidth(),
+                u0, v0, u1, v1, icon->getSourceWidth(),
                 icon->getSourceHeight(), width, false, bIsTerrain);
 
             if (item != nullptr && item->isFoil()) {
@@ -315,7 +309,7 @@ void ItemRenderer::renderItemBillboard(std::shared_ptr<ItemEntity> entity,
                 RenderPath.MatrixTranslate(sx, 0, 0);
                 RenderPath.MatrixRotate((-50)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
 
-                ItemInHandRenderer::renderItem3D(t, 0, 0, 1, 1, 255, 255, width,
+                ItemInHandRenderer::renderItem3D(0, 0, 1, 1, 255, 255, width,
                                                  true, bIsTerrain);
                 RenderPath.MatrixPop();
                 RenderPath.MatrixPush();
@@ -324,7 +318,7 @@ void ItemRenderer::renderItemBillboard(std::shared_ptr<ItemEntity> entity,
                      (3000 + 1873.0f) * 8;
                 RenderPath.MatrixTranslate(-sx, 0, 0);
                 RenderPath.MatrixRotate((10)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
-                ItemInHandRenderer::renderItem3D(t, 0, 0, 1, 1, 255, 255, width,
+                ItemInHandRenderer::renderItem3D(0, 0, 1, 1, 255, 255, width,
                                                  true, bIsTerrain);
                 RenderPath.MatrixPop();
                 RenderPath.MatrixMode(rp::MatrixStack::modelview);

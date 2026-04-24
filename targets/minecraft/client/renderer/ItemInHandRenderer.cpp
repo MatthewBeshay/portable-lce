@@ -4,7 +4,6 @@
 #include <numbers>
 #include <vector>
 
-#include "Tesselator.h"
 #include "Textures.h"
 #include "TileRenderer.h"
 #include "java/System.h"
@@ -380,8 +379,6 @@ void ItemInHandRenderer::renderItem(std::shared_ptr<LivingEntity> mob,
         minecraft->textures->bindTexture(
             minecraft->textures->getTextureLocation(item->getIconType()));
 
-        Tesselator* t = Tesselator::getInstance();
-
         // Consider forcing the mipmap LOD level to use, if this is to be
         // rendered from a larger than standard source texture.
         int iconWidth = icon->getWidth();
@@ -417,7 +414,7 @@ void ItemInHandRenderer::renderItem(std::shared_ptr<LivingEntity> mob,
         RenderPath.MatrixTranslate(-15 / 16.0f, -1 / 16.0f, 0);
         float dd = 1 / 16.0f;
 
-        renderItem3D(t, u0, v0, u1, v1, icon->getSourceWidth(),
+        renderItem3D(u0, v0, u1, v1, icon->getSourceWidth(),
                      icon->getSourceHeight(), 1 / 16.0f, false, bIsTerrain);
 
         if (item != nullptr && item->isFoil() && layer == 0) {
@@ -439,7 +436,7 @@ void ItemInHandRenderer::renderItem(std::shared_ptr<LivingEntity> mob,
             RenderPath.MatrixTranslate(sx, 0, 0);
             RenderPath.MatrixRotate((-50)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
 
-            renderItem3D(t, 0, 0, 1, 1, 256, 256, 1 / 16.0f, true, bIsTerrain);
+            renderItem3D(0, 0, 1, 1, 256, 256, 1 / 16.0f, true, bIsTerrain);
             RenderPath.MatrixPop();
             RenderPath.MatrixPush();
             RenderPath.MatrixScale(ss, ss, ss);
@@ -447,7 +444,7 @@ void ItemInHandRenderer::renderItem(std::shared_ptr<LivingEntity> mob,
                  (3000 + 1873.0f) * 8;
             RenderPath.MatrixTranslate(-sx, 0, 0);
             RenderPath.MatrixRotate((10)*(std::numbers::pi_v<float>/180.f), 0, 0, 1);
-            renderItem3D(t, 0, 0, 1, 1, 256, 256, 1 / 16.0f, true, bIsTerrain);
+            renderItem3D(0, 0, 1, 1, 256, 256, 1 / 16.0f, true, bIsTerrain);
             RenderPath.MatrixPop();
             RenderPath.MatrixMode(rp::MatrixStack::modelview);
             RenderPath.StateSetBlendEnable(false);
@@ -462,12 +459,10 @@ void ItemInHandRenderer::renderItem(std::shared_ptr<LivingEntity> mob,
     RenderPath.MatrixPop();
 }
 
-// 4J added useList parameter
-void ItemInHandRenderer::renderItem3D(Tesselator* t, float u0, float v0,
-                                      float u1, float v1, int width, int height,
-                                      float depth, bool isGlint,
-                                      bool isTerrain) {
-    (void)t; (void)u1; (void)v1; (void)width; (void)height; (void)depth;
+void ItemInHandRenderer::renderItem3D(float u0, float v0, float u1, float v1,
+                                      int width, int height, float depth,
+                                      bool isGlint, bool isTerrain) {
+    (void)u1; (void)v1; (void)width; (void)height; (void)depth;
 
     // The three meshes (listItem / listTerrain / listGlint) are 16x16 cube
     // grids pre-baked into WorldStandardVertex buffers at construction.
