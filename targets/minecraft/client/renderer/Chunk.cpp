@@ -507,6 +507,16 @@ void Chunk::rebuild() {
                             // mid-migration regression.
                             chunk_builder_.reset(new plce::world::MeshBuilder(
                                 plce::world::MaterialKind::alpha_test, 0));
+                            // Legacy Tesselator shifted coords by -chunk_origin
+                            // so SetChunkOffset(cx,cy,cz) re-added via
+                            // pc.chunk_lit.xyz at draw time. Mirror that on
+                            // the MeshBuilder so the stored vertices are
+                            // chunk-relative too — otherwise SetChunkOffset
+                            // displaces an already-world-space mesh by a
+                            // chunk-vector and terrain vanishes off-screen.
+                            chunk_builder_->offset((float)(-this->x),
+                                                   (float)(-this->y),
+                                                   (float)(-this->z));
                             tileRenderer->set_builder(chunk_builder_.get());
                         }
 
