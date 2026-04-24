@@ -265,6 +265,13 @@ struct DrawCall {
     // `transform`.
     float mv_transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
+    // World-space chunk origin added in the vertex shader after the
+    // chunk-relative position is read. Lets chunk meshes stay stored at
+    // local (0..16, 0..128, 0..16) while each DrawCall places them at
+    // their world origin, without touching the live SetChunkOffset
+    // state. Defaults to zero for non-chunk draws.
+    float chunk_offset[3] = {0, 0, 0};
+
     // When true, `transform` / `mv_transform` / `uv_scale` / `uv_offset`
     // / `tint_color` are authoritative snapshots captured at push time
     // and the renderer must use them instead of the live legacy state
@@ -575,6 +582,10 @@ public:
     virtual void StartFrame() = 0;
     virtual void Present() = 0;
     virtual void Clear(int flags) = 0;
+    // Variant that sets the clear colour atomically for this one call
+    // without mutating persistent clear-colour state. Preferred over
+    // SetClearColour + Clear, which is deprecated.
+    virtual void Clear(int flags, const float rgba[4]) = 0;
     PLCE_DEPRECATED_LEGACY virtual void SetClearColour(const float rgba[4]) = 0;
     virtual void Set_matrixDirty() = 0;
     virtual void CBuffLockStaticCreations() = 0;

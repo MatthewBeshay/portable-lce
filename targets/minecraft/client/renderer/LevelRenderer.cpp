@@ -62,7 +62,6 @@
 #include "minecraft/client/particle/TerrainParticle.h"
 #include "minecraft/client/player/LocalPlayer.h"
 #include "minecraft/client/renderer/MobSkinMemTextureProcessor.h"
-#include "minecraft/client/renderer/OffsettedRenderList.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/renderer/TileRenderer.h"
 #include "minecraft/client/renderer/culling/Culler.h"
@@ -457,12 +456,9 @@ void LevelRenderer::setLevel(int playerIndex, MultiPlayerLevel* level) {
         // actually exiting the game, so only when the primary player sets there
         // level to nullptr
         if (playerIndex == PlatformInput.GetPrimaryPad()) {
-            RenderPath.CBuffDeleteAll();
-            {
-                std::lock_guard<std::mutex> lock(m_csRenderableTileEntities);
-                renderableTileEntities.clear();
-                m_renderableTileEntitiesPendingRemoval.clear();
-            }
+            std::lock_guard<std::mutex> lock(m_csRenderableTileEntities);
+            renderableTileEntities.clear();
+            m_renderableTileEntitiesPendingRemoval.clear();
         }
     }
 }
@@ -951,19 +947,19 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha) {
 
             if (!ch->mesh_handles_[layer]) continue;
 
-            RenderPath.SetChunkOffset((float)ch->x, (float)ch->y,
-                                      (float)ch->z);
             rp::DrawCall dc{};
             dc.source   = rp::VertexSource::mesh;
             dc.mesh     = ch->mesh_handles_[layer];
             dc.material = (layer == 0)
                 ? plce::world::world_material(plce::world::MaterialKind::alpha_test)
                 : plce::world::world_material(plce::world::MaterialKind::transparent);
+            dc.chunk_offset[0] = float(ch->x);
+            dc.chunk_offset[1] = float(ch->y);
+            dc.chunk_offset[2] = float(ch->z);
             dc.self_describing = false;
             RenderPath.submit_draw_call(dc);
             count++;
         }
-        RenderPath.SetChunkOffset(0.f, 0.f, 0.f);
 #endif
     }
 
@@ -971,12 +967,6 @@ int LevelRenderer::renderChunks(int from, int to, int layer, double alpha) {
     mc->gameRenderer->turnOffLightLayer(alpha);
 
     return count;
-}
-
-void LevelRenderer::renderSameAsLast(int layer, double alpha) {
-    for (int i = 0; i < RENDERLISTS_LENGTH; i++) {
-        renderLists[i].render();
-    }
 }
 
 void LevelRenderer::tick() {
@@ -1706,16 +1696,12 @@ bool LevelRenderer::updateDirtyChunks() {
     {
         FRAME_PROFILE_SCOPE(ChunkDirtyScan);
 
-        unsigned int memAlloc = RenderPath.CBuffSize(-1);
-        /*
-        static int throttle = 0;
-        if( ( throttle % 100 ) == 0 )
-        {
-        Log::info("CBuffSize: %d\n",memAlloc/(1024*1024));
-        }
-        throttle++;
-        */
-        bool onlyRebuild = (memAlloc >= MAX_COMMANDBUFFER_ALLOCATIONS);
+        // Legacy throttle gate: the old path used CBuffSize(-1) as a
+        // proxy for "total render data allocated" to back off new chunk
+        // creation when memory ran out. With chunk meshes now living
+        // in per-MeshHandle VmaBuffers the total-allocation proxy is
+        // gone; allow new work through.
+        bool onlyRebuild = false;
 
         // Move any dirty chunks stored in the lock free stack into global flags
         int index = 0;
@@ -1911,18 +1897,11 @@ bool LevelRenderer::updateDirtyChunks() {
             FRAME_PROFILE_SCOPE(ChunkRebuildSchedule);
             for (int i = 0; i < nearestClipChunks.size(); ++i) {
                 chunk = nearestClipChunks.items[i].first->chunk;
-                // If this chunk is very near, then move the renderer into a
-                // deferred mode. This won't commit any command buffers for
-                // rendering until we call CBuffDeferredModeEnd(), allowing us
-                // to group any near changes into an atomic unit. This is
-                // essential so we don't temporarily create any holes in the
-                // environment whilst updating one chunk and not the neighbours.
-                // The "ver near" aspect of this is just a cosmetic nicety -
-                // exactly the same thing would happen further away, but we just
-                // don't care about it so much from terms of visual impact.
-                if (veryNearCount > 0) {
-                    RenderPath.CBuffDeferredModeStart();
-                }
+                // Legacy CBuffDeferredMode coalesced command-buffer
+                // writes across neighbour chunks to avoid holes while
+                // one mesh rebuilt. The modern upload path creates
+                // each MeshHandle atomically in a single create_mesh
+                // on the main thread, so there's nothing to coalesce.
                 // Build this chunk & return false to continue processing
                 chunk->clearDirty();
                 // Take a copy of the details that are required for chunk
@@ -2003,18 +1982,9 @@ bool LevelRenderer::updateDirtyChunks() {
         static Chunk permaChunk;
         {
             FRAME_PROFILE_SCOPE(ChunkRebuildSchedule);
-            // If this chunk is very near, then move the renderer into a
-            // deferred mode. This won't commit any command buffers for
-            // rendering until we call CBuffDeferredModeEnd(), allowing us to
-            // group any near changes into an atomic unit. This is essential so
-            // we don't temporarily create any holes in the environment whilst
-            // updating one chunk and not the neighbours. The "ver near" aspect
-            // of this is just a cosmetic nicety - exactly the same thing would
-            // happen further away, but we just don't care about it so much from
-            // terms of visual impact.
-            if (veryNearCount > 0) {
-                RenderPath.CBuffDeferredModeStart();
-            }
+            // Legacy CBuffDeferredMode coalesced command-buffer writes
+            // across neighbour chunks; MeshHandle uploads are atomic,
+            // nothing to coalesce.
             // Build this chunk & return false to continue processing
             chunk->clearDirty();
             // Take a copy of the details that are required for chunk

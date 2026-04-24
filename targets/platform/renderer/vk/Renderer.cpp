@@ -745,6 +745,29 @@ void Renderer::SetClearColour(const float rgba[4]) {
     std::memcpy(clear_color_.data(), rgba, 16);
 }
 
+void Renderer::Clear(int flags, const float rgba[4]) {
+    if (!frame_active_) return;
+    ensure_pass();
+    uint32_t n = 0;
+    VkClearAttachment atts[2]{};
+    if (flags & 0x1) {
+        atts[n].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        std::memcpy(atts[n].clearValue.color.float32, rgba, 16);
+        ++n;
+    }
+    if (flags & 0x2) {
+        atts[n].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        atts[n].clearValue.depthStencil.depth = 1.0f;
+        ++n;
+    }
+    if (n) {
+        VkClearRect r{};
+        r.rect.extent = {swap_.extent().width, swap_.extent().height};
+        r.layerCount  = 1;
+        vkCmdClearAttachments(frame().cmd, n, atts, 1, &r);
+    }
+}
+
 void Renderer::resize(uint32_t w, uint32_t h) {
     if (w == 0 || h == 0) return;
     // Drain every frame slot's last graphics submit via the shared
@@ -1581,13 +1604,21 @@ void Renderer::record_draw_call(const rp::DrawCall& dc) {
         pc.tex_mv.x = dc.uv_offset[1];
         pc.state_colour = glm::vec4(dc.tint_color[0], dc.tint_color[1],
                                     dc.tint_color[2], dc.tint_color[3]);
-        pc.chunk_lit = glm::vec4(0.0f, 0.0f, 0.0f, m.lit ? 1.0f : 0.0f);
+        pc.chunk_lit = glm::vec4(dc.chunk_offset[0], dc.chunk_offset[1],
+                                 dc.chunk_offset[2], m.lit ? 1.0f : 0.0f);
         glm::mat4 mv_snap(1.0f);
         std::memcpy(&mv_snap[0][0], dc.mv_transform, sizeof(float) * 16);
         glm::mat3 nm(mv_snap);
         pc.nm0.x = nm[0].x; pc.nm0.y = nm[0].y; pc.nm0.z = nm[0].z;
         pc.nm1.x = nm[1].x; pc.nm1.y = nm[1].y; pc.nm1.z = nm[1].z;
         pc.nm2.x = nm[2].x; pc.nm2.y = nm[2].y; pc.nm2.z = nm[2].z;
+    } else if (dc.chunk_offset[0] != 0.0f || dc.chunk_offset[1] != 0.0f ||
+               dc.chunk_offset[2] != 0.0f) {
+        // Sync (non-snapshot) DrawCalls still want to override the
+        // live chunk_offset_ state when they carry a per-draw origin.
+        pc.chunk_lit.x = dc.chunk_offset[0];
+        pc.chunk_lit.y = dc.chunk_offset[1];
+        pc.chunk_lit.z = dc.chunk_offset[2];
     }
     // DrawCall.transform composes on top of the current matrix stacks
     // (same convention the legacy MatrixPush/Translate pattern produces).

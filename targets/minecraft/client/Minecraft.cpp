@@ -1603,8 +1603,10 @@ void Minecraft::run_middle() {
                         // render a logo
                         RenderPath.StateSetViewport(static_cast<int>(                            static_cast<int>(5) +
                             unoccupiedQuadrant));
-                        {float cc__[]={0,0,0,0};RenderPath.SetClearColour(cc__);};
-                        RenderPath.Clear(rp::CLEAR_COLOR);
+                        {
+                            const float cc__[4] = {0, 0, 0, 0};
+                            RenderPath.Clear(rp::CLEAR_COLOR, cc__);
+                        }
 
                         ui.SetEmptyQuadrantLogo(
                             5 +

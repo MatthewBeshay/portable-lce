@@ -37,6 +37,7 @@ public:
     void StartFrame() override;
     void Present() override;
     void Clear(int flags) override;
+    void Clear(int flags, const float rgba[4]) override;
     void SetClearColour(const float rgba[4]) override;
     void render_frame(const rp::FrameDesc&) override;
     void resize(uint32_t w, uint32_t h) override;

@@ -1,5 +1,4 @@
 #pragma once
-#include "OffsettedRenderList.h"
 #include "java/JavaIntHash.h"
 #include "minecraft/client/model/SkinBox.h"
 #include "minecraft/core/particles/ParticleTypes.h"
@@ -105,7 +104,6 @@ private:
 public:
     int activePlayers();  // 4J - added
 public:
-    void renderSameAsLast(int layer, double alpha);
     void tick();
     void renderSky(float alpha);
     void renderHaloRing(float alpha);
@@ -222,9 +220,6 @@ private:
 
     int totalChunks, offscreenChunks, occludedChunks, renderedChunks,
         emptyChunks;
-    static const int RENDERLISTS_LENGTH = 4;  // 4J - added
-    OffsettedRenderList renderLists[RENDERLISTS_LENGTH];
-
 #ifdef OCCLUSION_MODE_BFS
     void setGlobalChunkConnectivity(int index, uint64_t conn);
     uint64_t getGlobalChunkConnectivity(int index);

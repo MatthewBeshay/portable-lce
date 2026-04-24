@@ -558,17 +558,11 @@ void UIScene::customDrawSlotControl(IggyCustomDrawCallbackRegion* region,
                 ui.beginIggyCustomDraw4J(region, customDrawRegion);
                 ui.setupCustomDrawGameState();
 
-                int list = m_parentLayer->m_parentGroup->getCommandBufferList();
-
-                bool useCommandBuffers = false;
-
-                if (!useCommandBuffers || m_needsCacheRendered) {
-                    if (useCommandBuffers)
-                        RenderPath.CBuffStart(list, true);
+                if (true || m_needsCacheRendered) {
                     ui.setupCustomDrawMatrices(this, customDrawRegion);
                     _customDrawSlotControl(customDrawRegion, iPad, item, fAlpha,
                                            isFoil, bDecorations,
-                                           useCommandBuffers);
+                                           /*useCommandBuffers=*/false);
                     delete customDrawRegion;
 
                     // Draw all the cached slots
@@ -580,16 +574,12 @@ void UIScene::customDrawSlotControl(IggyCustomDrawCallbackRegion* region,
                         _customDrawSlotControl(
                             drawData->customDrawRegion, iPad, drawData->item,
                             drawData->fAlpha, drawData->isFoil,
-                            drawData->bDecorations, useCommandBuffers);
+                            drawData->bDecorations, /*useCommandBuffers=*/false);
                         delete drawData->customDrawRegion;
                         delete drawData;
                     }
-
-                    if (useCommandBuffers) RenderPath.CBuffEnd();
                 }
                 m_cachedSlotDraw.clear();
-
-                if (useCommandBuffers) (void)RenderPath.CBuffCall(list);
 
                 // Finish GDraw and anything else that needs to be finalised
                 ui.endCustomDraw(region);

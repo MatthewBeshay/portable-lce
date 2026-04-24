@@ -169,7 +169,6 @@ client/renderer/LevelRenderer.cpp
 client/renderer/MemTexture.cpp
 client/renderer/MobSkinMemTextureProcessor.cpp
 client/renderer/MobSkinTextureProcessor.cpp
-client/renderer/OffsettedRenderList.cpp
 client/renderer/Rect2i.cpp
 client/renderer/Tesselator.cpp
 client/renderer/Textures.cpp

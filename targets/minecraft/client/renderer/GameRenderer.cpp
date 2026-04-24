@@ -1176,7 +1176,6 @@ int GameRenderer::runUpdate(void* lpParam) {
 
         //		while( minecraft->levelRenderer->updateDirtyChunks() )
         //			;
-        RenderPath.CBuffDeferredModeEnd();
 
         // If any renderable tile entities were flagged in this last block of
         // chunk(s) that were udpated, then change their flags to say that this
@@ -1293,7 +1292,10 @@ void GameRenderer::renderLevel(float a, int64_t until) {
 
         (void)0;
         setupClearColor(a);
-        RenderPath.Clear(rp::CLEAR_COLOR | rp::CLEAR_DEPTH);
+        {
+            const float cc[4] = {fr, fg, fb, 0.0f};
+            RenderPath.Clear(rp::CLEAR_COLOR | rp::CLEAR_DEPTH, cc);
+        }
         RenderPath.StateSetFaceCull(true);
 
         setupCamera(a, i);
@@ -2062,7 +2064,9 @@ void GameRenderer::setupClearColor(float a) {
         fb = fbb;
     }
 
-    {float cc__[]={fr,fg,fb,0.0f};RenderPath.SetClearColour(cc__);};
+    // fr/fg/fb are picked up by the caller via clear_color_for_frame()
+    // and passed explicitly to RenderPath.Clear(flags, rgba) without
+    // mutating the persistent clear-colour state machine.
 }
 
 void GameRenderer::captureFogProfile(int pass_index, float) {

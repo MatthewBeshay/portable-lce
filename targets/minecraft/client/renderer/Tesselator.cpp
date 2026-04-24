@@ -11,9 +11,12 @@
 
 namespace {
 
-void submit_draw(int prim, int count, void* data, int vtype) {
-    RenderPath.DrawVertices(prim, count, data, vtype);
-}
+// Tesselator is dormant on raw-vk — every former geometry caller
+// routes through plce::world::MeshBuilder / plce::ui. end() still
+// contains the packing logic but the terminal RenderPath.DrawVertices
+// call is a no-op so the class compiles cleanly without pulling in
+// the deprecated immediate-mode API.
+void submit_draw(int /*prim*/, int /*count*/, void* /*data*/, int /*vtype*/) {}
 
 } // namespace
 

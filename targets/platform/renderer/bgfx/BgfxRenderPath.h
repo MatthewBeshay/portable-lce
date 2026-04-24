@@ -125,6 +125,7 @@ public:
     void StartFrame() override;
     void Present() override;
     void Clear(int flags) override;
+    void Clear(int flags, const float rgba[4]) override;
     void SetClearColour(const float rgba[4]) override;
     void Set_matrixDirty() override;
     void CBuffLockStaticCreations() override;

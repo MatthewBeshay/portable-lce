@@ -1135,6 +1135,17 @@ void BgfxRenderPath::Clear(int flags) {
         bgfx::setViewClear(current_view_id_, bgfx_flags, rgba, 1.0f, 0);
     }
 }
+
+void BgfxRenderPath::Clear(int flags, const float rgba_in[4]) {
+    uint32_t rgba = (uint32_t(rgba_in[0] * 255) << 24) |
+                    (uint32_t(rgba_in[1] * 255) << 16) |
+                    (uint32_t(rgba_in[2] * 255) << 8) |
+                     uint32_t(rgba_in[3] * 255);
+    uint16_t bgfx_flags = 0;
+    if (flags & rp::CLEAR_COLOR) bgfx_flags |= BGFX_CLEAR_COLOR;
+    if (flags & rp::CLEAR_DEPTH) bgfx_flags |= BGFX_CLEAR_DEPTH;
+    bgfx::setViewClear(current_view_id_, bgfx_flags, rgba, 1.0f, 0);
+}
 void BgfxRenderPath::SetClearColour(const float rgba[4]) {
     state_.clear_color[0] = rgba[0];
     state_.clear_color[1] = rgba[1];
