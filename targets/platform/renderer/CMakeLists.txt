@@ -17,7 +17,6 @@ if(PLCE_RENDERER STREQUAL "vulkan")
         vk/PipelineCache.cpp
         vk/Swapchain.cpp
         vk/TextureManager.cpp
-        vk/DisplayListManager.cpp
         vk/Renderer.cpp
         vk/vma_impl.cpp
         RenderPathGlobals.cpp

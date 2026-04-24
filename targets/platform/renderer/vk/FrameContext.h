@@ -18,11 +18,12 @@ namespace plce::vk {
 /// and rotates between them.
 class FrameContext {
 public:
-    // Transient vertex buffer sizing. UI / entity / debug draws are the only
-    // users of the transient path (chunk meshes go through DisplayListManager),
-    // so the initial size starts small and grows geometrically on overflow.
-    // Upper bound is the point at which a single frame's transient draws have
-    // exceeded anything sensible and something upstream is leaking.
+    // Transient vertex buffer sizing. UI / entity / debug draws use the
+    // transient path; chunk meshes upload via create_mesh to a persistent
+    // per-layer MeshHandle. Initial size starts small and grows
+    // geometrically on overflow. Upper bound is the point at which a
+    // single frame's transient draws have exceeded anything sensible
+    // and something upstream is leaking.
     static constexpr VkDeviceSize kInitialTransientSize = 8ull  * 1024 * 1024;  // 8 MB
     static constexpr VkDeviceSize kMaxTransientSize     = 64ull * 1024 * 1024;  // 64 MB ceiling
 

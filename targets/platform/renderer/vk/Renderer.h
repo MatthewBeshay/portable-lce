@@ -13,7 +13,6 @@
 #include "platform/renderer/IRenderPath.h"
 #include "Device.h"
 #include "DeletionQueue.h"
-#include "DisplayListManager.h"
 #include "FrameContext.h"
 #include "PipelineCache.h"
 #include "Swapchain.h"
@@ -83,15 +82,18 @@ public:
     void submit_immediate(const rp::DrawCall&) override;
     void submit_draw_call(const rp::DrawCall& dc) override { record_draw_call(dc); }
 
-    // -- CBuff (display list) --
+    // -- CBuff (display list) — legacy GL-display-list API, retired on
+    // raw-vk. Every former producer now submits through MeshBuilder /
+    // submit_draw_call / create_mesh, so the backing DisplayListManager
+    // is gone and these are no-ops. Stays on IRenderPath for bgfx.
     [[nodiscard]] int CBuffCreate(int n) override;
     void CBuffDelete(int, int) override {}
-    void CBuffDeleteAll() override;
-    void CBuffStart(int index, bool full = true) override;
-    void CBuffClear(int index) override;
-    [[nodiscard]] int CBuffSize(int index) override;
-    void CBuffEnd() override;
-    [[nodiscard]] bool CBuffCall(int index, bool full = true) override;
+    void CBuffDeleteAll() override {}
+    void CBuffStart(int, bool = true) override {}
+    void CBuffClear(int) override {}
+    [[nodiscard]] int CBuffSize(int) override { return 0; }
+    void CBuffEnd() override {}
+    [[nodiscard]] bool CBuffCall(int, bool = true) override { return false; }
     void CBuffDeferredModeStart() override {}
     void CBuffDeferredModeEnd() override {}
 
@@ -182,7 +184,6 @@ private:
     std::array<FrameContext, kFramesInFlight> frames_;
     PipelineCache pipelines_;
     TextureManager tex_mgr_;
-    DisplayListManager dl_mgr_;
 
     // -- Pipeline layout + descriptors --
     // RAII-wrapped so a mid-constructor throw releases the handles. The
@@ -331,12 +332,6 @@ private:
     // the DrawCall's material to set pipeline + push-constant state
     // instead of inheriting live legacy state (unlike submit_immediate).
     void record_draw_call(const rp::DrawCall& dc);
-
-    // Thread-safe deferred buffer destruction. Worker threads push here
-    // instead of accessing frame().deletions (which is main-thread only).
-    // VmaBuffer destructor runs vmaDestroyBuffer on clear().
-    std::vector<VmaBuffer> pending_destroys_;
-    std::mutex             pending_destroy_mutex_;
 
     // Framebuffer info
     rp::FrameFramebuffer fb_{};

@@ -330,7 +330,6 @@ Renderer::Renderer(SDL_Window* window)
     }
 
     tex_mgr_.init(dev_, bindless_set_);
-    dl_mgr_.init();
 
 #ifndef NDEBUG
     fn_begin_label_ = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
@@ -358,7 +357,6 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev_.handle());
     if (auto blob = pipelines_.save_cache(); !blob.empty())
         (void)PlatformFilesystem.writeFile(pipeline_cache_path(), blob.data(), blob.size());
-    pending_destroys_.clear();  // VmaBuffer destructors run vmaDestroyBuffer
     // Release all persistent mesh buffers before the allocator dies.
     // In-flight frames are already idle (vkDeviceWaitIdle above).
     for (auto& rec : meshes_) rec.vb.reset();
@@ -408,13 +406,6 @@ void Renderer::StartFrame() {
 
     // Poll async texture uploads and mark completed ones ready.
     tex_mgr_.poll_uploads();
-
-    // Flush deferred buffer destructions (from worker thread CBuffClear).
-    // Safe now because the fence wait guarantees the GPU is done.
-    {
-        std::lock_guard lk(pending_destroy_mutex_);
-        pending_destroys_.clear();  // VmaBuffer destructors run vmaDestroyBuffer
-    }
 
     VkResult acq = vkAcquireNextImageKHR(dev_.handle(), swap_.handle(),
                                           UINT64_MAX, f.sem_acquired,
@@ -1015,16 +1006,6 @@ void Renderer::fill_push_constants(void* out, bool textured, bool lm_active,
 void Renderer::DrawVertices(int primType, int count, void* data, int vType) {
     if (count <= 0 || !data) return;
 
-    // CBuff recording must be checked BEFORE frame_active_ — worker
-    // threads rebuild chunks between frames when frame_active_ is false.
-    // Recording just copies to CPU memory, no GPU state needed.
-    if (dl_mgr_.is_recording()) {
-        constexpr uint32_t kStd = 32;
-        size_t bytes = (vType == 1) ? size_t(count) * 16 : size_t(count) * kStd;
-        dl_mgr_.record_draw(primType, vType, data, bytes);
-        return;
-    }
-
     if (!frame_active_) return;
     ensure_pass();
 
@@ -1288,89 +1269,19 @@ std::optional<rp::LoadedImage> Renderer::load_texture_data(std::span<const uint8
 }
 
 // ===================================================================
-// CBUFF (DISPLAY LISTS — delegated to DisplayListManager)
+// CBUFF (DISPLAY LISTS — retired on raw-vk)
 // ===================================================================
+// Every former producer (TileRenderer, LevelRenderer sky/cloud init,
+// Chunk meshing, ItemInHandRenderer list* builds) now emits through
+// MeshBuilder + create_mesh / submit_draw_call. CBuffCreate only
+// needs to hand out unique ids so MemoryTracker's id-to-count map
+// stays consistent on the bgfx path; on raw-vk nothing reads them.
 
-int Renderer::CBuffCreate(int n) { return dl_mgr_.create(n); }
-void Renderer::CBuffDeleteAll() { dl_mgr_.delete_all(pending_destroys_, pending_destroy_mutex_); }
-void Renderer::CBuffStart(int index, bool) { dl_mgr_.start(index); }
-void Renderer::CBuffClear(int index) { dl_mgr_.clear(index, pending_destroys_, pending_destroy_mutex_); }
-int Renderer::CBuffSize(int index) { return dl_mgr_.size(index); }
-void Renderer::CBuffEnd() { dl_mgr_.end(); }
-
-bool Renderer::CBuffCall(int index, bool) {
-    if (index < 0 || !frame_active_) return false;
-
-    auto snap = dl_mgr_.prepare(index, frame().deletions, dev_.allocator());
-    if (!snap) return false;
-
-    VkBuffer vb = snap.vb();
-    const auto& draws = snap.draws();
-
-    auto& f = frame();
-    ensure_pass();
-
-    if (viewport_dirty_) apply_viewport_and_scissor();
-    vkCmdSetBlendConstants(f.cmd, blend_constants_.data());
-    vkCmdSetLineWidth(f.cmd, line_width_);
-    if (pso_key_.stencil_test()) {
-        vkCmdSetStencilCompareMask(f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_compare_mask_);
-        vkCmdSetStencilWriteMask  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_write_mask_);
-        vkCmdSetStencilReference  (f.cmd, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_ref_);
-    }
-    vkCmdSetDepthBias(f.cmd, depth_bias_constant_, 0.0f, depth_bias_slope_);
-
-    bool textured  = false;
-    bool lm_active = false;
-    const uint32_t tex_id    = tex_mgr_.resolve_bound_slot(textured);
-    const uint32_t lm_tex_id = tex_mgr_.resolve_lightmap_slot(lm_active);
-    lm_active = lm_active && lightmap_enabled_;
-
-    PushConstants pc{};
-    fill_push_constants(&pc, textured, lm_active, tex_id, lm_tex_id);
-
-    vkCmdPushConstants(f.cmd, *pipeline_layout_,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(PushConstants), &pc);
-
-    for (auto& sd : draws) {
-        // Pipeline may change between subdraws when a display list mixes
-        // compact (16-byte) and standard (32-byte) vertex formats.
-        if (pso_key_.compact() != sd.compact) {
-            pso_key_.set_compact(sd.compact);
-            pso_dirty_ = true;
-        }
-        if (pso_dirty_ || !(pso_key_ == last_bound_pso_)) {
-            vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipelines_.get(pso_key_));
-            last_bound_pso_ = pso_key_;
-            pso_dirty_ = false;
-        }
-
-        VkDeviceSize off = sd.vertex_offset;
-        vkCmdBindVertexBuffers(f.cmd, 0, 1, &vb, &off);
-
-        if (sd.compact && sd.prim_type == 0x0007) {
-            // Compact quads — GPU triangulation via quad_ib_.
-            vkCmdSetPrimitiveTopology(f.cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-            uint32_t qc = std::min(sd.vertex_count / 4, kMaxQuads);
-            vkCmdBindIndexBuffer(f.cmd, quad_ib_.handle(), 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(f.cmd, qc * 6, 1, 0, 0, 0);
-        } else {
-            VkPrimitiveTopology topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-            switch (sd.prim_type) {
-                case 0x0001: topo = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
-                case 0x0003: topo = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP; break;
-                case 0x0005: topo = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
-            }
-            vkCmdSetPrimitiveTopology(f.cmd, topo);
-            vkCmdDraw(f.cmd, sd.vertex_count, 1, 0, 0);
-        }
-    }
-
-    depth_bias_constant_ = 0;
-    depth_bias_slope_    = 0;
-    return true;
+int Renderer::CBuffCreate(int n) {
+    static int s_next_id = 1;
+    int id = s_next_id;
+    s_next_id += (n > 0) ? n : 1;
+    return id;
 }
 
 // ===================================================================

@@ -8,8 +8,7 @@
 //
 // Callers that only need the push-constant layout should include
 // PushConstants.h directly. This aggregate header stays for source-
-// compatibility with the two TUs that use everything
-// (DisplayListManager.cpp, Renderer.cpp).
+// compatibility with the TU that uses everything (Renderer.cpp).
 
 #include <vulkan/vulkan.h>
 
