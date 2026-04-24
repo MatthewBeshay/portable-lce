@@ -47,6 +47,17 @@ enum class MaterialKind : uint8_t {
     opaque,
     alpha_test,
     transparent,
+    // Sky / horizon / dark-dome gradient: alpha-blend, depth_test on,
+    // depth_write off, unlit. Covers the overworld sky dome + dark
+    // dome + end-dimension cube faces + sunrise cone.
+    sky_gradient,
+    // Stars + halo ring: src_alpha / one additive blend, unlit, depth
+    // test on (so terrain occludes stars) but depth_write off.
+    sky_additive,
+    // Rain / snow billboards: alpha_test on (0.1), depth_write off,
+    // lit (picks up frame ambient for brightness tinting under
+    // lightning), lightmap coord via mb.tex2().
+    weather,
 };
 
 // Register the module's internal materials with the active render

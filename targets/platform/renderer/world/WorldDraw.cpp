@@ -20,6 +20,9 @@ struct MaterialTable {
     rp::MaterialHandle opaque{};
     rp::MaterialHandle alpha_test{};
     rp::MaterialHandle transparent{};
+    rp::MaterialHandle sky_gradient{};
+    rp::MaterialHandle sky_additive{};
+    rp::MaterialHandle weather{};
 };
 
 MaterialTable s_materials;
@@ -27,9 +30,12 @@ bool          s_initialised = false;
 
 rp::MaterialHandle material_for_kind(MaterialKind k) {
     switch (k) {
-        case MaterialKind::opaque:      return s_materials.opaque;
-        case MaterialKind::alpha_test:  return s_materials.alpha_test;
-        case MaterialKind::transparent: return s_materials.transparent;
+        case MaterialKind::opaque:       return s_materials.opaque;
+        case MaterialKind::alpha_test:   return s_materials.alpha_test;
+        case MaterialKind::transparent:  return s_materials.transparent;
+        case MaterialKind::sky_gradient: return s_materials.sky_gradient;
+        case MaterialKind::sky_additive: return s_materials.sky_additive;
+        case MaterialKind::weather:      return s_materials.weather;
     }
     return {};
 }
@@ -147,6 +153,60 @@ void init() {
     tr.depth_write = false;
     tr.cull        = rp::CullMode::none;
     s_materials.transparent = RenderPath.create_material(tr);
+
+    // Sky gradient: overworld sky dome, dark dome, end-dim cube, sunrise
+    // cone. Alpha-blend (vertex colour carries per-vertex sky colour +
+    // alpha for horizon fade); unlit; fog off (we ARE the sky); no
+    // depth write so terrain cut-in stays correct; texture off — most
+    // sky geometry is vertex-coloured only, texture variants can set
+    // texture_override on the DrawCall explicitly.
+    rp::MaterialDesc sg{};
+    sg.shader      = rp::ShaderPath::standard;
+    sg.blend       = rp::BlendMode::alpha;
+    sg.textured    = false;
+    sg.lit         = false;
+    sg.fog_enabled = false;
+    sg.alpha_test  = rp::AlphaTest::off;
+    sg.depth_test  = rp::DepthTest::less_equal;
+    sg.depth_write = false;
+    sg.cull        = rp::CullMode::none;
+    s_materials.sky_gradient = RenderPath.create_material(sg);
+
+    // Sky additive: stars, halo ring. src_alpha * one additive blend
+    // so stars brighten the sky dome under them. Depth on, depth write
+    // off. Texture off for stars (vertex colour only); halo ring also
+    // vertex-coloured.
+    rp::MaterialDesc sa{};
+    sa.shader           = rp::ShaderPath::standard;
+    sa.blend            = rp::BlendMode::custom;
+    sa.blend_src_custom = rp::BlendFactor::src_alpha;
+    sa.blend_dst_custom = rp::BlendFactor::one;
+    sa.textured         = false;
+    sa.lit              = false;
+    sa.fog_enabled      = false;
+    sa.alpha_test       = rp::AlphaTest::off;
+    sa.depth_test       = rp::DepthTest::less_equal;
+    sa.depth_write      = false;
+    sa.cull             = rp::CullMode::none;
+    s_materials.sky_additive = RenderPath.create_material(sa);
+
+    // Weather: rain + snow billboards. Alpha-tested (soft edge on the
+    // sprite), lit (picks up the frame ambient so rain dims correctly
+    // at night), depth test on + depth write off (so rain doesn't
+    // occlude translucent water behind it). Uses per-vertex lightmap
+    // via tex2() for biome / block-light-influenced colour.
+    rp::MaterialDesc wx{};
+    wx.shader      = rp::ShaderPath::standard;
+    wx.blend       = rp::BlendMode::alpha;
+    wx.textured    = true;
+    wx.lit         = true;
+    wx.fog_enabled = true;
+    wx.alpha_test  = rp::AlphaTest::greater;
+    wx.alpha_ref   = 0.1f;
+    wx.depth_test  = rp::DepthTest::less_equal;
+    wx.depth_write = false;
+    wx.cull        = rp::CullMode::none;
+    s_materials.weather = RenderPath.create_material(wx);
 
     s_initialised = true;
 }
