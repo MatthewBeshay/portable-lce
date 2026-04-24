@@ -9,7 +9,7 @@
 #include "java/System.h"
 #include "minecraft/client/Camera.h"
 #include "minecraft/client/MemoryTracker.h"
-#include "minecraft/client/renderer/Tesselator.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "minecraft/client/renderer/Textures.h"
 #include "minecraft/client/resources/ResourceLocation.h"
 #include "minecraft/world/level/tile/entity/TheEndPortalTileEntity.h"
@@ -102,25 +102,23 @@ void TheEndPortalRenderer::render(std::shared_ptr<TileEntity> _table, double x,
         RenderPath.MatrixTranslate(Camera::xPlayerOffs * dist / ss1,
                                    Camera::zPlayerOffs * dist / ss1, -yy);
 
-        Tesselator* t = Tesselator::getInstance();
-        t->useProjectedTexture(
-            true);  // 4J added - turns on both the generation of texture
-                    // coordinates in the vertex shader & perspective divide of
-                    // the texture coord in the pixel shader
-        t->begin();
+        // Legacy useProjectedTexture(true/false) was a no-op in the
+        // Vulkan backend — the shader never read the texgen flag —
+        // so the portal quad just renders as a coloured transparent
+        // overlay with the current texture matrix applying UVs.
+        plce::world::MeshBuilder mb(
+            plce::world::MaterialKind::transparent, 0);
 
         float r = RANDOM.nextFloat() * 0.5f + 0.1f;
         float g = RANDOM.nextFloat() * 0.5f + 0.4f;
         float b = RANDOM.nextFloat() * 0.5f + 0.5f;
         if (i == 0) r = g = b = 1;
-        t->color(r * br, g * br, b * br, 1.0f);
-        t->vertex(x, y + hoff, z);
-        t->vertex(x, y + hoff, z + 1);
-        t->vertex(x + 1, y + hoff, z + 1);
-        t->vertex(x + 1, y + hoff, z);
-        t->end();
-
-        t->useProjectedTexture(false);  // 4J added
+        mb.color(r * br, g * br, b * br, 1.0f);
+        mb.vertex(x, y + hoff, z);
+        mb.vertex(x, y + hoff, z + 1);
+        mb.vertex(x + 1, y + hoff, z + 1);
+        mb.vertex(x + 1, y + hoff, z);
+        mb.flush();
         RenderPath.MatrixPop();
         RenderPath.MatrixMode(rp::MatrixStack::modelview);
     }
