@@ -2086,7 +2086,6 @@ void LevelRenderer::renderHit(std::shared_ptr<Player> player, HitResult* h,
                               int mode,
                               std::shared_ptr<ItemInstance> inventoryItem,
                               float a) {
-    Tesselator* t = Tesselator::getInstance();
     RenderPath.StateSetBlendEnable(true);
     RenderPath.StateSetAlphaTestEnable(true);
     RenderPath.StateSetBlendFunc(rp::BlendFactor::src_alpha, rp::BlendFactor::one);
@@ -2108,8 +2107,7 @@ void LevelRenderer::renderHit(std::shared_ptr<Player> player, HitResult* h,
     RenderPath.StateSetAlphaTestEnable(false);
 }
 
-void LevelRenderer::renderDestroyAnimation(Tesselator* t,
-                                           std::shared_ptr<Player> player,
+void LevelRenderer::renderDestroyAnimation(std::shared_ptr<Player> player,
                                            float a) {
     double xo = player->xOld + (player->x - player->xOld) * a;
     double yo = player->yOld + (player->y - player->yOld) * a;
@@ -2225,49 +2223,49 @@ void LevelRenderer::renderHitOutline(std::shared_ptr<Player> player,
 }
 
 void LevelRenderer::render(AABB* b) {
-    Tesselator* t = Tesselator::getInstance();
     RenderPath.StateSetLightingEnable(false);
     RenderPath.StateSetTextureEnable(false);
-    RenderPath.StateSetColour(0.0f, 0.0f, 0.0f, 0.4f);
 
     // prevent zfight
     (void)0;
     RenderPath.StateSetDepthSlopeAndBias(-2.0f, -2.0f);
 
-    // One call please!
-    t->begin(0x0001);
+    // Hit-target AABB wireframe (12 edges as a line-list).
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::transparent, 0);
+    mb.set_topology(plce::world::Topology::line_list);
+    mb.color(0.0f, 0.0f, 0.0f, 0.4f);
 
     // Bottom
-    t->vertex(b->x0, b->y0, b->z0);
-    t->vertex(b->x1, b->y0, b->z0);
-    t->vertex(b->x1, b->y0, b->z0);
-    t->vertex(b->x1, b->y0, b->z1);
-    t->vertex(b->x1, b->y0, b->z1);
-    t->vertex(b->x0, b->y0, b->z1);
-    t->vertex(b->x0, b->y0, b->z1);
-    t->vertex(b->x0, b->y0, b->z0);
+    mb.vertex(b->x0, b->y0, b->z0);
+    mb.vertex(b->x1, b->y0, b->z0);
+    mb.vertex(b->x1, b->y0, b->z0);
+    mb.vertex(b->x1, b->y0, b->z1);
+    mb.vertex(b->x1, b->y0, b->z1);
+    mb.vertex(b->x0, b->y0, b->z1);
+    mb.vertex(b->x0, b->y0, b->z1);
+    mb.vertex(b->x0, b->y0, b->z0);
 
     // Top
-    t->vertex(b->x0, b->y1, b->z0);
-    t->vertex(b->x1, b->y1, b->z0);
-    t->vertex(b->x1, b->y1, b->z0);
-    t->vertex(b->x1, b->y1, b->z1);
-    t->vertex(b->x1, b->y1, b->z1);
-    t->vertex(b->x0, b->y1, b->z1);
-    t->vertex(b->x0, b->y1, b->z1);
-    t->vertex(b->x0, b->y1, b->z0);
+    mb.vertex(b->x0, b->y1, b->z0);
+    mb.vertex(b->x1, b->y1, b->z0);
+    mb.vertex(b->x1, b->y1, b->z0);
+    mb.vertex(b->x1, b->y1, b->z1);
+    mb.vertex(b->x1, b->y1, b->z1);
+    mb.vertex(b->x0, b->y1, b->z1);
+    mb.vertex(b->x0, b->y1, b->z1);
+    mb.vertex(b->x0, b->y1, b->z0);
 
     // Vertical
-    t->vertex(b->x0, b->y0, b->z0);
-    t->vertex(b->x0, b->y1, b->z0);
-    t->vertex(b->x1, b->y0, b->z0);
-    t->vertex(b->x1, b->y1, b->z0);
-    t->vertex(b->x1, b->y0, b->z1);
-    t->vertex(b->x1, b->y1, b->z1);
-    t->vertex(b->x0, b->y0, b->z1);
-    t->vertex(b->x0, b->y1, b->z1);
+    mb.vertex(b->x0, b->y0, b->z0);
+    mb.vertex(b->x0, b->y1, b->z0);
+    mb.vertex(b->x1, b->y0, b->z0);
+    mb.vertex(b->x1, b->y1, b->z0);
+    mb.vertex(b->x1, b->y0, b->z1);
+    mb.vertex(b->x1, b->y1, b->z1);
+    mb.vertex(b->x0, b->y0, b->z1);
+    mb.vertex(b->x0, b->y1, b->z1);
 
-    t->end();
+    mb.flush();
     (void)0;
     RenderPath.StateSetLightingEnable(true);
     RenderPath.StateSetTextureEnable(true);

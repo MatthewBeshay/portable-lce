@@ -117,8 +117,7 @@ public:
 public:
     void renderHit(std::shared_ptr<Player> player, HitResult* h, int mode,
                    std::shared_ptr<ItemInstance> inventoryItem, float a);
-    void renderDestroyAnimation(Tesselator* t, std::shared_ptr<Player> player,
-                                float a);
+    void renderDestroyAnimation(std::shared_ptr<Player> player, float a);
     void renderHitOutline(std::shared_ptr<Player> player, HitResult* h,
                           int mode, float a);
     void render(AABB* b);

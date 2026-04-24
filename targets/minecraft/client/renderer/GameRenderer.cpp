@@ -1534,7 +1534,6 @@ void GameRenderer::renderLevel(float a, int64_t until) {
         {
             FRAME_PROFILE_SCOPE(WeatherSky);
             levelRenderer->renderDestroyAnimation(
-                Tesselator::getInstance(),
                 std::dynamic_pointer_cast<Player>(cameraEntity), a);
         }
         RenderPath.StateSetBlendEnable(false);
