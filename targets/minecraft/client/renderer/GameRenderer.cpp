@@ -78,6 +78,7 @@
 #include "platform/PlatformTypes.h"
 #include "platform/input/input.h"
 #include "platform/renderer/renderer.h"
+#include "platform/renderer/world/WorldDraw.h"
 #include "platform/stubs.h"
 #include "platform/thread/ShutdownManager.h"
 #include "util/FrameProfiler.h"
@@ -1694,7 +1695,6 @@ void GameRenderer::renderSnowAndRain(float a) {
     int y0 = std::floor(player->y);
     int z0 = std::floor(player->z);
 
-    Tesselator* t = Tesselator::getInstance();
     RenderPath.StateSetFaceCull(false);
     (void)0;
     RenderPath.StateSetBlendEnable(true);
@@ -1738,7 +1738,8 @@ void GameRenderer::renderSnowAndRain(float a) {
 
     // two snow/rain rendering
     mc->textures->bindTexture(&RAIN_LOCATION);
-    t->begin();
+    {
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::weather, 0);
     for (int x = x0 - r; x <= x0 + r; x++) {
         for (int z = z0 - r; z <= z0 + r; z++) {
             int rainSlot = (z - z0 + 16) * 32 + (x - x0 + 16);
@@ -1777,24 +1778,26 @@ void GameRenderer::renderSnowAndRain(float a) {
 
             float br = 1.0f;
             float s = 1.0f;
-            t->offset(-xo, -yo, -zo);
-            t->tex2(level->getLightColor(x, yl, z, 0));
-            t->color(br, br, br, ((1 - dd * dd) * 0.5f + 0.5f) * rainLevel);
-            t->vertexUV(x - xa + 0.5, yy0, z - za + 0.5, 0 * s,
+            mb.offset(-xo, -yo, -zo);
+            mb.tex2(level->getLightColor(x, yl, z, 0));
+            mb.color(br, br, br, ((1 - dd * dd) * 0.5f + 0.5f) * rainLevel);
+            mb.vertexUV(x - xa + 0.5, yy0, z - za + 0.5, 0 * s,
                         yy0 * s / 4.0f + ra * s);
-            t->vertexUV(x + xa + 0.5, yy0, z + za + 0.5, 1 * s,
+            mb.vertexUV(x + xa + 0.5, yy0, z + za + 0.5, 1 * s,
                         yy0 * s / 4.0f + ra * s);
-            t->vertexUV(x + xa + 0.5, yy1, z + za + 0.5, 1 * s,
+            mb.vertexUV(x + xa + 0.5, yy1, z + za + 0.5, 1 * s,
                         yy1 * s / 4.0f + ra * s);
-            t->vertexUV(x - xa + 0.5, yy1, z - za + 0.5, 0 * s,
+            mb.vertexUV(x - xa + 0.5, yy1, z - za + 0.5, 0 * s,
                         yy1 * s / 4.0f + ra * s);
-            t->offset(0, 0, 0);
+            mb.offset(0, 0, 0);
         }
     }
-    t->end();  // single submit for all rain geometry
+    mb.flush();
+    }
     // sno time
     mc->textures->bindTexture(&SNOW_LOCATION);
-    t->begin();
+    {
+    plce::world::MeshBuilder mb(plce::world::MaterialKind::weather, 0);
     for (int x = x0 - r; x <= x0 + r; x++) {
         for (int z = z0 - r; z <= z0 + r; z++) {
             int rainSlot = (z - z0 + 16) * 32 + (x - x0 + 16);
@@ -1834,11 +1837,11 @@ void GameRenderer::renderSnowAndRain(float a) {
 
             float br = 1.0f;
             float s = 1.0f;
-            t->offset(-xo, -yo, -zo);
+            mb.offset(-xo, -yo, -zo);
 #ifdef __PSVITA__
             float Alpha = ((1 - dd * dd) * 0.3f + 0.5f) * rainLevel;
             int tex2 = (level->getLightColor(x, yl, z, 0) * 3 + 0xf000f0) / 4;
-            t->tileRainQuad(
+            mb.tileRainQuad(
                 x - xa + 0.5, yy0, z - za + 0.5, 0 * s + uo,
                 yy0 * s / 4.0f + ra * s + vo, x + xa + 0.5, yy0, z + za + 0.5,
                 1 * s + uo, yy0 * s / 4.0f + ra * s + vo, x + xa + 0.5, yy1,
@@ -1847,21 +1850,22 @@ void GameRenderer::renderSnowAndRain(float a) {
                 yy1 * s / 4.0f + ra * s + vo, br, br, br, Alpha, br, br, br,
                 Alpha, tex2);
 #else
-            t->tex2((level->getLightColor(x, yl, z, 0) * 3 + 0xf000f0) / 4);
-            t->color(br, br, br, ((1 - dd * dd) * 0.3f + 0.5f) * rainLevel);
-            t->vertexUV(x - xa + 0.5, yy0, z - za + 0.5, 0 * s + uo,
+            mb.tex2((level->getLightColor(x, yl, z, 0) * 3 + 0xf000f0) / 4);
+            mb.color(br, br, br, ((1 - dd * dd) * 0.3f + 0.5f) * rainLevel);
+            mb.vertexUV(x - xa + 0.5, yy0, z - za + 0.5, 0 * s + uo,
                         yy0 * s / 4.0f + ra * s + vo);
-            t->vertexUV(x + xa + 0.5, yy0, z + za + 0.5, 1 * s + uo,
+            mb.vertexUV(x + xa + 0.5, yy0, z + za + 0.5, 1 * s + uo,
                         yy0 * s / 4.0f + ra * s + vo);
-            t->vertexUV(x + xa + 0.5, yy1, z + za + 0.5, 1 * s + uo,
+            mb.vertexUV(x + xa + 0.5, yy1, z + za + 0.5, 1 * s + uo,
                         yy1 * s / 4.0f + ra * s + vo);
-            t->vertexUV(x - xa + 0.5, yy1, z - za + 0.5, 0 * s + uo,
+            mb.vertexUV(x - xa + 0.5, yy1, z - za + 0.5, 0 * s + uo,
                         yy1 * s / 4.0f + ra * s + vo);
 #endif
-            t->offset(0, 0, 0);
+            mb.offset(0, 0, 0);
         }
     }
-    t->end();  // single submit for all snow geometry
+    mb.flush();
+    }
 
     RenderPath.StateSetFaceCull(true);
     RenderPath.StateSetBlendEnable(false);
