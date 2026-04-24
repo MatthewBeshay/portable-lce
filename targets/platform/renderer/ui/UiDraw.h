@@ -61,6 +61,21 @@ void draw_textured_quad(float x0, float y0, float x1, float y1, float z,
                         int texture_id,
                         uint32_t tint_rgba = 0xFFFFFFFFu);
 
+// Enchant-glint overlay for 2D GUI item icons. src_color * one
+// blend (additive tint) + depth-off + unlit. Matches the legacy
+// two-pass scroll loop in ItemRenderer::blitGlint which shears the
+// top-edge UVs relative to the bottom edge — so rather than an
+// axis-aligned UV rect, this takes per-corner UVs in the vertex
+// order (bl, br, tr, tl) matching the legacy Tesselator fan wind.
+void draw_glint_quad(float x0, float y0, float x1, float y1, float z,
+                     float uv_bl_u, float uv_bl_v,
+                     float uv_br_u, float uv_br_v,
+                     float uv_tr_u, float uv_tr_v,
+                     float uv_tl_u, float uv_tl_v,
+                     int texture_id,
+                     uint32_t tint_rgba = 0xFFFFFFFFu);
+
+
 // Text glyph quad. Float positions (Font uses sub-pixel math),
 // alpha-tested material (discards pixels below alpha_ref so the
 // glyph sprite's bg doesn't bleed), and float RGBA to match Font's

@@ -78,8 +78,8 @@ public:
     static const int m_iPotionStrengthBarWidth[4];
 
 private:
-    void blitGlint(int id, float x, float y, float w,
-                   float h);  // 4J - changed x,y,w,h to floats
+    void blitGlint(Textures* textures, float x, float y, float w, float h,
+                   uint32_t tint_rgba);
 
 public:
     void renderGuiItemDecorations(Font* font, Textures* textures,

@@ -27,6 +27,7 @@ struct MaterialTable {
     rp::MaterialHandle vignette{};
     rp::MaterialHandle item_in_hand{};         // listItem / listTerrain 3D mesh
     rp::MaterialHandle item_in_hand_glint{};   // listGlint enchant overlay
+    rp::MaterialHandle glint{};                // 2D GUI enchant-glint quad
 };
 
 MaterialTable s_materials;
@@ -211,6 +212,25 @@ void init() {
     glint.cull             = rp::CullMode::back_ccw;
     s_materials.item_in_hand_glint = RenderPath.create_material(glint);
 
+    // 2D GUI glint overlay. Used by ItemRenderer::blitGlint to lay the
+    // enchant shimmer on top of a just-drawn inventory item icon. Blend
+    // mirrors the legacy StateSetBlendFunc(src_color, one) additive tint;
+    // depth off so the quad lands regardless of the surrounding HUD's
+    // blitOffset z without the caller having to track depth state.
+    rp::MaterialDesc glint2d{};
+    glint2d.shader           = rp::ShaderPath::standard;
+    glint2d.blend            = rp::BlendMode::custom;
+    glint2d.blend_src_custom = rp::BlendFactor::src_color;
+    glint2d.blend_dst_custom = rp::BlendFactor::one;
+    glint2d.textured         = true;
+    glint2d.lit              = false;
+    glint2d.fog_enabled      = false;
+    glint2d.alpha_test       = rp::AlphaTest::off;
+    glint2d.depth_test       = rp::DepthTest::off;
+    glint2d.depth_write      = false;
+    glint2d.cull             = rp::CullMode::none;
+    s_materials.glint = RenderPath.create_material(glint2d);
+
     s_initialised = true;
 }
 
@@ -287,6 +307,36 @@ void draw_textured_quad(float x0, float y0, float x1, float y1, float z,
     dc.source                 = rp::VertexSource::transient;
     dc.transient              = tvb;
     dc.material               = s_materials.textured_alpha;
+    dc.texture_override.index = uint32_t(texture_id);
+    unpack_rgba(tint_rgba, dc.tint_color);
+    snapshot_transform(dc.transform);
+
+    rp::ui_overlay::push(dc);
+}
+
+void draw_glint_quad(float x0, float y0, float x1, float y1, float z,
+                     float uv_bl_u, float uv_bl_v,
+                     float uv_br_u, float uv_br_v,
+                     float uv_tr_u, float uv_tr_v,
+                     float uv_tl_u, float uv_tl_v,
+                     int texture_id, uint32_t tint_rgba) {
+    auto [tvb, span] = RenderPath.alloc_transient_vertices(
+        4, rp::VertexLayout::world_standard, rp::PrimitiveType::triangle_fan);
+    if (span.empty()) return;
+
+    auto* v = reinterpret_cast<rp::WorldStandardVertex*>(span.data());
+    // Vertex order matches the legacy Tesselator fan wind in
+    // ItemRenderer::blitGlint: bottom-left, bottom-right, top-right,
+    // top-left. Top/bottom UVs can diverge to shear the glint.
+    v[0] = {{x0, y1, z}, {uv_bl_u, uv_bl_v}, 0, 0, kVertexColorSentinel};
+    v[1] = {{x1, y1, z}, {uv_br_u, uv_br_v}, 0, 0, kVertexColorSentinel};
+    v[2] = {{x1, y0, z}, {uv_tr_u, uv_tr_v}, 0, 0, kVertexColorSentinel};
+    v[3] = {{x0, y0, z}, {uv_tl_u, uv_tl_v}, 0, 0, kVertexColorSentinel};
+
+    rp::DrawCall dc{};
+    dc.source                 = rp::VertexSource::transient;
+    dc.transient              = tvb;
+    dc.material               = s_materials.glint;
     dc.texture_override.index = uint32_t(texture_id);
     unpack_rgba(tint_rgba, dc.tint_color);
     snapshot_transform(dc.transform);

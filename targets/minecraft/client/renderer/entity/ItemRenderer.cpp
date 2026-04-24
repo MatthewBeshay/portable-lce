@@ -502,43 +502,29 @@ void ItemRenderer::renderAndDecorateItem(
                   useCompiled);
 
     if (isFoil || item->isFoil()) {
-        RenderPath.StateSetDepthFunc(rp::DepthTest::greater);
-        RenderPath.StateSetLightingEnable(false);
-        RenderPath.StateSetDepthMask(false);
-        textures->bindTexture(
-            &ItemInHandRenderer::
-                ENCHANT_GLINT_LOCATION);  // 4J was "%blur%/misc/glint.png"
         blitOffset -= 50;
-        if (!isConstantBlended) RenderPath.StateSetBlendEnable(true);
 
-        RenderPath.StateSetBlendFunc(rp::BlendFactor::dst_color,
-                    rp::BlendFactor::one);  // 4J - changed blend equation from rp::BlendFactor::dst_color,
-                              // rp::BlendFactor::dst_color so we can fade this out
-
-        float blendFactor =
+        const float blendFactor =
             isConstantBlended ? Gui::currentGuiBlendFactor : 1.0f;
 
-        RenderPath.StateSetColour(0.5f * blendFactor, 0.25f * blendFactor, 0.8f * blendFactor,
-            1);  // 4J - scale back colourisation with blendFactor
-        // scale the x and y by the scale factor
+        // Match the legacy StateSetColour tint: 0.5, 0.25, 0.8 scaled by
+        // blendFactor, full alpha. Packed into UiDraw's 0xAABBGGRR.
+        const auto u8 = [](float f) -> uint32_t {
+            return uint32_t(f < 0.0f ? 0 : f > 1.0f ? 255 : f * 255.0f);
+        };
+        const uint32_t tint = u8(0.5f  * blendFactor)        |
+                             (u8(0.25f * blendFactor) <<  8) |
+                             (u8(0.8f  * blendFactor) << 16) |
+                             (uint32_t(255)           << 24);
+
         if ((fScaleX != 1.0f) || (fScaleY != 1.0f)) {
             // 4J Stu - Scales were multiples of 20, making 16 to not overlap in
             // xui scenes
-            blitGlint(x * 431278612.0f + y * 32178161.0f, x - 2, y - 2,
-                      16 * fScaleX, 16 * fScaleY);
+            blitGlint(textures, x - 2, y - 2, 16 * fScaleX, 16 * fScaleY, tint);
         } else {
-            blitGlint(x * 431278612.0f + y * 32178161.0f, x - 2, y - 2, 20, 20);
+            blitGlint(textures, x - 2, y - 2, 20, 20, tint);
         }
-        RenderPath.StateSetColour(1.0f, 1.0f, 1.0f, 1);  // 4J added
-        if (!isConstantBlended) RenderPath.StateSetBlendEnable(false);
-
-        RenderPath.StateSetDepthMask(true);
         blitOffset += 50;
-        RenderPath.StateSetLightingEnable(true);
-        RenderPath.StateSetDepthFunc(rp::DepthTest::less_equal);
-
-        if (isConstantBlended)
-            RenderPath.StateSetBlendFunc(rp::BlendFactor::constant_alpha, rp::BlendFactor::one_minus_constant_alpha);
     }
 }
 
@@ -552,7 +538,8 @@ void ItemRenderer::renderAndDecorateItem(
 
 // 4J - a few changes here to get x, y, w, h in as floats (for xui rendering
 // accuracy), and to align final pixels to the final screen resolution
-void ItemRenderer::blitGlint(int id, float x, float y, float w, float h) {
+void ItemRenderer::blitGlint(Textures* textures, float x, float y, float w,
+                             float h, uint32_t tint_rgba) {
     float us = 1.0f / 64.0f / 4;
     float vs = 1.0f / 64.0f / 4;
 
@@ -584,22 +571,29 @@ void ItemRenderer::blitGlint(int id, float x, float y, float w, float h) {
     float yy0f = yy0 / sfy;
     float yy1f = yy1 / sfy;
 
+    const int glint_tex = textures->resolveTextureId(
+        &ItemInHandRenderer::ENCHANT_GLINT_LOCATION);
+
+    // Two additive passes with opposite diagonal shears produce the
+    // cross-hatch glint scroll. Material bakes src_color/one blend +
+    // depth off, so no StateSet* scaffolding is needed here.
     for (int i = 0; i < 2; i++) {
-        if (i == 0) RenderPath.StateSetBlendFunc(rp::BlendFactor::src_color, rp::BlendFactor::one);
-        if (i == 1) RenderPath.StateSetBlendFunc(rp::BlendFactor::src_color, rp::BlendFactor::one);
-        float sx = Minecraft::currentTimeMillis() % (3000 + i * 1873) /
-                   (3000.0f + i * 1873) * 256;
-        float sy = 0;
-        Tesselator* t = Tesselator::getInstance();
-        float vv = 4;
-        if (i == 1) vv = -1;
-        t->begin();
-        t->vertexUV(xx0f, yy1f, blitOffset, (sx + h * vv) * us, (sy + h) * vs);
-        t->vertexUV(xx1f, yy1f, blitOffset, (sx + w + h * vv) * us,
-                    (sy + h) * vs);
-        t->vertexUV(xx1f, yy0f, blitOffset, (sx + w) * us, (sy + 0) * vs);
-        t->vertexUV(xx0f, yy0f, blitOffset, (sx + 0) * us, (sy + 0) * vs);
-        t->end();
+        const float sx = Minecraft::currentTimeMillis() % (3000 + i * 1873) /
+                         (3000.0f + i * 1873) * 256;
+        const float vv = (i == 1) ? -1.0f : 4.0f;
+        const float u0     = (sx + 0) * us;
+        const float u1     = (sx + w) * us;
+        const float u0_top = (sx + h * vv) * us;
+        const float u1_top = (sx + w + h * vv) * us;
+        const float v0     = 0.0f;
+        const float v1     = h * vs;
+
+        plce::ui::draw_glint_quad(xx0f, yy0f, xx1f, yy1f, blitOffset,
+                                  u0_top, v1,  // bl
+                                  u1_top, v1,  // br
+                                  u1,     v0,  // tr
+                                  u0,     v0,  // tl
+                                  glint_tex, tint_rgba);
     }
 }
 
